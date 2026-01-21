@@ -3694,8 +3694,10 @@ if __name__ == "__main__":
     transport = os.getenv("MCP_TRANSPORT", "stdio")
 
     if transport == "sse":
+        import uvicorn
         port = int(os.getenv("PORT", 8000))
         print(f"[codi-memory] Starting MCP server on SSE transport, port {port}")
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        app = mcp.sse_app()
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
