@@ -3703,6 +3703,6 @@ if __name__ == "__main__":
 
         # Crear app Starlette sin TrustedHostMiddleware
         app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
         mcp.run()
