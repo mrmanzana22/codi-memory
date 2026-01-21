@@ -16,6 +16,7 @@ import math
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.settings import TransportSecuritySettings
 from mem0 import Memory
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
@@ -62,8 +63,13 @@ config = {
 memory = Memory.from_config(config)
 qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
 
-# Crear servidor MCP
-mcp = FastMCP("codi-memory")
+# Crear servidor MCP con DNS rebinding protection deshabilitada (Traefik maneja seguridad)
+mcp = FastMCP(
+    "codi-memory",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    )
+)
 
 # Archivo de backup
 BACKUP_DIR = os.path.dirname(__file__)
@@ -3697,21 +3703,12 @@ if __name__ == "__main__":
         import uvicorn
         from starlette.applications import Starlette
         from starlette.routing import Mount
-        from starlette.middleware import Middleware
-        from starlette.middleware.trustedhost import TrustedHostMiddleware
 
         port = int(os.getenv("PORT", 8000))
         print(f"[codi-memory] Starting MCP server on {transport} transport, port {port}")
 
-        # Usar streamable-http para producción
-        if transport == "streamable-http" or transport == "http":
-            mcp.run(transport="streamable-http")
-        else:
-            # SSE con host wildcard
-            app = Starlette(
-                routes=[Mount("/", app=mcp.sse_app())],
-                middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["*"])]
-            )
-            uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+        # SSE transport (DNS rebinding protection ya deshabilitada en FastMCP)
+        app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
