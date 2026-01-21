@@ -3695,9 +3695,14 @@ if __name__ == "__main__":
 
     if transport == "sse":
         import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+
         port = int(os.getenv("PORT", 8000))
         print(f"[codi-memory] Starting MCP server on SSE transport, port {port}")
-        app = mcp.sse_app()
+
+        # Crear app Starlette sin TrustedHostMiddleware
+        app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
