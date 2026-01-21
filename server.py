@@ -16,7 +16,7 @@ import math
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-from mcp.server.auth.settings import TransportSecuritySettings
+from mcp.server.transport_security import TransportSecuritySettings
 from mem0 import Memory
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
