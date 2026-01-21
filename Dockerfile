@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código
 COPY server.py .
 COPY triggers.json .
-COPY data/ ./data/
+RUN mkdir -p data
 
 # Variables de entorno
 ENV MCP_TRANSPORT=sse
