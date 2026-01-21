@@ -3690,19 +3690,28 @@ def export_memories_markdown() -> str:
 
 
 if __name__ == "__main__":
-    # Soporte para stdio (local) y SSE (remoto/Easypanel)
+    # Soporte para stdio (local) y SSE/HTTP (remoto/Easypanel)
     transport = os.getenv("MCP_TRANSPORT", "stdio")
 
-    if transport == "sse":
+    if transport in ("sse", "http", "streamable-http"):
         import uvicorn
         from starlette.applications import Starlette
         from starlette.routing import Mount
+        from starlette.middleware import Middleware
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
 
         port = int(os.getenv("PORT", 8000))
-        print(f"[codi-memory] Starting MCP server on SSE transport, port {port}")
+        print(f"[codi-memory] Starting MCP server on {transport} transport, port {port}")
 
-        # Crear app Starlette sin TrustedHostMiddleware
-        app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
-        uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
+        # Usar streamable-http para producción
+        if transport == "streamable-http" or transport == "http":
+            mcp.run(transport="streamable-http")
+        else:
+            # SSE con host wildcard
+            app = Starlette(
+                routes=[Mount("/", app=mcp.sse_app())],
+                middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=["*"])]
+            )
+            uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
     else:
         mcp.run()
