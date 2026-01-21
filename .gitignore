@@ -1,0 +1,14 @@
+# Environment variables (NUNCA subir)
+.env
+.env.local
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Data
+*.db
+data/

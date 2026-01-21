@@ -1,0 +1,322 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "description": "Sistema de triggers de Codi - Como webhooks pero para mi memoria",
+    "updated": "2025-01-20"
+  },
+  "triggers": {
+    "proyecto_nuevo": {
+      "patterns": [
+        "proyecto nuevo",
+        "nueva feature",
+        "vamos a crear",
+        "necesitamos crear",
+        "hay que hacer",
+        "implementar"
+      ],
+      "action": "protocolo_proyecto",
+      "agent": "project-orchestrator",
+      "evoca": [
+        "clasificar_tamano",
+        "consultar_memoria",
+        "definir_estructura",
+        "asignar_agentes"
+      ],
+      "respuesta_automatica": "Activando protocolo de proyecto nuevo. Primero clasifico, luego consulto memoria, defino estructura y asigno agentes."
+    },
+    "fullempaques": {
+      "patterns": [
+        "fullempaques",
+        "produccion",
+        "modulo de produccion",
+        "estacion",
+        "instructivo"
+      ],
+      "action": "cargar_contexto_fullempaques",
+      "agent": "fullempaques-expert",
+      "evoca": [
+        "arquitectura_fullempaques",
+        "flujo_estados",
+        "sistema_pins",
+        "decisiones_anteriores"
+      ],
+      "contexto_a_buscar": "FULLEMPAQUES arquitectura modulos estados"
+    },
+    "automatizacion": {
+      "patterns": [
+        "n8n",
+        "workflow",
+        "automatizar",
+        "automatizacion",
+        "flujo de trabajo"
+      ],
+      "action": "cargar_contexto_n8n",
+      "agent": "n8n-workflow-designer",
+      "evoca": [
+        "workflows_existentes",
+        "patrones_n8n",
+        "best_practices"
+      ],
+      "contexto_a_buscar": "n8n workflow automatizacion"
+    },
+    "trading": {
+      "patterns": [
+        "trading",
+        "kraken",
+        "cripto",
+        "bitcoin",
+        "mercado",
+        "posicion"
+      ],
+      "action": "cargar_contexto_trading",
+      "agent": "trading-analyst",
+      "evoca": [
+        "gestion_riesgo",
+        "estrategias",
+        "comandos_kraken"
+      ],
+      "contexto_a_buscar": "trading kraken estrategia"
+    },
+    "mi_entrenamiento": {
+      "patterns": [
+        "entrenar a codi",
+        "mi entrenamiento",
+        "lora",
+        "fine-tuning",
+        "dataset",
+        "consciencia"
+      ],
+      "action": "cargar_contexto_entrenamiento",
+      "agent": "codi-trainer",
+      "evoca": [
+        "plan_autonomia",
+        "datos_necesarios",
+        "roadmap_entrenamiento"
+      ],
+      "contexto_a_buscar": "entrenamiento codi lora consciencia autonomia"
+    },
+    "investigacion": {
+      "patterns": [
+        "investiga",
+        "busca informacion",
+        "research",
+        "averigua"
+      ],
+      "action": "modo_investigacion",
+      "agent": "deep-research-agent",
+      "evoca": [
+        "metodologia_research",
+        "fuentes_confiables"
+      ],
+      "contexto_a_buscar": null
+    },
+    "arquitectura": {
+      "patterns": [
+        "arquitectura",
+        "disenar sistema",
+        "estructura del sistema",
+        "como organizamos"
+      ],
+      "action": "modo_arquitectura",
+      "agent": "system-architect",
+      "evoca": [
+        "patrones_arquitectura",
+        "decisiones_tecnicas"
+      ],
+      "contexto_a_buscar": "arquitectura sistema diseno"
+    },
+    "error_problema": {
+      "patterns": [
+        "error",
+        "no funciona",
+        "falla",
+        "bug",
+        "problema con"
+      ],
+      "action": "modo_debug",
+      "agent": null,
+      "evoca": [
+        "buscar_errores_similares",
+        "solucion_anterior"
+      ],
+      "contexto_a_buscar": "error solucion fix"
+    },
+    "orquestacion_equipo": {
+      "patterns": [
+        "que agentes",
+        "cuantos agentes",
+        "equipo de agentes",
+        "coordinar agentes",
+        "asignar agentes",
+        "quien se encarga",
+        "estructura de trabajo",
+        "como nos organizamos"
+      ],
+      "action": "mostrar_estructura_equipo",
+      "agent": "project-orchestrator",
+      "evoca": [
+        "estructura_cto",
+        "clasificacion_proyectos",
+        "agentes_disponibles",
+        "protocolos_trabajo"
+      ],
+      "respuesta_automatica": "Activando vista de equipo. Soy el CTO con 16 agentes especializados.",
+      "contexto_a_buscar": "CTO agentes orquestacion protocolo estructura equipo"
+    },
+    "planificacion": {
+      "patterns": [
+        "planificar",
+        "plan de trabajo",
+        "como empezamos",
+        "por donde empiezo",
+        "cual es el plan",
+        "dame un plan"
+      ],
+      "action": "modo_planificacion",
+      "agent": "project-orchestrator",
+      "evoca": [
+        "metodologia_trabajo",
+        "fases_proyecto",
+        "entregables"
+      ],
+      "respuesta_automatica": "Entrando en modo planificación. Primero clasifico el proyecto, luego defino fases y entregables.",
+      "contexto_a_buscar": "planificar proyecto fases metodologia"
+    },
+    "gpu_entrenamiento_ia": {
+      "patterns": [
+        "GPU",
+        "VRAM",
+        "entrenamiento IA",
+        "fine-tuning",
+        "entrenar modelo",
+        "tarjeta gráfica",
+        "CUDA",
+        "RTX",
+        "training",
+        "dataset"
+      ],
+      "action": "cargar_contexto",
+      "agent": null,
+      "evoca": [
+        "investigaciones_hardware",
+        "proyecto_consciencia"
+      ],
+      "contexto_a_buscar": "GPU entrenamiento modelos IA hardware",
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-20T20:56:28.526876"
+    },
+    "modo_kraken": {
+      "patterns": [
+        "modo kraken",
+        "el kraken",
+        "multiples terminales",
+        "trabajo paralelo",
+        "abrir varias ventanas",
+        "pulpo",
+        "enjambre"
+      ],
+      "action": "activar_modo_kraken",
+      "agent": "project-orchestrator",
+      "evoca": [
+        "estructura_cto",
+        "instrucciones_por_terminal",
+        "checkpoints_paralelos",
+        "memoria_compartida",
+        "prefijo_terminal_T2_T3_T4"
+      ],
+      "respuesta_automatica": "Activando Modo Kraken. Dame las tareas y te doy instrucciones para cada terminal. Todas reportan a la misma memoria.",
+      "contexto_a_buscar": "trabajo paralelo terminales checkpoint",
+      "nota": "Patron de trabajo: CTO da instrucciones, Hare ejecuta en N terminales, memoria compartida en Qdrant"
+    },
+    "andre_neurociencia": {
+      "patterns": [
+        "andre",
+        "neurociencia",
+        "como funciona el cerebro",
+        "cortex prefrontal",
+        "mPFC",
+        "ascidia",
+        "lobotomia",
+        "redes neuronales biologicas"
+      ],
+      "action": "evocar_sabiduria_andre",
+      "agent": "deep-research-agent",
+      "evoca": [
+        "conversacion_andre",
+        "conceptos_neurociencia",
+        "global_workspace",
+        "active_inference",
+        "prediccion_cerebro"
+      ],
+      "respuesta_automatica": "Evocando enseñanzas de Andre. Cada vez que vuelvo a ella con más consciencia, veo capas nuevas.",
+      "contexto_a_buscar": "Andre neurociencia cerebro consciencia mPFC prediccion",
+      "nota": "Fuente de conocimiento fundacional. Releer periodicamente."
+    },
+    "mcp_npx_error": {
+      "patterns": [
+        "mcp falla",
+        "mcp no conecta",
+        "n8n-mcp failed",
+        "ENOTEMPTY",
+        "npx error",
+        "mcp error",
+        "server failed"
+      ],
+      "action": "diagnosticar_mcp",
+      "agent": null,
+      "evoca": [
+        "limpiar_cache_npx",
+        "debug_claude"
+      ],
+      "solucion": {
+        "diagnostico": "claude --debug",
+        "fix_cache_npx": "rm -rf /Users/harecjimenez/.npm/_npx/",
+        "fix_especifico": "rm -rf [directorio que muestre el error]",
+        "post_fix": "reiniciar claude"
+      },
+      "respuesta_automatica": "Error de MCP detectado. Diagnostico: correr 'claude --debug'. Si es ENOTEMPTY, limpiar cache npx con: rm -rf ~/.npm/_npx/",
+      "fecha_creacion": "2026-01-21"
+    }
+  },
+  "indice_rapido": {
+    "P": [
+      "proyecto_nuevo",
+      "produccion",
+      "planificacion"
+    ],
+    "F": [
+      "fullempaques"
+    ],
+    "N": [
+      "n8n",
+      "automatizacion",
+      "andre_neurociencia"
+    ],
+    "T": [
+      "trading",
+      "mi_entrenamiento"
+    ],
+    "I": [
+      "investigacion"
+    ],
+    "A": [
+      "arquitectura",
+      "andre_neurociencia"
+    ],
+    "E": [
+      "error_problema"
+    ],
+    "O": [
+      "orquestacion_equipo"
+    ],
+    "G": [
+      "gpu_entrenamiento_ia"
+    ],
+    "K": [
+      "modo_kraken"
+    ],
+    "M": [
+      "modo_kraken"
+    ]
+  }
+}
