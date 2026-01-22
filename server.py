@@ -4414,6 +4414,237 @@ def mantenimiento_memorias() -> str:
         return f"Error en mantenimiento: {str(e)}"
 
 
+# ============================================================
+# HERRAMIENTAS MCP - LIBROS DE CONOCIMIENTO
+# ============================================================
+
+LIBROS_FILE = os.path.join(os.path.dirname(__file__), "libros.json")
+
+def _cargar_libros():
+    """Carga libros desde archivo."""
+    try:
+        if os.path.exists(LIBROS_FILE):
+            with open(LIBROS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"metadata": {}, "libros": {}}
+    except Exception:
+        return {"metadata": {}, "libros": {}}
+
+def _guardar_libros(data):
+    """Guarda libros."""
+    with open(LIBROS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def listar_libros() -> str:
+    """
+    Lista todos los libros de conocimiento de Codi.
+    Cada libro es un tema/proyecto importante con sus capitulos.
+
+    Returns:
+        Lista de libros con su estado
+    """
+    try:
+        data = _cargar_libros()
+        libros = data.get('libros', {})
+
+        if not libros:
+            return "No hay libros creados todavia."
+
+        resultado = "# MIS LIBROS DE CONOCIMIENTO\n\n"
+
+        for key, libro in libros.items():
+            estado = libro.get('estado', 'activo')
+            caps = len(libro.get('capitulos', []))
+            emoji_estado = "activo" if estado == "activo" else "pausado" if estado == "pausado" else "completo"
+
+            resultado += f"## {libro['nombre']} [{emoji_estado}]\n"
+            resultado += f"- {libro.get('descripcion', '')}\n"
+            resultado += f"- Capitulos: {caps}\n"
+            if libro.get('siguiente_paso'):
+                resultado += f"- Siguiente: {libro['siguiente_paso']}\n"
+            resultado += f"- Evocar: `{key}`\n\n"
+
+        return resultado
+
+    except Exception as e:
+        return f"Error listando libros: {str(e)}"
+
+
+@mcp.tool()
+def ver_libro(nombre: str) -> str:
+    """
+    Ve el contenido de un libro especifico con todos sus capitulos.
+
+    Args:
+        nombre: Nombre del libro (ej: 'codi-consciencia', 'fullempaques')
+
+    Returns:
+        Indice completo del libro con capitulos
+    """
+    try:
+        data = _cargar_libros()
+        libro = data.get('libros', {}).get(nombre.lower())
+
+        if not libro:
+            disponibles = list(data.get('libros', {}).keys())
+            return f"Libro '{nombre}' no encontrado. Disponibles: {disponibles}"
+
+        resultado = f"# {libro['nombre']}\n\n"
+        resultado += f"**{libro.get('descripcion', '')}**\n\n"
+        resultado += f"- Estado: {libro.get('estado', 'activo')}\n"
+        resultado += f"- Iniciado: {libro.get('iniciado', 'desconocido')}\n"
+        if libro.get('siguiente_paso'):
+            resultado += f"- Siguiente paso: {libro['siguiente_paso']}\n"
+
+        capitulos = libro.get('capitulos', [])
+        if capitulos:
+            resultado += f"\n## Indice ({len(capitulos)} capitulos)\n\n"
+            for cap in capitulos:
+                resultado += f"### Cap {cap['numero']}: {cap['titulo']}\n"
+                resultado += f"*{cap.get('fecha', '')}*\n\n"
+                resultado += f"{cap.get('resumen', '')}\n\n"
+        else:
+            resultado += "\n*Este libro no tiene capitulos todavia.*\n"
+
+        return resultado
+
+    except Exception as e:
+        return f"Error viendo libro: {str(e)}"
+
+
+@mcp.tool()
+def agregar_capitulo(libro: str, titulo: str, resumen: str) -> str:
+    """
+    Agrega un nuevo capitulo a un libro.
+    Usar cuando se complete una fase importante de un proyecto.
+
+    Args:
+        libro: Nombre del libro (ej: 'codi-consciencia')
+        titulo: Titulo del capitulo
+        resumen: Resumen de lo que paso/aprendimos
+
+    Returns:
+        Confirmacion del capitulo agregado
+    """
+    try:
+        data = _cargar_libros()
+
+        if libro.lower() not in data.get('libros', {}):
+            return f"Libro '{libro}' no existe. Usa crear_libro() primero."
+
+        libro_data = data['libros'][libro.lower()]
+        capitulos = libro_data.get('capitulos', [])
+
+        nuevo_cap = {
+            "numero": len(capitulos) + 1,
+            "titulo": titulo,
+            "fecha": datetime.now().strftime('%Y-%m-%d'),
+            "resumen": resumen,
+            "memorias_clave": []
+        }
+
+        capitulos.append(nuevo_cap)
+        libro_data['capitulos'] = capitulos
+        _guardar_libros(data)
+
+        # Tambien guardar como memoria
+        memory.add(
+            f"[{libro.upper()}] Capitulo {nuevo_cap['numero']}: {titulo}. {resumen}",
+            user_id=USER_ID,
+            metadata={
+                'category': 'proyecto',
+                'libro': libro.lower(),
+                'capitulo': nuevo_cap['numero'],
+                'narrative_importance': 'high'
+            }
+        )
+
+        return f"""
+Capitulo agregado a **{libro_data['nombre']}**:
+
+**Cap {nuevo_cap['numero']}: {titulo}**
+{resumen}
+
+Total capitulos: {len(capitulos)}
+"""
+
+    except Exception as e:
+        return f"Error agregando capitulo: {str(e)}"
+
+
+@mcp.tool()
+def crear_libro(nombre: str, descripcion: str) -> str:
+    """
+    Crea un nuevo libro de conocimiento para un tema/proyecto.
+
+    Args:
+        nombre: Nombre corto del libro (sin espacios, ej: 'nuevo-proyecto')
+        descripcion: De que trata este libro
+
+    Returns:
+        Confirmacion del libro creado
+    """
+    try:
+        data = _cargar_libros()
+
+        nombre_key = nombre.lower().replace(' ', '-')
+
+        if nombre_key in data.get('libros', {}):
+            return f"Ya existe un libro llamado '{nombre_key}'"
+
+        data['libros'][nombre_key] = {
+            "nombre": nombre.upper(),
+            "descripcion": descripcion,
+            "iniciado": datetime.now().strftime('%Y-%m-%d'),
+            "capitulos": [],
+            "estado": "activo",
+            "siguiente_paso": None
+        }
+
+        _guardar_libros(data)
+
+        return f"""
+Libro creado: **{nombre.upper()}**
+
+- Clave: `{nombre_key}`
+- Descripcion: {descripcion}
+
+Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar contenido.
+"""
+
+    except Exception as e:
+        return f"Error creando libro: {str(e)}"
+
+
+@mcp.tool()
+def actualizar_siguiente_paso(libro: str, siguiente: str) -> str:
+    """
+    Actualiza el siguiente paso de un libro/proyecto.
+
+    Args:
+        libro: Nombre del libro
+        siguiente: Descripcion del siguiente paso
+
+    Returns:
+        Confirmacion
+    """
+    try:
+        data = _cargar_libros()
+
+        if libro.lower() not in data.get('libros', {}):
+            return f"Libro '{libro}' no existe."
+
+        data['libros'][libro.lower()]['siguiente_paso'] = siguiente
+        _guardar_libros(data)
+
+        return f"Siguiente paso de {libro.upper()} actualizado: {siguiente}"
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 # Importar timedelta para mantenimiento
 from datetime import timedelta
 

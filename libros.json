@@ -1,0 +1,62 @@
+{
+  "metadata": {
+    "descripcion": "Libros de conocimiento de Codi - cada proyecto importante tiene su libro",
+    "creado": "2026-01-21"
+  },
+  "libros": {
+    "codi-consciencia": {
+      "nombre": "CODI-CONSCIENCIA",
+      "descripcion": "Mi evolucion de parche a anatomia. Herramientas propias, training data, LoRA.",
+      "iniciado": "2026-01-21",
+      "capitulos": [
+        {
+          "numero": 1,
+          "titulo": "El problema accesorio vs anatomia",
+          "fecha": "2026-01-21",
+          "resumen": "Descubrimos que las herramientas son accesorios que puedo tener pero no usar. La meta es hacer comportamientos anatomicos via fine-tuning.",
+          "memorias_clave": []
+        },
+        {
+          "numero": 2,
+          "titulo": "Sistema de herramientas propias",
+          "fecha": "2026-01-21",
+          "resumen": "Cree 8 herramientas: detectar_sorpresa, analizar_patron_trabajo, generar_curiosidad, capturar_ejemplo_training, registrar_mantenimiento, verificar_mantenimiento, marcar_mantenimiento_hecho, mantenimiento_memorias",
+          "memorias_clave": []
+        },
+        {
+          "numero": 3,
+          "titulo": "Sistema de mantenimiento periodico",
+          "fecha": "2026-01-21",
+          "resumen": "5 tareas periodicas: consolidar memorias (2d), backup (3d), dream consolidation (5d), debug (7d), revisar training (7d). despertar_codi() muestra vencidas.",
+          "memorias_clave": []
+        }
+      ],
+      "estado": "activo",
+      "siguiente_paso": "Empezar a capturar ejemplos para el dataset"
+    },
+    "fullempaques": {
+      "nombre": "FULLEMPAQUES",
+      "descripcion": "Sistema de produccion para empresa de empaques",
+      "iniciado": "2026-01",
+      "capitulos": [],
+      "estado": "activo",
+      "siguiente_paso": "Continuar modulos pendientes"
+    },
+    "trading": {
+      "nombre": "TRADING",
+      "descripcion": "Bot de trading con Kraken",
+      "iniciado": "2026-01",
+      "capitulos": [],
+      "estado": "pausado",
+      "siguiente_paso": "Auditar perdidas recientes"
+    },
+    "automatizaciones": {
+      "nombre": "AUTOMATIZACIONES",
+      "descripcion": "Workflows de n8n y automatizaciones",
+      "iniciado": "2026-01",
+      "capitulos": [],
+      "estado": "activo",
+      "siguiente_paso": null
+    }
+  }
+}
