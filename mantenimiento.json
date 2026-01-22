@@ -1,0 +1,35 @@
+{
+  "metadata": {
+    "description": "Tareas de mantenimiento periodico del sistema Codi",
+    "created": "2026-01-21"
+  },
+  "tareas": [
+    {
+      "id": "debug_sistema",
+      "nombre": "Debug del sistema Codi",
+      "descripcion": "Revisar memorias, herramientas, conexiones MCP",
+      "frecuencia_dias": 7,
+      "ultimo_completado": null,
+      "proximo": null,
+      "activo": true
+    },
+    {
+      "id": "backup_memorias",
+      "nombre": "Backup de memorias",
+      "descripcion": "Verificar que memories_backup.json este actualizado",
+      "frecuencia_dias": 3,
+      "ultimo_completado": null,
+      "proximo": null,
+      "activo": true
+    },
+    {
+      "id": "revisar_training_data",
+      "nombre": "Revisar dataset de training",
+      "descripcion": "Ver progreso del dataset, calidad de ejemplos",
+      "frecuencia_dias": 7,
+      "ultimo_completado": null,
+      "proximo": null,
+      "activo": true
+    }
+  ]
+}

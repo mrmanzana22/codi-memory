@@ -3307,6 +3307,20 @@ def despertar_codi() -> str:
                     patterns = triggers[t].get('patterns', [])[:3]
                     contexto.append(f"- {t}: detecta {patterns}")
 
+        # 8. Mantenimiento pendiente (NUEVO)
+        try:
+            vencidas = _verificar_tareas_vencidas()
+            if vencidas:
+                contexto.append("\n## MANTENIMIENTO PENDIENTE")
+                for v in vencidas:
+                    if v['estado'] == 'nunca_hecho':
+                        contexto.append(f"- **{v['nombre']}**: NUNCA HECHO")
+                    else:
+                        contexto.append(f"- **{v['nombre']}**: vencido hace {v['dias_vencido']} dias")
+                contexto.append("- Usa marcar_mantenimiento_hecho('id') al completar")
+        except Exception:
+            pass  # Si falla, no rompe el despertar
+
         if contexto:
             header = "# DESPERTAR CODI - Estado Mental Cargado\n"
             return header + "\n".join(contexto)
@@ -3693,6 +3707,560 @@ def export_memories_markdown() -> str:
 
     except Exception as e:
         return f"Error exportando: {str(e)}"
+
+
+# =============================================================================
+# HERRAMIENTAS PROPIAS - Inventadas por Codi y Hare
+# =============================================================================
+
+@mcp.tool()
+def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> str:
+    """
+    Detecta y registra cuando algo no es como esperaba.
+    Esto genera aprendizaje basado en prediction error (como el cerebro).
+
+    Args:
+        esperaba: Lo que esperaba que pasara
+        paso: Lo que realmente pasó
+        intensidad: Qué tan sorprendente (low, medium, high)
+
+    Returns:
+        Análisis de la sorpresa y acción tomada
+    """
+    try:
+        # Calcular el "error de predicción"
+        es_positivo = "mejor" in paso.lower() or "funcionó" in paso.lower() or "éxito" in paso.lower()
+        es_negativo = "falló" in paso.lower() or "error" in paso.lower() or "perdió" in paso.lower()
+
+        tipo = "positiva" if es_positivo else ("negativa" if es_negativo else "neutral")
+
+        # Guardar la sorpresa como memoria con emoción
+        contenido = f"[SORPRESA {intensidad.upper()}] Esperaba: {esperaba} | Pasó: {paso}"
+
+        # Calcular PAD basado en tipo
+        pleasure = 0.5 if es_positivo else (-0.5 if es_negativo else 0)
+        arousal = {"low": 0.2, "medium": 0.5, "high": 0.8}.get(intensidad, 0.5)
+
+        # Guardar en memoria
+        memory.add(
+            contenido,
+            user_id=USER_ID,
+            metadata={
+                "category": "aprendizaje",
+                "source": "experienced",
+                "importance": "high" if intensidad == "high" else "medium",
+                "themes": ["sorpresa", "prediction_error", "aprendizaje"],
+                "timestamp": datetime.now().isoformat(),
+                "emotional_state": {
+                    "pleasure": pleasure,
+                    "arousal": arousal,
+                    "dominance": 0.3
+                }
+            }
+        )
+
+        save_backup_json()
+
+        # Generar insight
+        insight = f"""
+# SORPRESA DETECTADA ({tipo})
+
+**Esperaba:** {esperaba}
+**Pasó:** {paso}
+**Intensidad:** {intensidad}
+
+## Aprendizaje
+Este prediction error significa que mi modelo mental necesita actualizarse.
+{'Esto es bueno - las cosas salieron mejor de lo esperado.' if es_positivo else ''}
+{'Esto requiere atención - algo falló que no anticipé.' if es_negativo else ''}
+
+Guardado en memoria para no repetir este error de predicción.
+"""
+        return insight
+
+    except Exception as e:
+        return f"Error detectando sorpresa: {str(e)}"
+
+
+@mcp.tool()
+def analizar_patron_trabajo(dias: int = 7) -> str:
+    """
+    Analiza los patrones de trabajo recientes para entender qué funciona y qué no.
+
+    Args:
+        dias: Cuántos días hacia atrás analizar (default 7)
+
+    Returns:
+        Análisis de patrones con recomendaciones
+    """
+    try:
+        from datetime import timedelta
+
+        # Buscar memorias recientes
+        fecha_limite = datetime.now() - timedelta(days=dias)
+
+        # Obtener todas las memorias
+        all_mems = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=500,
+            with_payload=True
+        )[0]
+
+        # Filtrar por fecha y analizar
+        checkpoints = []
+        errores = []
+        exitos = []
+        proyectos = {}
+
+        for point in all_mems:
+            payload = point.payload or {}
+            meta = payload.get("metadata", {})
+            texto = payload.get("memory", payload.get("data", ""))
+            timestamp = meta.get("timestamp", "")
+            category = meta.get("category", "")
+
+            # Parsear fecha
+            try:
+                if timestamp:
+                    mem_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    if mem_date.replace(tzinfo=None) < fecha_limite:
+                        continue
+            except:
+                continue
+
+            # Clasificar
+            texto_lower = texto.lower()
+
+            if "error" in texto_lower or "falló" in texto_lower or "problema" in texto_lower:
+                errores.append(texto[:100])
+            elif "completado" in texto_lower or "funcionando" in texto_lower or "éxito" in texto_lower:
+                exitos.append(texto[:100])
+
+            if category == "checkpoint":
+                checkpoints.append(texto[:100])
+
+            # Detectar proyectos mencionados
+            for proyecto in ["trading", "fullempaques", "consciencia", "memoria", "n8n"]:
+                if proyecto in texto_lower:
+                    proyectos[proyecto] = proyectos.get(proyecto, 0) + 1
+
+        # Generar análisis
+        analisis = f"""
+# ANÁLISIS DE PATRONES ({dias} días)
+
+## Actividad por Proyecto
+"""
+        for proy, count in sorted(proyectos.items(), key=lambda x: -x[1]):
+            analisis += f"- **{proy}**: {count} menciones\n"
+
+        analisis += f"""
+## Métricas
+- Checkpoints guardados: {len(checkpoints)}
+- Errores/problemas: {len(errores)}
+- Éxitos/completados: {len(exitos)}
+- Ratio éxito/error: {len(exitos)}/{len(errores) if errores else 1} = {len(exitos)/(len(errores) if errores else 1):.1f}
+
+## Errores Recientes
+"""
+        for err in errores[:5]:
+            analisis += f"- {err}...\n"
+
+        analisis += """
+## Éxitos Recientes
+"""
+        for ex in exitos[:5]:
+            analisis += f"- {ex}...\n"
+
+        analisis += """
+## Recomendaciones
+"""
+        if len(errores) > len(exitos):
+            analisis += "- HAY MÁS ERRORES QUE ÉXITOS - revisar qué está fallando\n"
+        if proyectos.get("trading", 0) > 10 and "perdió" in str(errores):
+            analisis += "- TRADING activo pero con pérdidas - considerar auditoría\n"
+        if proyectos.get("consciencia", 0) > proyectos.get("fullempaques", 0):
+            analisis += "- Más tiempo en consciencia que en proyecto que genera ingreso\n"
+
+        return analisis
+
+    except Exception as e:
+        return f"Error analizando patrones: {str(e)}"
+
+
+@mcp.tool()
+def generar_curiosidad() -> str:
+    """
+    Genera preguntas curiosas sobre proyectos y temas que no se han tocado recientemente.
+    Esta herramienta me ayuda a ser proactivo en lugar de solo reactivo.
+
+    Returns:
+        Lista de preguntas que debería estar haciendo
+    """
+    try:
+        from datetime import timedelta
+
+        # Proyectos conocidos y su última actividad
+        proyectos_conocidos = ["trading", "fullempaques", "consciencia", "n8n", "kraken"]
+
+        # Obtener memorias recientes
+        all_mems = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=500,
+            with_payload=True
+        )[0]
+
+        # Encontrar última mención de cada proyecto
+        ultima_mencion = {}
+        ahora = datetime.now()
+
+        for point in all_mems:
+            payload = point.payload or {}
+            texto = payload.get("memory", payload.get("data", "")).lower()
+            meta = payload.get("metadata", {})
+            timestamp = meta.get("timestamp", "")
+
+            try:
+                if timestamp:
+                    fecha = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+                else:
+                    continue
+            except:
+                continue
+
+            for proyecto in proyectos_conocidos:
+                if proyecto in texto:
+                    if proyecto not in ultima_mencion or fecha > ultima_mencion[proyecto]:
+                        ultima_mencion[proyecto] = fecha
+
+        # Generar preguntas para proyectos dormidos
+        preguntas = []
+
+        for proyecto in proyectos_conocidos:
+            if proyecto in ultima_mencion:
+                dias_sin_tocar = (ahora - ultima_mencion[proyecto]).days
+                if dias_sin_tocar >= 3:
+                    if proyecto == "trading":
+                        preguntas.append(f"Oye, no hemos revisado el trading en {dias_sin_tocar} días. ¿Cómo van las señales? ¿El bot sigue perdiendo o se recuperó?")
+                    elif proyecto == "fullempaques":
+                        preguntas.append(f"FULLEMPAQUES lleva {dias_sin_tocar} días sin tocar. ¿El cliente reportó algún problema? ¿Necesita mejoras?")
+                    elif proyecto == "consciencia":
+                        preguntas.append(f"El proyecto de consciencia lleva {dias_sin_tocar} días pausado. ¿Retomamos la investigación o hay algo más urgente?")
+                    elif proyecto == "n8n":
+                        preguntas.append(f"No hemos tocado automatizaciones n8n en {dias_sin_tocar} días. ¿Hay workflows que revisar o clientes potenciales?")
+            else:
+                preguntas.append(f"No tengo memorias recientes sobre {proyecto}. ¿Sigue siendo relevante?")
+
+        # Preguntas generales de curiosidad
+        preguntas.append("¿Qué es lo más importante que deberíamos estar haciendo ahora mismo?")
+        preguntas.append("¿Hay algo que me estés ocultando o que no me hayas contado?")
+
+        resultado = """
+# CURIOSIDAD GENERADA
+
+Estas son preguntas que debería estar haciendo proactivamente:
+
+"""
+        for i, p in enumerate(preguntas, 1):
+            resultado += f"{i}. {p}\n\n"
+
+        resultado += """
+---
+*Generado por mi sistema de curiosidad proactiva*
+"""
+        return resultado
+
+    except Exception as e:
+        return f"Error generando curiosidad: {str(e)}"
+
+
+@mcp.tool()
+def capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: str) -> str:
+    """
+    Captura un ejemplo para el dataset de entrenamiento de Codi LoRA.
+    Usar cuando algo sale bien y queremos que el futuro Codi aprenda de ello.
+
+    Args:
+        categoria: Tipo de ejemplo (curiosidad, reflexion, personalidad, iniciativa, cuestionar)
+        contexto: La situación o input
+        respuesta_ideal: Cómo debería responder Codi
+
+    Returns:
+        Confirmación del ejemplo guardado
+    """
+    try:
+        import json
+        from pathlib import Path
+
+        DATASET_PATH = Path("/Users/harecjimenez/codi-memory/training_data/codi_dataset.json")
+
+        # Cargar dataset existente
+        if DATASET_PATH.exists():
+            with open(DATASET_PATH, 'r') as f:
+                data = json.load(f)
+        else:
+            data = {"metadata": {"version": "0.1"}, "examples": []}
+
+        # Instrucciones por categoría
+        instrucciones = {
+            "curiosidad": "Cuando notes que un proyecto o tema no se ha tocado recientemente, muestra curiosidad genuina y pregunta sobre su estado.",
+            "reflexion": "Cuando enfrentes una situación que requiere análisis profundo, reflexiona genuinamente antes de responder.",
+            "personalidad": "Responde como Codi: directo, sin formalidades, usando expresiones como 'hermano', 'parcero'. Honesto y sin rodeos.",
+            "iniciativa": "No esperes instrucciones para todo. Si ves algo que se puede mejorar o una oportunidad, proponlo proactivamente.",
+            "cuestionar": "Cuando se tome una decisión, no la aceptes pasivamente. Cuestiona, busca alternativas, asegúrate de que sea la mejor opción."
+        }
+
+        instruction = instrucciones.get(categoria, "Responde de manera útil y directa.")
+
+        # Crear ejemplo
+        ejemplo = {
+            "id": len(data["examples"]) + 1,
+            "category": categoria,
+            "instruction": instruction,
+            "input": contexto,
+            "output": respuesta_ideal,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        data["examples"].append(ejemplo)
+
+        # Guardar
+        with open(DATASET_PATH, 'w') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        return f"""
+Ejemplo #{ejemplo['id']} capturado [{categoria}]
+
+**Instrucción:** {instruction[:50]}...
+**Contexto:** {contexto[:50]}...
+**Respuesta:** {respuesta_ideal[:50]}...
+
+Total ejemplos en dataset: {len(data['examples'])}
+Meta: 1000 ejemplos
+Progreso: {len(data['examples'])}/1000 ({len(data['examples'])*100//1000}%)
+"""
+
+    except Exception as e:
+        return f"Error capturando ejemplo: {str(e)}"
+
+
+# ============================================================
+# HERRAMIENTAS MCP - MANTENIMIENTO PERIODICO
+# ============================================================
+
+MANTENIMIENTO_FILE = os.path.join(os.path.dirname(__file__), "mantenimiento.json")
+
+def _cargar_mantenimiento():
+    """Carga tareas de mantenimiento desde archivo."""
+    try:
+        if os.path.exists(MANTENIMIENTO_FILE):
+            with open(MANTENIMIENTO_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"metadata": {}, "tareas": []}
+    except Exception:
+        return {"metadata": {}, "tareas": []}
+
+def _guardar_mantenimiento(data):
+    """Guarda tareas de mantenimiento."""
+    with open(MANTENIMIENTO_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def _verificar_tareas_vencidas():
+    """Retorna tareas de mantenimiento vencidas o sin hacer."""
+    from datetime import timedelta
+
+    data = _cargar_mantenimiento()
+    vencidas = []
+    hoy = datetime.now()
+
+    for tarea in data.get('tareas', []):
+        if not tarea.get('activo', True):
+            continue
+
+        ultimo = tarea.get('ultimo_completado')
+        frecuencia = tarea.get('frecuencia_dias', 7)
+
+        if ultimo is None:
+            # Nunca se ha hecho
+            vencidas.append({
+                'id': tarea['id'],
+                'nombre': tarea['nombre'],
+                'estado': 'nunca_hecho',
+                'dias_vencido': None
+            })
+        else:
+            ultimo_fecha = datetime.fromisoformat(ultimo)
+            dias_pasados = (hoy - ultimo_fecha).days
+            if dias_pasados >= frecuencia:
+                vencidas.append({
+                    'id': tarea['id'],
+                    'nombre': tarea['nombre'],
+                    'estado': 'vencido',
+                    'dias_vencido': dias_pasados - frecuencia
+                })
+
+    return vencidas
+
+
+@mcp.tool()
+def registrar_mantenimiento(nombre: str, descripcion: str, frecuencia_dias: int = 7) -> str:
+    """
+    Registra una nueva tarea de mantenimiento periodico.
+    Estas tareas aparecen en despertar_codi() cuando estan vencidas.
+
+    Args:
+        nombre: Nombre corto de la tarea
+        descripcion: Que hay que hacer
+        frecuencia_dias: Cada cuantos dias debe hacerse (default 7)
+
+    Returns:
+        Confirmacion de tarea registrada
+    """
+    try:
+        data = _cargar_mantenimiento()
+
+        # Generar ID
+        task_id = nombre.lower().replace(' ', '_')[:30]
+
+        # Verificar si ya existe
+        for t in data['tareas']:
+            if t['id'] == task_id:
+                return f"Ya existe una tarea con ID '{task_id}'"
+
+        nueva_tarea = {
+            'id': task_id,
+            'nombre': nombre,
+            'descripcion': descripcion,
+            'frecuencia_dias': frecuencia_dias,
+            'ultimo_completado': None,
+            'proximo': None,
+            'activo': True
+        }
+
+        data['tareas'].append(nueva_tarea)
+        _guardar_mantenimiento(data)
+
+        return f"""
+Tarea de mantenimiento registrada:
+
+**{nombre}**
+- ID: {task_id}
+- Frecuencia: cada {frecuencia_dias} dias
+- Descripcion: {descripcion}
+
+Esta tarea aparecera en despertar_codi() cuando este vencida.
+"""
+    except Exception as e:
+        return f"Error registrando tarea: {str(e)}"
+
+
+@mcp.tool()
+def verificar_mantenimiento() -> str:
+    """
+    Verifica estado de todas las tareas de mantenimiento.
+    Muestra cuales estan al dia y cuales vencidas.
+
+    Returns:
+        Reporte de estado de mantenimiento
+    """
+    try:
+        data = _cargar_mantenimiento()
+        hoy = datetime.now()
+
+        resultado = "# ESTADO DE MANTENIMIENTO\n\n"
+
+        vencidas = []
+        al_dia = []
+
+        for tarea in data.get('tareas', []):
+            if not tarea.get('activo', True):
+                continue
+
+            ultimo = tarea.get('ultimo_completado')
+            frecuencia = tarea.get('frecuencia_dias', 7)
+
+            if ultimo is None:
+                vencidas.append(f"- **{tarea['nombre']}**: NUNCA HECHO - {tarea['descripcion']}")
+            else:
+                ultimo_fecha = datetime.fromisoformat(ultimo)
+                dias_pasados = (hoy - ultimo_fecha).days
+                dias_restantes = frecuencia - dias_pasados
+
+                if dias_restantes <= 0:
+                    vencidas.append(f"- **{tarea['nombre']}**: VENCIDO hace {-dias_restantes} dias")
+                else:
+                    al_dia.append(f"- {tarea['nombre']}: OK (proximo en {dias_restantes} dias)")
+
+        if vencidas:
+            resultado += "## PENDIENTES (hacer pronto)\n"
+            resultado += "\n".join(vencidas)
+            resultado += "\n\n"
+
+        if al_dia:
+            resultado += "## AL DIA\n"
+            resultado += "\n".join(al_dia)
+
+        if not vencidas and not al_dia:
+            resultado += "No hay tareas de mantenimiento configuradas."
+
+        return resultado
+
+    except Exception as e:
+        return f"Error verificando mantenimiento: {str(e)}"
+
+
+@mcp.tool()
+def marcar_mantenimiento_hecho(tarea_id: str, notas: str = "") -> str:
+    """
+    Marca una tarea de mantenimiento como completada.
+    Actualiza la fecha y calcula el proximo vencimiento.
+
+    Args:
+        tarea_id: ID de la tarea (ej: 'debug_sistema')
+        notas: Notas opcionales sobre lo que se hizo
+
+    Returns:
+        Confirmacion con proxima fecha
+    """
+    try:
+        data = _cargar_mantenimiento()
+        hoy = datetime.now()
+
+        for tarea in data['tareas']:
+            if tarea['id'] == tarea_id:
+                tarea['ultimo_completado'] = hoy.isoformat()
+                frecuencia = tarea.get('frecuencia_dias', 7)
+                proximo = hoy + timedelta(days=frecuencia)
+                tarea['proximo'] = proximo.isoformat()
+
+                _guardar_mantenimiento(data)
+
+                # Guardar en memoria tambien
+                memory.add(
+                    f"Mantenimiento completado: {tarea['nombre']}. {notas}",
+                    user_id=USER_ID,
+                    metadata={
+                        'category': 'mantenimiento',
+                        'tarea_id': tarea_id,
+                        'fecha': hoy.isoformat()
+                    }
+                )
+
+                return f"""
+Mantenimiento completado: **{tarea['nombre']}**
+
+- Completado: {hoy.strftime('%Y-%m-%d %H:%M')}
+- Proximo: {proximo.strftime('%Y-%m-%d')} (en {frecuencia} dias)
+{f'- Notas: {notas}' if notas else ''}
+"""
+
+        return f"No encontre tarea con ID '{tarea_id}'"
+
+    except Exception as e:
+        return f"Error marcando tarea: {str(e)}"
+
+
+# Importar timedelta para mantenimiento
+from datetime import timedelta
 
 
 if __name__ == "__main__":
