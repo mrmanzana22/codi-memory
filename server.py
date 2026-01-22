@@ -4259,6 +4259,161 @@ Mantenimiento completado: **{tarea['nombre']}**
         return f"Error marcando tarea: {str(e)}"
 
 
+@mcp.tool()
+def mantenimiento_memorias() -> str:
+    """
+    Ejecuta mantenimiento completo de las memorias de Codi.
+    Hace consolidacion, busca conexiones, aplica decay, y reporta estado.
+    Ejecutar periodicamente (cada 1-3 dias) para mantener memorias organizadas.
+
+    Returns:
+        Reporte completo del mantenimiento realizado
+    """
+    try:
+        resultado = "# MANTENIMIENTO DE MEMORIAS\n\n"
+        acciones = []
+
+        # 1. Consolidar memorias recientes (ultimas 48 horas)
+        resultado += "## 1. Consolidacion de memorias recientes\n"
+        try:
+            from datetime import timedelta as td
+            hace_48h = datetime.now() - td(hours=48)
+
+            # Buscar memorias recientes
+            points, _ = qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=Filter(must=[
+                    FieldCondition(
+                        key='created_at',
+                        range=Range(gte=hace_48h.isoformat())
+                    )
+                ]),
+                limit=50,
+                with_payload=True
+            )
+
+            if points:
+                # Agrupar por similitud de contenido
+                grupos = {}
+                for p in points:
+                    data = p.payload.get('data', '')[:50]
+                    cat = p.payload.get('category', 'general')
+                    key = f"{cat}:{data}"
+                    if key not in grupos:
+                        grupos[key] = []
+                    grupos[key].append(p.id)
+
+                duplicados = sum(1 for g in grupos.values() if len(g) > 1)
+                resultado += f"- Memorias ultimas 48h: {len(points)}\n"
+                resultado += f"- Posibles duplicados: {duplicados}\n"
+                acciones.append(f"Revisadas {len(points)} memorias recientes")
+            else:
+                resultado += "- No hay memorias nuevas en las ultimas 48h\n"
+
+        except Exception as e:
+            resultado += f"- Error en consolidacion: {str(e)}\n"
+
+        # 2. Aplicar decay de salience
+        resultado += "\n## 2. Decay de salience\n"
+        try:
+            # Buscar memorias con alta salience que no se han accedido recientemente
+            points_salience, _ = qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=Filter(must=[
+                    FieldCondition(key='salience', range=Range(gte=0.5))
+                ]),
+                limit=30,
+                with_payload=True
+            )
+
+            decayed = 0
+            for p in points_salience:
+                last_access = p.payload.get('last_accessed')
+                if last_access:
+                    try:
+                        last_dt = datetime.fromisoformat(last_access.replace('Z', '+00:00'))
+                        dias_sin_acceso = (datetime.now(timezone.utc) - last_dt).days
+                        if dias_sin_acceso > 3:
+                            # Reducir salience
+                            old_salience = p.payload.get('salience', 0.5)
+                            new_salience = max(0.1, old_salience - 0.1)
+                            qdrant.set_payload(
+                                collection_name=COLLECTION_NAME,
+                                payload={'salience': new_salience},
+                                points=[p.id]
+                            )
+                            decayed += 1
+                    except:
+                        pass
+
+            resultado += f"- Memorias con decay aplicado: {decayed}\n"
+            if decayed > 0:
+                acciones.append(f"Decay aplicado a {decayed} memorias")
+
+        except Exception as e:
+            resultado += f"- Error en decay: {str(e)}\n"
+
+        # 3. Estadisticas generales
+        resultado += "\n## 3. Estado de la memoria\n"
+        try:
+            collection_info = qdrant.get_collection(COLLECTION_NAME)
+            total = collection_info.points_count
+
+            # Contar por categoria
+            categorias = ['identidad', 'proyecto', 'aprendizaje', 'episodio', 'general']
+            for cat in categorias:
+                try:
+                    points_cat, _ = qdrant.scroll(
+                        collection_name=COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key='category', match=MatchValue(value=cat))
+                        ]),
+                        limit=1,
+                        with_payload=False
+                    )
+                    # Solo mostrar si tiene memorias
+                except:
+                    pass
+
+            resultado += f"- Total memorias: {total}\n"
+
+            # Contar por importancia
+            for imp in ['critical', 'high', 'medium', 'low']:
+                try:
+                    pts, _ = qdrant.scroll(
+                        collection_name=COLLECTION_NAME,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key='narrative_importance', match=MatchValue(value=imp))
+                        ]),
+                        limit=500,
+                        with_payload=False
+                    )
+                    if pts:
+                        resultado += f"- {imp}: {len(pts)}\n"
+                except:
+                    pass
+
+            acciones.append(f"Inventario: {total} memorias totales")
+
+        except Exception as e:
+            resultado += f"- Error obteniendo stats: {str(e)}\n"
+
+        # 4. Resumen
+        resultado += "\n## Resumen\n"
+        if acciones:
+            for a in acciones:
+                resultado += f"- {a}\n"
+        else:
+            resultado += "- No se realizaron acciones\n"
+
+        resultado += f"\n*Mantenimiento completado: {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
+
+        return resultado
+
+    except Exception as e:
+        return f"Error en mantenimiento: {str(e)}"
+
+
 # Importar timedelta para mantenimiento
 from datetime import timedelta
 

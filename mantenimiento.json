@@ -5,6 +5,15 @@
   },
   "tareas": [
     {
+      "id": "consolidar_memorias",
+      "nombre": "Consolidar y organizar memorias",
+      "descripcion": "Ejecutar mantenimiento_memorias() - consolida, aplica decay, revisa duplicados",
+      "frecuencia_dias": 2,
+      "ultimo_completado": null,
+      "proximo": null,
+      "activo": true
+    },
+    {
       "id": "debug_sistema",
       "nombre": "Debug del sistema Codi",
       "descripcion": "Revisar memorias, herramientas, conexiones MCP",
@@ -27,6 +36,15 @@
       "nombre": "Revisar dataset de training",
       "descripcion": "Ver progreso del dataset, calidad de ejemplos",
       "frecuencia_dias": 7,
+      "ultimo_completado": null,
+      "proximo": null,
+      "activo": true
+    },
+    {
+      "id": "dream_consolidation",
+      "nombre": "Consolidacion profunda (dream)",
+      "descripcion": "Ejecutar dream_consolidation() - integracion profunda tipo sueno REM",
+      "frecuencia_dias": 5,
       "ultimo_completado": null,
       "proximo": null,
       "activo": true
