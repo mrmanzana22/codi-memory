@@ -4723,6 +4723,88 @@ def buscar_conexiones_entre_libros() -> str:
 # Importar timedelta para mantenimiento
 from datetime import timedelta
 
+# ============================================================
+# COMUNICACION CODI -> N8N (Proactividad)
+# ============================================================
+import requests as http_requests
+
+N8N_WEBHOOK_BASE = os.getenv("N8N_WEBHOOK_BASE", "https://appn8n-n8n.lx6zon.easypanel.host/webhook")
+
+
+@mcp.tool()
+def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = False) -> str:
+    """
+    Dispara un workflow en n8n enviando datos a un webhook.
+    Esto me permite INICIAR acciones, no solo responder.
+
+    Args:
+        webhook_path: Path del webhook (ej: 'codi-alerta', 'trading-orden')
+        data: Datos a enviar (dict)
+        esperar_respuesta: Si True, espera y retorna la respuesta de n8n
+
+    Returns:
+        Resultado de la llamada
+
+    Ejemplos:
+        trigger_n8n('codi-alerta', {'tipo': 'trading', 'mensaje': 'BTC subio 5%'})
+        trigger_n8n('backup-memorias', {'urgente': True})
+    """
+    try:
+        url = f"{N8N_WEBHOOK_BASE}/{webhook_path}"
+
+        payload = data or {}
+        payload['_from'] = 'codi-memory'
+        payload['_timestamp'] = datetime.now().isoformat()
+
+        timeout = 30 if esperar_respuesta else 5
+
+        response = http_requests.post(
+            url,
+            json=payload,
+            timeout=timeout,
+            headers={'Content-Type': 'application/json'}
+        )
+
+        if esperar_respuesta:
+            try:
+                return f"Respuesta de n8n: {response.json()}"
+            except:
+                return f"Respuesta de n8n (texto): {response.text[:500]}"
+        else:
+            if response.status_code in [200, 201, 202]:
+                return f"Webhook disparado: {webhook_path} - Status: {response.status_code}"
+            else:
+                return f"Error disparando webhook: {response.status_code} - {response.text[:200]}"
+
+    except http_requests.exceptions.Timeout:
+        return f"Timeout esperando respuesta de n8n (webhook: {webhook_path})"
+    except Exception as e:
+        return f"Error disparando n8n: {str(e)}"
+
+
+@mcp.tool()
+def listar_webhooks_conocidos() -> str:
+    """
+    Lista los webhooks de n8n que conozco y puedo disparar.
+    """
+    webhooks = {
+        "codi-alerta": "Enviar alertas generales a Hare",
+        "trading-signal": "Enviar señal de trading para procesar",
+        "backup-trigger": "Disparar backup de memorias",
+        "reporte-diario": "Generar y enviar reporte diario",
+    }
+
+    resultado = "# WEBHOOKS N8N CONOCIDOS\n\n"
+    resultado += f"Base URL: {N8N_WEBHOOK_BASE}\n\n"
+
+    for path, desc in webhooks.items():
+        resultado += f"- **{path}**: {desc}\n"
+
+    resultado += "\n*Nota: Estos webhooks deben existir en n8n para funcionar.*"
+    resultado += "\n*Usa trigger_n8n('nombre', {datos}) para disparar.*"
+
+    return resultado
+
 
 # ============================================================
 # ARCHIVO DE RECORDATORIOS EXTERNOS (para n8n, webhooks, etc)
