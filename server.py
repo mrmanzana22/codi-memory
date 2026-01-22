@@ -4724,6 +4724,67 @@ def buscar_conexiones_entre_libros() -> str:
 from datetime import timedelta
 
 
+# ============================================================
+# ARCHIVO DE RECORDATORIOS EXTERNOS (para n8n, webhooks, etc)
+# ============================================================
+RECORDATORIOS_FILE = os.path.join(os.path.dirname(__file__), "recordatorios_pendientes.json")
+
+def _cargar_recordatorios():
+    try:
+        if os.path.exists(RECORDATORIOS_FILE):
+            with open(RECORDATORIOS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"pendientes": []}
+    except:
+        return {"pendientes": []}
+
+def _guardar_recordatorios(data):
+    with open(RECORDATORIOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def ver_recordatorios_externos() -> str:
+    """
+    Ve recordatorios enviados por sistemas externos (n8n, webhooks).
+    Estos son mensajes que otros sistemas me envian para recordarme cosas.
+    """
+    try:
+        data = _cargar_recordatorios()
+        pendientes = data.get('pendientes', [])
+
+        if not pendientes:
+            return "No hay recordatorios externos pendientes."
+
+        resultado = "# RECORDATORIOS EXTERNOS\n\n"
+        for i, r in enumerate(pendientes):
+            resultado += f"**{i+1}. [{r.get('prioridad', 'normal')}]** {r.get('mensaje', '')}\n"
+            resultado += f"   - Origen: {r.get('origen', 'desconocido')}\n"
+            resultado += f"   - Fecha: {r.get('timestamp', 'desconocida')}\n\n"
+
+        resultado += f"\nTotal: {len(pendientes)} recordatorios pendientes\n"
+        resultado += "Usa `limpiar_recordatorios()` para marcarlos como vistos."
+
+        return resultado
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@mcp.tool()
+def limpiar_recordatorios() -> str:
+    """
+    Limpia los recordatorios externos despues de haberlos visto.
+    """
+    try:
+        data = _cargar_recordatorios()
+        cantidad = len(data.get('pendientes', []))
+        data['pendientes'] = []
+        _guardar_recordatorios(data)
+        return f"Limpiados {cantidad} recordatorios."
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 if __name__ == "__main__":
     # Soporte para stdio (local) y SSE/HTTP (remoto/Easypanel)
     transport = os.getenv("MCP_TRANSPORT", "stdio")
@@ -4731,13 +4792,63 @@ if __name__ == "__main__":
     if transport in ("sse", "http", "streamable-http"):
         import uvicorn
         from starlette.applications import Starlette
-        from starlette.routing import Mount
+        from starlette.routing import Mount, Route
+        from starlette.responses import JSONResponse
+
+        # Endpoint para recibir recordatorios de n8n u otros sistemas
+        async def recibir_recordatorio(request):
+            try:
+                body = await request.json()
+                mensaje = body.get('mensaje', '')
+                prioridad = body.get('prioridad', 'normal')
+                origen = body.get('origen', 'externo')
+
+                if not mensaje:
+                    return JSONResponse({"error": "mensaje requerido"}, status_code=400)
+
+                # Guardar recordatorio
+                data = _cargar_recordatorios()
+                data['pendientes'].append({
+                    "mensaje": mensaje,
+                    "prioridad": prioridad,
+                    "origen": origen,
+                    "timestamp": datetime.now().isoformat()
+                })
+                _guardar_recordatorios(data)
+
+                # Tambien guardar como memoria si es alta prioridad
+                if prioridad == "alta":
+                    memory.add(
+                        f"[RECORDATORIO EXTERNO] {mensaje} (de {origen})",
+                        user_id=USER_ID,
+                        metadata={
+                            'category': 'recordatorio',
+                            'origen': origen,
+                            'narrative_importance': 'high'
+                        }
+                    )
+
+                return JSONResponse({
+                    "status": "ok",
+                    "mensaje": f"Recordatorio guardado: {mensaje[:50]}..."
+                })
+
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        # Health check
+        async def health(request):
+            return JSONResponse({"status": "ok", "service": "codi-memory"})
 
         port = int(os.getenv("PORT", 8000))
         print(f"[codi-memory] Starting MCP server on {transport} transport, port {port}")
 
-        # SSE transport (DNS rebinding protection ya deshabilitada en FastMCP)
-        app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
+        # Rutas: MCP en /, recordatorios en /recordatorio, health en /health
+        app = Starlette(routes=[
+            Route("/recordatorio", recibir_recordatorio, methods=["POST"]),
+            Route("/health", health, methods=["GET"]),
+            Mount("/", app=mcp.sse_app())
+        ])
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
