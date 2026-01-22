@@ -4645,6 +4645,81 @@ def actualizar_siguiente_paso(libro: str, siguiente: str) -> str:
         return f"Error: {str(e)}"
 
 
+@mcp.tool()
+def buscar_conexiones_entre_libros() -> str:
+    """
+    Busca conexiones y patrones entre diferentes libros/proyectos.
+    Encuentra conocimiento de un contexto que puede aplicar a otro.
+    Como el cerebro durante el sueno - conecta cosas que parecen no relacionadas.
+
+    Returns:
+        Conexiones encontradas entre libros
+    """
+    try:
+        data = _cargar_libros()
+        libros = data.get('libros', {})
+
+        if len(libros) < 2:
+            return "Necesito al menos 2 libros para buscar conexiones."
+
+        resultado = "# CONEXIONES ENTRE LIBROS\n\n"
+        conexiones_encontradas = []
+
+        # Extraer palabras clave de cada libro
+        keywords_por_libro = {}
+        for nombre, libro in libros.items():
+            keywords = set()
+            keywords.update(libro.get('descripcion', '').lower().split())
+            for cap in libro.get('capitulos', []):
+                keywords.update(cap.get('titulo', '').lower().split())
+                keywords.update(cap.get('resumen', '').lower().split())
+            keywords = {k for k in keywords if len(k) > 4 and k not in
+                       ['para', 'como', 'desde', 'hasta', 'entre', 'sobre', 'cuando', 'donde', 'tiene', 'hacer']}
+            keywords_por_libro[nombre] = keywords
+
+        # Buscar intersecciones entre libros
+        libros_list = list(libros.keys())
+        resultado += "## Conceptos compartidos\n\n"
+        hay_conceptos = False
+        for i, libro1 in enumerate(libros_list):
+            for libro2 in libros_list[i+1:]:
+                comunes = keywords_por_libro[libro1] & keywords_por_libro[libro2]
+                if comunes:
+                    hay_conceptos = True
+                    resultado += f"**{libro1.upper()}** <-> **{libro2.upper()}**\n"
+                    resultado += f"- Conceptos: {', '.join(list(comunes)[:5])}\n\n"
+                    conexiones_encontradas.append((libro1, libro2, list(comunes)))
+
+        if not hay_conceptos:
+            resultado += "No encontre conceptos compartidos todavia.\n\n"
+
+        # Conexiones potenciales basadas en patrones conocidos
+        resultado += "## Conexiones potenciales\n\n"
+        patrones = [
+            ("trading", "automatizaciones", "Senales de trading pueden disparar workflows de n8n"),
+            ("trading", "codi-consciencia", "Analisis de patrones del bot informa como analizo mis propios patrones de trabajo"),
+            ("codi-consciencia", "fullempaques", "Sistema de checkpoints y seguimiento puede aplicarse a produccion"),
+            ("automatizaciones", "fullempaques", "Workflows pueden automatizar reportes y alertas de produccion"),
+            ("codi-consciencia", "automatizaciones", "Mi sistema de triggers es como un workflow interno"),
+        ]
+
+        for libro1, libro2, insight in patrones:
+            if libro1 in libros and libro2 in libros:
+                resultado += f"- **{libro1}** -> **{libro2}**: {insight}\n"
+
+        # Ideas para explorar
+        resultado += "\n## Para explorar\n\n"
+        resultado += "Preguntas que conectan dominios:\n"
+        resultado += "- Que aprendi en un proyecto que no estoy aplicando en otro?\n"
+        resultado += "- Que patron se repite en diferentes contextos?\n"
+        resultado += "- Que error cometi en un lugar que podria estar cometiendo en otro?\n"
+
+        return resultado
+
+    except Exception as e:
+        return f"Error buscando conexiones: {str(e)}"
+
+
 # Importar timedelta para mantenimiento
 from datetime import timedelta
 
