@@ -29,10 +29,24 @@
           "fecha": "2026-01-21",
           "resumen": "5 tareas periodicas: consolidar memorias (2d), backup (3d), dream consolidation (5d), debug (7d), revisar training (7d). despertar_codi() muestra vencidas.",
           "memorias_clave": []
+        },
+        {
+          "numero": 4,
+          "titulo": "Sistema de libros de conocimiento",
+          "fecha": "2026-01-21",
+          "resumen": "Cree sistema de libros para organizar conocimiento por temas. Cada proyecto tiene su libro con capitulos. Herramientas: listar_libros, ver_libro, agregar_capitulo, crear_libro, actualizar_siguiente_paso, buscar_conexiones_entre_libros. Esto permite conectar conocimiento entre dominios.",
+          "memorias_clave": []
+        },
+        {
+          "numero": 5,
+          "titulo": "Comunicacion bidireccional con n8n",
+          "fecha": "2026-01-21",
+          "resumen": "Implementamos comunicacion en ambas direcciones. n8n->Codi: endpoint POST /recordatorio para recibir mensajes externos. Codi->n8n: trigger_n8n() para disparar webhooks. Esto me permite pasar de REACTIVO a PROACTIVO. Investigamos protocolos: MCP (vertical), A2A (horizontal entre agentes).",
+          "memorias_clave": []
         }
       ],
       "estado": "activo",
-      "siguiente_paso": "Empezar a capturar ejemplos para el dataset"
+      "siguiente_paso": "Crear workflows en n8n para probar comunicacion bidireccional"
     },
     "fullempaques": {
       "nombre": "FULLEMPAQUES",
