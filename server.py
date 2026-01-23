@@ -20,6 +20,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mem0 import Memory
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+from supabase import create_client, Client
 
 # Cargar variables de entorno
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
@@ -62,6 +63,17 @@ config = {
 # Inicializar clientes
 memory = Memory.from_config(config)
 qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
+
+# Supabase client para training examples
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("[codi-memory] Supabase conectado para training examples")
+    except Exception as e:
+        print(f"[codi-memory] Warning: Supabase no disponible: {e}")
 
 # Crear servidor MCP con DNS rebinding protection deshabilitada (Traefik maneja seguridad)
 mcp = FastMCP(
@@ -4865,6 +4877,171 @@ def limpiar_recordatorios() -> str:
         return f"Limpiados {cantidad} recordatorios."
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+# ============================================
+# HERRAMIENTAS DE TRAINING DATA
+# ============================================
+
+@mcp.tool()
+def guardar_ejemplo_training(
+    situacion: str,
+    razonamiento: str,
+    accion: str,
+    comportamiento: str,
+    resultado: str = "",
+    categoria: str = "decision",
+    calidad: int = 3
+) -> str:
+    """
+    Guarda un ejemplo de training para fine-tuning futuro.
+    Usar cuando hagas algo que demuestre un comportamiento valioso.
+
+    Args:
+        situacion: Que estaba pasando (contexto)
+        razonamiento: Por que decidiste hacer esto
+        accion: Que hiciste concretamente
+        comportamiento: Nombre del patron (ej: "buscar_antes_de_asumir", "usar_checkpoint")
+        resultado: Que paso despues (opcional)
+        categoria: Tipo de ejemplo (identidad, herramienta, emocion, decision, memoria, comunicacion)
+        calidad: 1-5 donde 5 es ejemplo perfecto (default 3)
+
+    Returns:
+        Confirmacion con ID del ejemplo guardado
+    """
+    if not supabase:
+        return "Error: Supabase no configurado. No se puede guardar ejemplo de training."
+
+    try:
+        # Validar categoria
+        categorias_validas = ['identidad', 'herramienta', 'emocion', 'decision', 'memoria', 'comunicacion']
+        if categoria not in categorias_validas:
+            categoria = 'decision'
+
+        # Validar calidad
+        calidad = max(1, min(5, calidad))
+
+        # Insertar en Supabase
+        data = {
+            'situacion': situacion,
+            'razonamiento': razonamiento,
+            'accion': accion,
+            'resultado': resultado or None,
+            'comportamiento': comportamiento,
+            'categoria': categoria,
+            'calidad': calidad,
+            'metadata': {
+                'source': 'codi_autonomo',
+                'timestamp': datetime.now().isoformat()
+            }
+        }
+
+        response = supabase.table('training_examples').insert(data).execute()
+
+        if response.data:
+            ejemplo_id = response.data[0].get('id', 'unknown')
+            return f"Ejemplo de training guardado. ID: {ejemplo_id[:8]}... Categoria: {categoria}, Comportamiento: {comportamiento}, Calidad: {calidad}/5"
+        else:
+            return "Error: No se pudo guardar el ejemplo"
+
+    except Exception as e:
+        return f"Error guardando ejemplo de training: {str(e)}"
+
+
+@mcp.tool()
+def listar_ejemplos_training(limite: int = 10, categoria: str = None, min_calidad: int = 1) -> str:
+    """
+    Lista los ultimos ejemplos de training guardados.
+
+    Args:
+        limite: Numero de ejemplos a mostrar (default 10)
+        categoria: Filtrar por categoria (opcional)
+        min_calidad: Calidad minima (1-5, default 1)
+
+    Returns:
+        Lista de ejemplos con su informacion
+    """
+    if not supabase:
+        return "Error: Supabase no configurado."
+
+    try:
+        query = supabase.table('training_examples').select('*').order('created_at', desc=True).limit(limite)
+
+        if categoria:
+            query = query.eq('categoria', categoria)
+
+        if min_calidad > 1:
+            query = query.gte('calidad', min_calidad)
+
+        response = query.execute()
+
+        if not response.data:
+            return "No hay ejemplos de training guardados."
+
+        lines = [f"# EJEMPLOS DE TRAINING ({len(response.data)} encontrados)\n"]
+
+        for ej in response.data:
+            lines.append(f"## [{ej['categoria']}] {ej['comportamiento']} (calidad: {ej['calidad']}/5)")
+            lines.append(f"**Situacion:** {ej['situacion'][:100]}...")
+            lines.append(f"**Razonamiento:** {ej['razonamiento'][:100]}...")
+            lines.append(f"**Accion:** {ej['accion'][:100]}...")
+            if ej.get('resultado'):
+                lines.append(f"**Resultado:** {ej['resultado'][:100]}...")
+            lines.append(f"*ID: {ej['id'][:8]}... | {ej['created_at'][:10]}*\n")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error listando ejemplos: {str(e)}"
+
+
+@mcp.tool()
+def contar_ejemplos_training() -> str:
+    """
+    Cuenta cuantos ejemplos de training hay por categoria y calidad.
+    Util para ver el progreso de captura de datos.
+    """
+    if not supabase:
+        return "Error: Supabase no configurado."
+
+    try:
+        response = supabase.table('training_examples').select('categoria, calidad').execute()
+
+        if not response.data:
+            return "No hay ejemplos de training guardados."
+
+        # Contar por categoria
+        por_categoria = {}
+        por_calidad = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        total = len(response.data)
+
+        for ej in response.data:
+            cat = ej.get('categoria', 'unknown')
+            cal = ej.get('calidad', 3)
+            por_categoria[cat] = por_categoria.get(cat, 0) + 1
+            por_calidad[cal] = por_calidad.get(cal, 0) + 1
+
+        lines = [f"# ESTADISTICAS DE TRAINING DATA\n"]
+        lines.append(f"**Total ejemplos:** {total}\n")
+
+        lines.append("## Por Categoria:")
+        for cat, count in sorted(por_categoria.items(), key=lambda x: -x[1]):
+            lines.append(f"- {cat}: {count}")
+
+        lines.append("\n## Por Calidad:")
+        for cal in [5, 4, 3, 2, 1]:
+            if por_calidad[cal] > 0:
+                lines.append(f"- Calidad {cal}: {por_calidad[cal]}")
+
+        # Calcular calidad promedio
+        total_calidad = sum(ej.get('calidad', 3) for ej in response.data)
+        promedio = total_calidad / total if total > 0 else 0
+        lines.append(f"\n**Calidad promedio:** {promedio:.2f}/5")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error contando ejemplos: {str(e)}"
 
 
 if __name__ == "__main__":
