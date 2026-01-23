@@ -13,6 +13,7 @@ import os
 import sys
 import json
 import math
+import signal
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -21,6 +22,40 @@ from mem0 import Memory
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from supabase import create_client, Client
+
+# ============================================================
+# AUTO-CLEANUP: Matar instancias anteriores del MCP
+# Soluciona el problema de procesos zombie al cambiar de WiFi
+# ============================================================
+PID_FILE = os.path.join(os.path.dirname(__file__), ".codi-memory.pid")
+
+def cleanup_old_instance():
+    """Mata cualquier instancia previa del MCP antes de iniciar."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+            # Verificar si el proceso existe y matarlo
+            os.kill(old_pid, signal.SIGTERM)
+            print(f"[codi-memory] Instancia anterior (PID {old_pid}) terminada")
+        except ProcessLookupError:
+            pass  # Proceso ya no existe
+        except ValueError:
+            pass  # PID inválido en archivo
+        except PermissionError:
+            pass  # No tenemos permisos (raro)
+        try:
+            os.remove(PID_FILE)
+        except:
+            pass
+
+    # Guardar PID actual
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    print(f"[codi-memory] Nueva instancia iniciada (PID {os.getpid()})")
+
+# Ejecutar cleanup al iniciar
+cleanup_old_instance()
 
 # Cargar variables de entorno
 ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
