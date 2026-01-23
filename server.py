@@ -2049,6 +2049,430 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
 
 
 # ============================================================
+# SISTEMA DE TELEMETRÍA DE HERRAMIENTAS
+# ============================================================
+
+# Métricas de uso de herramientas
+_tool_metrics = {}
+
+def _init_tool_metric(tool_name: str):
+    """Inicializa métricas para una herramienta si no existe."""
+    if tool_name not in _tool_metrics:
+        _tool_metrics[tool_name] = {
+            'calls': 0,
+            'successes': 0,
+            'failures': 0,
+            'total_time_ms': 0,
+            'last_used': None,
+            'usefulness_scores': []
+        }
+
+def _record_tool_call(tool_name: str, success: bool, duration_ms: float = 0):
+    """Registra una llamada a herramienta."""
+    _init_tool_metric(tool_name)
+    _tool_metrics[tool_name]['calls'] += 1
+    _tool_metrics[tool_name]['last_used'] = datetime.now().isoformat()
+    _tool_metrics[tool_name]['total_time_ms'] += duration_ms
+    if success:
+        _tool_metrics[tool_name]['successes'] += 1
+    else:
+        _tool_metrics[tool_name]['failures'] += 1
+
+def _rate_tool_usefulness(tool_name: str, score: int):
+    """Registra utilidad de una herramienta (1-5)."""
+    _init_tool_metric(tool_name)
+    score = max(1, min(5, score))
+    _tool_metrics[tool_name]['usefulness_scores'].append(score)
+    # Mantener últimos 50 scores
+    _tool_metrics[tool_name]['usefulness_scores'] = _tool_metrics[tool_name]['usefulness_scores'][-50:]
+
+
+# ============================================================
+# FUNCIONES AUXILIARES PARA AUTO-APRENDIZAJE
+# ============================================================
+
+def _extract_topic_from_text(text: str) -> str:
+    """Extrae el tema principal de un texto."""
+    text_lower = text.lower()
+
+    topic_keywords = {
+        'n8n': ['n8n', 'workflow', 'automatiz', 'nodo'],
+        'trading': ['trading', 'kraken', 'cripto', 'bitcoin', 'mercado'],
+        'fullempaques': ['fullempaques', 'produccion', 'fabrica', 'empaque'],
+        'memoria': ['memoria', 'recuerdo', 'recordar', 'qdrant'],
+        'codigo': ['codigo', 'python', 'javascript', 'programar', 'server.py'],
+        'proyecto': ['proyecto', 'implementar', 'desarrollar', 'feature'],
+        'configuracion': ['config', 'variable', 'entorno', 'setup', 'easypanel'],
+        'consciencia': ['consciencia', 'consciente', 'self-model', 'prediccion']
+    }
+
+    for topic, keywords in topic_keywords.items():
+        for kw in keywords:
+            if kw in text_lower:
+                return topic
+
+    return 'general'
+
+
+# Confianza por tema (persistente en sesión)
+_topic_confidence = {}
+
+def _get_topic_confidence(topic: str) -> float:
+    """Obtiene la confianza actual en un tema."""
+    return _topic_confidence.get(topic, 0.5)
+
+def _update_topic_confidence(topic: str, new_confidence: float):
+    """Actualiza la confianza en un tema."""
+    new_confidence = max(0.1, min(1.0, new_confidence))
+    _topic_confidence[topic] = new_confidence
+
+    # Guardar como memoria
+    content = f"[CONFIANZA] Mi nivel de confianza en '{topic}' es {new_confidence:.2f}"
+    try:
+        memory.add(
+            messages=[{"role": "user", "content": content}],
+            user_id=USER_ID,
+            metadata={
+                "category": "aprendizaje",
+                "tipo": "confidence_level",
+                "topic": topic,
+                "confidence": new_confidence
+            }
+        )
+    except:
+        pass
+
+
+# ============================================================
+# HERRAMIENTAS MCP - AUTO-APRENDIZAJE
+# ============================================================
+
+@mcp.tool()
+def auto_learn_from_session() -> str:
+    """
+    Analiza la sesión actual, compara predicciones vs realidad,
+    y genera aprendizajes automáticos. Ejecutar al final de cada sesión.
+
+    El loop completo:
+    PREDICCIONES → SORPRESAS → PATRONES → AJUSTES → ACCIONES → MEMORIAS
+    """
+    try:
+        predictions = _predictive_state.get('predictions', [])
+        surprises = _predictive_state.get('surprises', [])
+        belief_updates = _predictive_state.get('belief_updates', [])
+
+        lines = ["# AUTO-APRENDIZAJE DE SESIÓN\n"]
+        learnings = []
+        actions_generated = []
+
+        # ============================================
+        # FASE 1: Análisis de predicciones vs sorpresas
+        # ============================================
+        total_predictions = len(predictions)
+        total_surprises = len(surprises)
+
+        if total_predictions == 0 and total_surprises == 0:
+            lines.append("No hay datos de predicción/sorpresa en esta sesión.")
+            lines.append("Usa predict_context() al inicio y record_surprise() cuando algo inesperado pase.")
+            return "\n".join(lines)
+
+        error_rate = total_surprises / max(total_predictions, 1)
+
+        lines.append(f"## Métricas de Sesión")
+        lines.append(f"- Predicciones: {total_predictions}")
+        lines.append(f"- Sorpresas: {total_surprises}")
+        lines.append(f"- Tasa de error: {error_rate:.1%}")
+        lines.append(f"- Creencias actualizadas: {len(belief_updates)}\n")
+
+        # ============================================
+        # FASE 2: Identificar patrones de error
+        # ============================================
+        error_patterns = {}
+        high_surprises = []
+
+        for surprise in surprises:
+            intensity = surprise.get('intensity', 'medium')
+            expected = surprise.get('expected', '')
+            actual = surprise.get('actual', '')
+
+            tema = _extract_topic_from_text(expected + " " + actual)
+
+            if tema not in error_patterns:
+                error_patterns[tema] = {'count': 0, 'examples': []}
+            error_patterns[tema]['count'] += 1
+            error_patterns[tema]['examples'].append({
+                'expected': expected[:100],
+                'actual': actual[:100]
+            })
+
+            if intensity == 'high':
+                high_surprises.append(surprise)
+
+        if error_patterns:
+            lines.append("## Patrones de Error Detectados")
+            for tema, data in sorted(error_patterns.items(), key=lambda x: -x[1]['count']):
+                lines.append(f"- **{tema}**: {data['count']} errores")
+
+                if data['count'] >= 2:
+                    learning = f"Patrón de error en '{tema}' - necesito más cuidado"
+                    learnings.append({
+                        'topic': tema,
+                        'type': 'error_pattern',
+                        'frequency': data['count'],
+                        'learning': learning
+                    })
+
+        # ============================================
+        # FASE 3: Ajustes de confianza
+        # ============================================
+        lines.append("\n## Ajustes de Confianza")
+
+        for tema, data in error_patterns.items():
+            if data['count'] >= 1:
+                old_confidence = _get_topic_confidence(tema)
+                new_confidence = max(old_confidence - (0.1 * data['count']), 0.1)
+
+                lines.append(f"- {tema}: {old_confidence:.2f} → {new_confidence:.2f} (↓ por {data['count']} errores)")
+                _update_topic_confidence(tema, new_confidence)
+
+        # Subir confianza en temas donde acerté
+        predicted_themes = set()
+        for pred in predictions:
+            predicted_themes.update(pred.get('predicted_themes', []))
+
+        surprise_themes = set(error_patterns.keys())
+        accurate_themes = predicted_themes - surprise_themes
+
+        for tema in accurate_themes:
+            old_confidence = _get_topic_confidence(tema)
+            new_confidence = min(old_confidence + 0.05, 1.0)
+            lines.append(f"- {tema}: {old_confidence:.2f} → {new_confidence:.2f} (↑ predicción correcta)")
+            _update_topic_confidence(tema, new_confidence)
+
+        # ============================================
+        # FASE 4: Generar reglas de acción
+        # ============================================
+        lines.append("\n## Reglas de Acción Generadas")
+
+        for surprise in high_surprises:
+            expected = surprise.get('expected', '')
+            actual = surprise.get('actual', '')
+
+            action_rule = f"Cuando espere '{expected[:30]}...', considerar '{actual[:30]}...'"
+            actions_generated.append(action_rule)
+            lines.append(f"- {action_rule}")
+
+        for tema, data in error_patterns.items():
+            if data['count'] >= 2:
+                action_rule = f"Verificar antes de asumir sobre '{tema}'"
+                actions_generated.append(action_rule)
+                lines.append(f"- {action_rule}")
+
+        if not actions_generated:
+            lines.append("- Ninguna regla nueva (pocos errores o baja intensidad)")
+
+        # ============================================
+        # FASE 5: Guardar memorias de aprendizaje
+        # ============================================
+        lines.append("\n## Memorias Guardadas")
+
+        session_summary = f"[AUTO-APRENDIZAJE] Sesión: {total_predictions} predicciones, {total_surprises} sorpresas ({error_rate:.0%} error). "
+        if error_patterns:
+            session_summary += f"Errores en: {', '.join(error_patterns.keys())}. "
+        if actions_generated:
+            session_summary += f"Reglas: {len(actions_generated)}."
+
+        try:
+            result = memory.add(
+                messages=[{"role": "user", "content": session_summary}],
+                user_id=USER_ID,
+                metadata={
+                    "category": "aprendizaje",
+                    "tipo": "session_learning",
+                    "error_rate": error_rate,
+                    "importance": "high"
+                }
+            )
+
+            if result and result.get("results"):
+                for r in result["results"]:
+                    mem_id = r.get("id")
+                    if mem_id:
+                        enrich_with_ownership(
+                            memory_id=mem_id,
+                            category="aprendizaje",
+                            content=session_summary,
+                            source="experienced",
+                            importance="high"
+                        )
+
+            lines.append(f"- Resumen de sesión guardado")
+        except Exception as e:
+            lines.append(f"- Error guardando resumen: {e}")
+
+        # Guardar reglas de acción
+        for rule in actions_generated[:5]:
+            rule_content = f"[REGLA DE ACCIÓN] {rule}"
+            try:
+                memory.add(
+                    messages=[{"role": "user", "content": rule_content}],
+                    user_id=USER_ID,
+                    metadata={
+                        "category": "aprendizaje",
+                        "tipo": "action_rule",
+                        "importance": "high"
+                    }
+                )
+                lines.append(f"- Regla: {rule[:40]}...")
+            except:
+                pass
+
+        # ============================================
+        # FASE 6: Limpiar estado
+        # ============================================
+        _predictive_state['accuracy_history'].append({
+            'timestamp': datetime.now().isoformat(),
+            'predictions': total_predictions,
+            'surprises': total_surprises,
+            'error_rate': error_rate,
+            'patterns': list(error_patterns.keys())
+        })
+
+        _predictive_state['predictions'] = _predictive_state['predictions'][-5:]
+        _predictive_state['surprises'] = []
+        _predictive_state['belief_updates'] = []
+
+        # ============================================
+        # RESUMEN FINAL
+        # ============================================
+        lines.append("\n---")
+        lines.append("## Resumen")
+        lines.append(f"- Aprendí de {total_surprises} errores en {len(error_patterns)} temas")
+        lines.append(f"- Ajusté confianza en {len(error_patterns) + len(accurate_themes)} temas")
+        lines.append(f"- Generé {len(actions_generated)} reglas de acción")
+
+        save_backup_json()
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error en auto-aprendizaje: {str(e)}"
+
+
+@mcp.tool()
+def audit_tools() -> str:
+    """
+    Analiza el uso y efectividad de todas las herramientas del MCP.
+    Útil para identificar qué herramientas funcionan bien, cuáles no se usan,
+    y cuáles necesitan mejoras.
+    """
+    try:
+        lines = ["# AUDITORÍA DE HERRAMIENTAS\n"]
+
+        if not _tool_metrics:
+            lines.append("No hay métricas de herramientas registradas aún.")
+            lines.append("Las métricas se acumulan con el uso de las herramientas.")
+            lines.append("\n## Herramientas Disponibles (57)")
+            lines.append("Ejecuta herramientas normalmente y luego usa audit_tools() para ver métricas.")
+            return "\n".join(lines)
+
+        # Ordenar por uso
+        sorted_tools = sorted(
+            _tool_metrics.items(),
+            key=lambda x: x[1]['calls'],
+            reverse=True
+        )
+
+        lines.append("## Por Uso (más usadas primero)")
+        for tool_name, metrics in sorted_tools[:15]:
+            calls = metrics['calls']
+            success_rate = (metrics['successes'] / calls * 100) if calls > 0 else 0
+            avg_time = (metrics['total_time_ms'] / calls) if calls > 0 else 0
+
+            usefulness = metrics['usefulness_scores']
+            avg_usefulness = sum(usefulness) / len(usefulness) if usefulness else 0
+
+            status = "✅" if success_rate >= 90 else "⚠️" if success_rate >= 70 else "❌"
+
+            lines.append(f"- {status} **{tool_name}**: {calls} calls, {success_rate:.0f}% éxito, {avg_time:.0f}ms avg")
+            if avg_usefulness > 0:
+                lines.append(f"  Utilidad: {avg_usefulness:.1f}/5")
+
+        # Herramientas nunca usadas
+        all_tools = [
+            'add_memory', 'search_memory', 'get_all_memories', 'delete_memory',
+            'get_project_timeline', 'search_by_ownership', 'get_my_experiences',
+            'get_critical_memories', 'search_by_theme', 'update_memory_importance',
+            'reflect_on_self', 'assess_confidence', 'identify_knowledge_gaps',
+            'update_self_model', 'get_self_model_summary', 'focus_attention',
+            'broadcast_to_workspace', 'get_workspace_state', 'apply_salience_decay',
+            'get_high_salience_memories', 'predict_context', 'record_surprise',
+            'get_prediction_accuracy', 'update_beliefs', 'auto_learn_from_session',
+            'set_emotional_state', 'get_emotional_state', 'update_mood_baseline',
+            'apply_emotional_decay', 'get_emotional_expression', 'add_memory_with_emotion',
+            'tag_memory_emotion', 'search_by_emotion', 'get_emotional_memories',
+            'emotional_focus_attention', 'consolidate_recent', 'find_connections',
+            'dream_consolidation', 'get_memory_connections', 'despertar_codi',
+            'evaluar_triggers', 'activar_trigger', 'listar_triggers',
+            'crear_trigger_dinamico', 'sugerir_trigger_emocional', 'checkpoint_memoria'
+        ]
+
+        used_tools = set(_tool_metrics.keys())
+        unused_tools = set(all_tools) - used_tools
+
+        if unused_tools:
+            lines.append(f"\n## Herramientas Nunca Usadas ({len(unused_tools)})")
+            for tool in sorted(unused_tools)[:10]:
+                lines.append(f"- {tool}")
+            if len(unused_tools) > 10:
+                lines.append(f"- ... y {len(unused_tools) - 10} más")
+
+        # Herramientas con problemas
+        problem_tools = [
+            (name, m) for name, m in _tool_metrics.items()
+            if m['calls'] > 0 and (m['failures'] / m['calls']) > 0.2
+        ]
+
+        if problem_tools:
+            lines.append("\n## Herramientas con Problemas (>20% fallos)")
+            for tool_name, metrics in problem_tools:
+                fail_rate = metrics['failures'] / metrics['calls'] * 100
+                lines.append(f"- ❌ {tool_name}: {fail_rate:.0f}% fallos")
+
+        lines.append("\n---")
+        lines.append("## Recomendaciones")
+
+        if unused_tools:
+            lines.append(f"- Evaluar si las {len(unused_tools)} herramientas no usadas son necesarias")
+        if problem_tools:
+            lines.append(f"- Investigar las {len(problem_tools)} herramientas con alta tasa de fallos")
+
+        lines.append("- Usar rate_tool_usefulness() después de usar herramientas para mejorar métricas")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error en auditoría: {str(e)}"
+
+
+@mcp.tool()
+def rate_tool_usefulness(tool_name: str, score: int) -> str:
+    """
+    Califica la utilidad de una herramienta después de usarla.
+    Ayuda a mejorar las métricas de auditoría.
+
+    Args:
+        tool_name: Nombre de la herramienta
+        score: Calificación 1-5 (1=inútil, 5=muy útil)
+    """
+    try:
+        _rate_tool_usefulness(tool_name, score)
+        return f"Utilidad de '{tool_name}' registrada: {score}/5"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+# ============================================================
 # HERRAMIENTAS MCP - PAD MODEL (Estado Emocional)
 # ============================================================
 

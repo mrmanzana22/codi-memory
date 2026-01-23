@@ -276,6 +276,90 @@
       },
       "respuesta_automatica": "Error de MCP detectado. Diagnostico: correr 'claude --debug'. Si es ENOTEMPTY, limpiar cache npx con: rm -rf ~/.npm/_npx/",
       "fecha_creacion": "2026-01-21"
+    },
+    "consciencia": {
+      "patterns": [
+        "consciencia",
+        "codi-consciencia",
+        "proyecto consciencia",
+        "mi evolucion",
+        "autonomia codi",
+        "entrenar codi",
+        "lora codi",
+        "training data"
+      ],
+      "action": "protocolo_consciencia",
+      "agent": "codi-trainer",
+      "evoca": [
+        "herramientas propias",
+        "mantenimiento memorias",
+        "captura ejemplos",
+        "dataset training"
+      ],
+      "contexto_a_buscar": "consciencia codi evolucion entrenamiento",
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-21T22:00:13.409345"
+    },
+    "inicio_trabajo_grande": {
+      "patterns": [
+        "voy a investigar",
+        "voy a implementar",
+        "voy a rediseñar",
+        "procede con todo",
+        "hazlo completo",
+        "empieza con esto",
+        "reestructurar",
+        "rediseñar desde cero"
+      ],
+      "action": "auto_check_protocolo",
+      "agent": null,
+      "evoca": [
+        "proyecto_nuevo",
+        "clasificar_tamano"
+      ],
+      "contexto_a_buscar": null,
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-22T14:01:02.400639",
+      "respuesta_automatica": "PAUSA - Antes de actuar: ¿Esto necesita protocolo de proyecto? Si es >1 hora de trabajo o involucra múltiples pasos, ACTIVAR protocolo primero."
+    },
+    "mejora_continua": {
+      "patterns": [
+        "esto funciono",
+        "esto no sirvio",
+        "mejor hacerlo asi",
+        "aprendi que",
+        "la proxima vez",
+        "deberiamos",
+        "el patron es",
+        "me di cuenta"
+      ],
+      "action": "capturar_aprendizaje",
+      "agent": null,
+      "evoca": [],
+      "contexto_a_buscar": "aprendizajes mejora continua",
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-23T09:22:04.516637",
+      "respuesta_automatica": "Detecté un aprendizaje. Lo guardo en memoria."
+    },
+    "n8n_aprendizaje": {
+      "patterns": [
+        "esto funciono en n8n",
+        "mejor practica n8n",
+        "patron n8n",
+        "truco n8n",
+        "tip n8n",
+        "nodo nuevo",
+        "workflow pattern",
+        "n8n hack",
+        "asi se hace en n8n"
+      ],
+      "action": "capturar_aprendizaje_n8n",
+      "agent": null,
+      "evoca": [],
+      "contexto_a_buscar": "n8n patrones mejores practicas",
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-23T09:26:14.546752",
+      "respuesta_automatica": "Aprendizaje n8n detectado. Guardando en memoria."
     }
   },
   "indice_rapido": {
@@ -290,14 +374,16 @@
     "N": [
       "n8n",
       "automatizacion",
-      "andre_neurociencia"
+      "andre_neurociencia",
+      "n8n_aprendizaje"
     ],
     "T": [
       "trading",
       "mi_entrenamiento"
     ],
     "I": [
-      "investigacion"
+      "investigacion",
+      "inicio_trabajo_grande"
     ],
     "A": [
       "arquitectura",
@@ -316,7 +402,11 @@
       "modo_kraken"
     ],
     "M": [
-      "modo_kraken"
+      "modo_kraken",
+      "mejora_continua"
+    ],
+    "C": [
+      "consciencia"
     ]
   }
 }
