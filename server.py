@@ -66,7 +66,12 @@ qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
 
 # Supabase client para training examples
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Soporta key completa o partida en dos (para Easypanel que trunca valores largos)
+SUPABASE_KEY = os.getenv("SUPABASE_KEY") or ""
+SUPABASE_KEY_1 = os.getenv("SUPABASE_KEY_1") or ""
+SUPABASE_KEY_2 = os.getenv("SUPABASE_KEY_2") or ""
+if SUPABASE_KEY_1 and SUPABASE_KEY_2:
+    SUPABASE_KEY = SUPABASE_KEY_1 + SUPABASE_KEY_2
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
