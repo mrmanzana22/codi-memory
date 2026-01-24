@@ -5604,26 +5604,14 @@ if __name__ == "__main__":
                     for m in pendientes_search["results"]:
                         pendientes.append(m.get('memory', ''))
 
-                # 4. Memorias recientes (últimas 24h)
-                from datetime import timedelta
-                ahora = datetime.now(timezone.utc)
-                hace_24h = (ahora - timedelta(hours=24)).isoformat()
-
-                recientes_points, _ = qdrant.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=Filter(must=[
-                        FieldCondition(key='created_at', range=Range(gte=hace_24h))
-                    ]),
-                    limit=10,
-                    with_payload=True
-                )
+                # 4. Memorias recientes (usando mem0 search general)
+                recientes_search = memory.search(query="reciente ultimo hoy ayer memoria checkpoint", user_id=USER_ID, limit=10)
                 recientes = []
-                if recientes_points:
-                    for p in recientes_points:
+                if recientes_search and recientes_search.get("results"):
+                    for m in recientes_search["results"]:
                         recientes.append({
-                            "memory": p.payload.get('data', ''),
-                            "category": p.payload.get('category', 'general'),
-                            "importance": p.payload.get('narrative_importance', 'medium')
+                            "memory": m.get('memory', ''),
+                            "score": m.get('score', 0)
                         })
 
                 return JSONResponse({
