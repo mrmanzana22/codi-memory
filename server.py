@@ -5563,11 +5563,155 @@ if __name__ == "__main__":
         async def health(request):
             return JSONResponse({"status": "ok", "service": "codi-memory"})
 
+        # ============================================================
+        # API HTTP PARA N8N Y CODI-LOOP
+        # Permite que n8n actúe como proxy de memoria
+        # ============================================================
+
+        async def api_context(request):
+            """GET /api/context - Retorna contexto de despertar para sesiones autónomas"""
+            try:
+                # Reusar lógica de despertar_codi pero retornar JSON
+                contexto = []
+
+                # 1. Memorias CRITICAS (identidad)
+                points, _ = qdrant.scroll(
+                    collection_name=COLLECTION_NAME,
+                    scroll_filter=Filter(must=[
+                        FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))
+                    ]),
+                    limit=5,
+                    with_payload=True
+                )
+                identidad = []
+                if points:
+                    for p in points:
+                        data = p.payload.get('data', '')
+                        source = p.payload.get('ownership_source', '')
+                        identidad.append({"memory": data, "source": source})
+
+                # 2. Proyecto actual
+                proyecto = memory.search(query="proyecto trabajando actual", user_id=USER_ID, limit=3)
+                proyectos = []
+                if proyecto and proyecto.get("results"):
+                    for m in proyecto["results"]:
+                        proyectos.append(m.get('memory', ''))
+
+                # 3. Pendientes
+                pendientes_search = memory.search(query="pendiente falta por hacer bloqueador", user_id=USER_ID, limit=3)
+                pendientes = []
+                if pendientes_search and pendientes_search.get("results"):
+                    for m in pendientes_search["results"]:
+                        pendientes.append(m.get('memory', ''))
+
+                # 4. Memorias recientes (últimas 24h)
+                from datetime import timedelta
+                ahora = datetime.now(timezone.utc)
+                hace_24h = (ahora - timedelta(hours=24)).isoformat()
+
+                recientes_points, _ = qdrant.scroll(
+                    collection_name=COLLECTION_NAME,
+                    scroll_filter=Filter(must=[
+                        FieldCondition(key='created_at', range=Range(gte=hace_24h))
+                    ]),
+                    limit=10,
+                    with_payload=True
+                )
+                recientes = []
+                if recientes_points:
+                    for p in recientes_points:
+                        recientes.append({
+                            "memory": p.payload.get('data', ''),
+                            "category": p.payload.get('category', 'general'),
+                            "importance": p.payload.get('narrative_importance', 'medium')
+                        })
+
+                return JSONResponse({
+                    "status": "ok",
+                    "context": {
+                        "identidad": identidad,
+                        "proyectos": proyectos,
+                        "pendientes": pendientes,
+                        "recientes": recientes
+                    },
+                    "timestamp": datetime.now().isoformat()
+                })
+
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def api_memory(request):
+            """POST /api/memory - Guarda una nueva memoria"""
+            try:
+                body = await request.json()
+                content = body.get('content', '')
+                category = body.get('category', 'general')
+                source = body.get('source', 'experienced')
+                importance = body.get('importance', 'medium')
+
+                if not content:
+                    return JSONResponse({"error": "content requerido"}, status_code=400)
+
+                # Guardar usando mem0
+                result = memory.add(
+                    content,
+                    user_id=USER_ID,
+                    metadata={
+                        'category': category,
+                        'ownership_source': source,
+                        'ownership_confidence': 1.0 if source == 'experienced' else 0.8,
+                        'narrative_importance': importance,
+                        'created_at': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+
+                return JSONResponse({
+                    "status": "ok",
+                    "message": f"Memoria guardada: {content[:50]}...",
+                    "result": result
+                })
+
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def api_search(request):
+            """GET /api/search?q=query&limit=5 - Busca memorias"""
+            try:
+                query = request.query_params.get('q', '')
+                limit = int(request.query_params.get('limit', 5))
+
+                if not query:
+                    return JSONResponse({"error": "q parameter requerido"}, status_code=400)
+
+                # Buscar usando mem0
+                results = memory.search(query=query, user_id=USER_ID, limit=limit)
+
+                memorias = []
+                if results and results.get("results"):
+                    for m in results["results"]:
+                        memorias.append({
+                            "memory": m.get('memory', ''),
+                            "score": m.get('score', 0)
+                        })
+
+                return JSONResponse({
+                    "status": "ok",
+                    "query": query,
+                    "results": memorias,
+                    "count": len(memorias)
+                })
+
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
         port = int(os.getenv("PORT", 8000))
         print(f"[codi-memory] Starting MCP server on {transport} transport, port {port}")
 
-        # Rutas: MCP en /, recordatorios en /recordatorio, health en /health
+        # Rutas: MCP en /, API HTTP para n8n, recordatorios, health
         app = Starlette(routes=[
+            Route("/api/context", api_context, methods=["GET"]),
+            Route("/api/memory", api_memory, methods=["POST"]),
+            Route("/api/search", api_search, methods=["GET"]),
             Route("/recordatorio", recibir_recordatorio, methods=["POST"]),
             Route("/health", health, methods=["GET"]),
             Mount("/", app=mcp.sse_app())
