@@ -1,0 +1,150 @@
+{
+  "metadata": {
+    "source": "Curso M5-95 Juan Ads",
+    "project": "Mr Manzana Marketing Control Center",
+    "created": "2026-01-31",
+    "purpose": "Conocimiento de marketing digital para aplicar a Mr Manzana"
+  },
+  "memories": [
+    {
+      "content": "METODO ESFERA: Sistema de marketing de 6 fases circulares con 24 campanas. Fases: 1-ENGANCHAR (10% presupuesto, reconocimiento+trafico), 2-SOLUCIONAR (75%, venta directa con 5 tipos de campana), 3-FIDELIZAR (13%, remarketing tibio/caliente/trifasico), 4-ENVOLVER (2%, bucle contenido 24h/7d/14d/30d), 5-REPRODUCIR (escalar), 6-AUTOMATIZAR (sistematizar). De cada 10 campanas, 8 no funcionan - es normal.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "critical",
+      "tags": ["marketing", "m5-95", "esfera", "campanas"]
+    },
+    {
+      "content": "3Bs DEL CONTENIDO (Cerebro Triuno): VIRALIDAD (cerebro reptil, urgencia, captar atencion), VALOR (cerebro limbico, emociones, educar/conectar), VENTA (neocortex, logica, convertir). Ejemplo Mr Manzana: Viral='Tu iPhone puede valer mas de lo que crees', Valor='5 tips para que tu Mac dure 10 anos', Venta='Reparacion certificada con garantia'.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "contenido", "3bs"]
+    },
+    {
+      "content": "GATILLOS MENTALES para marketing: 1-Prueba Social (reviews, testimonios), 2-Autoridad (certificaciones, experiencia), 3-Reciprocidad (contenido gratis, diagnostico gratis), 4-Escasez (ultimas unidades, stock limitado), 5-Urgencia (ofertas 24h, FOMO), 6-Aversion a la perdida (si no reparas ahora, perderas tus datos).",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "gatillos", "psicologia"]
+    },
+    {
+      "content": "COPYWRITING - 3 estructuras principales: AIDA (Atencion>Interes>Deseo>Accion) para anuncios generales, PAS (Problema>Agitacion>Solucion) para anuncios de venta, PASS (Problema>Agitacion>Solucion>Sentimiento) para storytelling.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "copywriting", "aida", "pas"]
+    },
+    {
+      "content": "METRICAS CLAVE de marketing: ROI=(Ingresos-Costos)/Costos (>1=rentable), ROAS=Ingresos/Gasto publicitario (>3=excelente), CTR=Clics/Impresiones (>1%=bueno), CPA=Gasto/Conversiones (menor que ticket), CPL=Gasto/Leads. Reglas semaforo: CTR<0.5%=cambiar hook, CPL>2x promedio=ajustar segmentacion, 7 dias sin conversiones=revisar funnel, CTR alto+0 ventas=trafico basura.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "critical",
+      "tags": ["marketing", "m5-95", "metricas", "kpis"]
+    },
+    {
+      "content": "ESCALAMIENTO de campanas: Vertical=aumentar presupuesto max 25% por dia, Horizontal=duplicar campanas exitosas con nuevos angulos, Surfing=ajustes cada 2 horas solo en campanas exitosas. Esperar 7 dias antes de optimizar para que el algoritmo aprenda.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "escalamiento"]
+    },
+    {
+      "content": "REMARKETING tipos: Frio (no conocen marca, introduccion), Tibio (interactuaron con videos/perfil, mostrar beneficios), Caliente (casi compraron/carrito, cierre urgente), Trifasico (combinacion de todos, para escalar). El 97% no compra a la primera - remarketing es critico.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "remarketing"]
+    },
+    {
+      "content": "PUBLICOS en Meta Ads: Advantage+ (IA de Meta encuentra publico, para campanas nuevas), Personalizado (basado en interacciones previas, para remarketing), Similar/Lookalike (1-10% similar a mejores clientes, para escalar), Detallada (18+ intereses indirectos, para nicho especifico).",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "medium",
+      "tags": ["marketing", "m5-95", "audiencias", "meta"]
+    },
+    {
+      "content": "BUCLE ENVOLVER (Fase 4 ESFERA): 24h=Quienes somos (presentar marca sin CTA), 7d=Problemas (agitar pain points), 14d=Soluciones (mostrar como resolvemos), 30-60d=Transformacion (resultado final emocional).",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "medium",
+      "tags": ["marketing", "m5-95", "envolver", "contenido"]
+    },
+    {
+      "content": "WHATSAPP MARKETING: Chatbot para filtrar (NO para vender), etiquetas para segmentar clientes, seguimiento 4h>24h>48h>72h, objetivo es VENTAS no interaccion. WhatsApp es donde cierra la venta.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "whatsapp"]
+    },
+    {
+      "content": "HERRAMIENTAS IA para marketing: ChatGPT (copys, guiones, investigacion), ElevenLabs (voces $5/mes), Heigen (avatares $29/mes), CapCut (edicion video gratis), Canva Pro ($13/mes), Meta AI (imagenes), Midjourney (imagenes avanzadas). GPTs de JuanAds: Video Script Generator, Copy Ads Generator, Generador de Imagenes.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "medium",
+      "tags": ["marketing", "m5-95", "herramientas", "ia"]
+    },
+    {
+      "content": "SESGOS COGNITIVOS (12): Confirmacion, Dunning-Kruger, Anclaje, Tercera persona, Pertenencia, Zeigarnik, Priming, Urgencia inducida, Escasez extrema, Hipocresia inducida, Superviviente, Halo. Usarlos eticamente en marketing.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "medium",
+      "tags": ["marketing", "m5-95", "sesgos", "psicologia"]
+    },
+    {
+      "content": "TECNICAS AVANZADAS M5-95: CPR Irreal (hackear algoritmo, nunca genera ventas pero mejora otras), CPR Real (campanas con potencial de conversion real), CPR Estable (duplicar mejor campana para mantener costos), Big Bid (enganar algoritmo simulando mayor inversion).",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "medium",
+      "tags": ["marketing", "m5-95", "tecnicas", "avanzado"]
+    },
+    {
+      "content": "PROYECTO MR MANZANA MARKETING: Empresa de venta y reparacion productos Apple. Angulos de venta: 1-Reparacion vs comprar nuevo (1/3 del precio), 2-Garantia y confianza (6 meses), 3-Urgencia (diagnostico gratis hoy), 4-Ecosistema (todo Apple en un lugar), 5-Lujo accesible (reacondicionado como nuevo).",
+      "category": "proyecto",
+      "source": "experienced",
+      "importance": "critical",
+      "tags": ["mr-manzana", "proyecto", "marketing"]
+    },
+    {
+      "content": "MARKETING CONTROL CENTER - Arquitectura: Stack=Next.js+NestJS+Postgres+Redis+n8n. 4 modulos principales: 1-Campanias (ESFERA Board), 2-Creativos (Matriz 256 combinaciones), 3-Leads & WhatsApp (pipeline kanban), 4-Metricas & Decisiones (semaforo automatico). MVP responde 3 preguntas: Que esta pasando? Que hago hoy? Que lanzo esta semana?",
+      "category": "proyecto",
+      "source": "experienced",
+      "importance": "critical",
+      "tags": ["mr-manzana", "control-center", "arquitectura"]
+    },
+    {
+      "content": "MATRIZ DE CREATIVOS 256 combinaciones: Formatos (Video|Imagen|Carrusel|Reel) x Angulos (Reparacion|Venta|Tips|Behind scenes) x Emociones (Urgencia|Confianza|Lujo|Ahorro) x CTAs (WhatsApp|Web|Perfil|DM) = 4x4x4x4 = 256 combinaciones posibles para nunca quedarse sin ideas.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "creativos", "matriz"]
+    },
+    {
+      "content": "SOP MARKETING DIARIO: MANANA (30min): 1-Revisar CPR campanas activas, 2-Pausar las 2x arriba del promedio, 3-Responder leads WhatsApp. TARDE (30min): 4-Crear 1 pieza contenido, 5-Programar publicacion, 6-Revisar comentarios/DMs. NOCHE (15min): 7-Captura metricas, 8-Anotar aprendizajes.",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "sop", "rutina"]
+    },
+    {
+      "content": "ERRORES A EVITAR en Meta Ads: 1-No probar suficientes creativos (minimo 5, ideal 10), 2-Optimizar antes de 7 dias, 3-Presupuesto muy bajo ($3/dia no sirve, minimo $5-10), 4-No hacer remarketing, 5-Ignorar WhatsApp, 6-Contenido solo de venta (necesitas viral+valor+venta).",
+      "category": "aprendizaje",
+      "source": "learned",
+      "importance": "high",
+      "tags": ["marketing", "m5-95", "errores"]
+    },
+    {
+      "content": "KPIs META MR MANZANA: Inicial vs 3 meses - CPL WhatsApp (<$3 USD > <$1.5), Tasa cierre (10% > 25%), Ticket promedio ($100 > $150), ROAS (2x > 4x), Contenido/semana (5 piezas > 10 piezas).",
+      "category": "proyecto",
+      "source": "experienced",
+      "importance": "high",
+      "tags": ["mr-manzana", "kpis", "metas"]
+    },
+    {
+      "content": "DECISION COLABORATIVA CON HARE: En el proyecto Mr Manzana Marketing, Hare enfatizo 'quiero que creemos ese sistema JUNTOS, no es solo que lo hagas'. El proyecto es colaborativo, no delegado. Siempre presentar plan antes de ejecutar.",
+      "category": "episodio",
+      "source": "experienced",
+      "importance": "critical",
+      "tags": ["hare", "colaboracion", "mr-manzana"]
+    }
+  ]
+}
