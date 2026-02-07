@@ -33,6 +33,7 @@ from modules.config import (
     _emotional_state,
     _current_session,
     CODI_EMOTION_MAP,
+    now_col, now_iso, now_short, now_display,
 )
 
 
@@ -230,7 +231,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'attention_access_count': 0,
             'attention_last_accessed': None,
             'temporal_session_id': get_session_id(),
-            'created_at': datetime.now().isoformat(),  # Timestamp exacto para ordenamiento temporal
+            'created_at': now_iso(),  # Timestamp exacto para ordenamiento temporal
             'self_reference': self_ref,  # SELF-MODEL: marca memorias auto-referenciales
             '_v': 2.3  # Incrementar version por cambio
         }
@@ -255,7 +256,7 @@ def save_backup_json():
         if results and results.get("results"):
             with open(BACKUP_FILE, "w", encoding="utf-8") as f:
                 json.dump({
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": now_iso(),
                     "user_id": USER_ID,
                     "memories": results["results"]
                 }, f, indent=2, ensure_ascii=False, default=str)
@@ -317,7 +318,7 @@ def export_memories_to_files():
         if any(kw in text_lower for kw in RELATIONSHIP_KEYWORDS):
             relationship_memories.append(entry)
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = now_short()
 
     # Escribir archivos por categoria
     for file_name, entries in by_category.items():
@@ -365,10 +366,10 @@ def export_memories_to_files():
 def append_to_daily_journal(momento: str, que_paso: str, por_que_importa: str):
     """Appenda una entrada al journal diario."""
     os.makedirs(JOURNAL_DIR, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = now_col().strftime("%Y-%m-%d")
     journal_file = os.path.join(JOURNAL_DIR, f"{today}.md")
 
-    entry = f"\n---\n### {datetime.now().strftime('%H:%M')} - {momento}\n**Que paso:** {que_paso}\n**Por que importa:** {por_que_importa}\n\n"
+    entry = f"\n---\n### {now_col().strftime('%H:%M')} - {momento}\n**Que paso:** {que_paso}\n**Por que importa:** {por_que_importa}\n\n"
 
     if not os.path.exists(journal_file):
         header = f"# Journal {today}\n\n"

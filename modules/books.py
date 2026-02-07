@@ -14,7 +14,7 @@ import os
 import json
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, now_col
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -227,7 +227,7 @@ def register_tools(mcp):
             libro_data = data['libros'][libro_key]
             capitulos = libro_data.get('capitulos', [])
             nuevo_numero = len(capitulos) + 1
-            fecha = datetime.now().strftime('%Y-%m-%d')
+            fecha = now_col().strftime('%Y-%m-%d')
 
             # Guardar en Qdrant como memoria con category=capitulo
             result = memory.add(
@@ -308,7 +308,7 @@ Guardado en: Qdrant + backup local
             if nombre_key in data.get('libros', {}):
                 return f"Ya existe un libro llamado '{nombre_key}'"
 
-            fecha_inicio = datetime.now().strftime('%Y-%m-%d')
+            fecha_inicio = now_col().strftime('%Y-%m-%d')
 
             # Guardar en Qdrant como memoria
             result = memory.add(

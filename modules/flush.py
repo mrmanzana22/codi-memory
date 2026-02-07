@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR, now_short, now_iso, now_col
 from modules.utils import enrich_with_ownership, save_backup_json, export_memories_to_files, append_to_daily_journal
 from modules.memory_smart import add_memory_smart
 
@@ -12,7 +12,7 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
     Los checkpoints siempre son source=experienced, importancia alta.
     """
     try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp = now_short()
         contenido = f"[{momento.upper()}] {que_paso} | Importancia: {por_que_importa} | Fecha: {timestamp}"
 
         # Determinar importancia y emocion segun momento
@@ -96,7 +96,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     if decisiones.strip():
         try:
             add_memory_smart(
-                content=f"[DECISIONES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {decisiones}",
+                content=f"[DECISIONES SESION {now_short()}] {decisiones}",
                 category="aprendizaje",
                 source="experienced",
                 importance="high"
@@ -109,7 +109,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     if errores.strip():
         try:
             add_memory_smart(
-                content=f"[ERRORES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {errores}",
+                content=f"[ERRORES SESION {now_short()}] {errores}",
                 category="aprendizaje",
                 source="learned",
                 importance="high"
@@ -122,7 +122,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     if aprendizajes.strip():
         try:
             add_memory_smart(
-                content=f"[APRENDIZAJES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {aprendizajes}",
+                content=f"[APRENDIZAJES SESION {now_short()}] {aprendizajes}",
                 category="aprendizaje",
                 source="learned",
                 importance="high"
@@ -161,7 +161,7 @@ def _export_memories_markdown() -> str:
         lines = [
             f"# Backup Memorias Codi",
             f"",
-            f"**Fecha:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            f"**Fecha:** {now_short()}",
             f"**Total:** {len(results['results'])} memorias",
             f"**Schema:** v2 con Ownership Tagging",
             f"",

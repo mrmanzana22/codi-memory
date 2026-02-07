@@ -8,8 +8,30 @@ import json
 import math
 import signal
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
+# ============================================================
+# TIMEZONE: Colombia (America/Bogota, UTC-5)
+# ============================================================
+TZ_COL = ZoneInfo("America/Bogota")
+
+def now_col() -> datetime:
+    """Retorna datetime actual en timezone Colombia."""
+    return datetime.now(TZ_COL)
+
+def now_iso() -> str:
+    """Retorna timestamp ISO 8601 con timezone Colombia."""
+    return now_col().isoformat()
+
+def now_display() -> str:
+    """Retorna timestamp legible con zona: '2026-02-07 07:30 COT'"""
+    return now_col().strftime("%Y-%m-%d %H:%M COT")
+
+def now_short() -> str:
+    """Retorna timestamp corto: '2026-02-07 07:30'"""
+    return now_col().strftime("%Y-%m-%d %H:%M")
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mem0 import Memory
@@ -200,7 +222,7 @@ mcp = FastMCP(
 # SHARED IN-MEMORY STATE
 # ============================================================
 
-_current_session = datetime.now().strftime("%Y-%m-%d") + "-001"
+_current_session = now_col().strftime("%Y-%m-%d") + "-001"
 
 # PAD MODEL - Estado Emocional (Pleasure-Arousal-Dominance)
 CODI_EMOTION_MAP = {

@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from modules.config import supabase, memory, USER_ID
+from modules.config import supabase, memory, USER_ID, now_iso
 
 
 def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: str) -> str:
@@ -47,7 +47,7 @@ def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: s
             "instruction": instruction,
             "input": contexto,
             "output": respuesta_ideal,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_iso(),
         }
 
         data["examples"].append(ejemplo)
@@ -120,7 +120,7 @@ def _guardar_ejemplo_training(
             'calidad': calidad,
             'metadata': {
                 'source': 'codi_autonomo',
-                'timestamp': datetime.now().isoformat()
+                'timestamp': now_iso()
             }
         }
 

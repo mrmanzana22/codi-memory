@@ -16,6 +16,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE,
     _emotional_state, _current_session, CODI_EMOTION_MAP,
+    now_col, now_iso, now_short,
 )
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
@@ -68,7 +69,7 @@ def update_workspace_spotlight(memories: list, theme: str = None):
     global _global_workspace
     _global_workspace['spotlight'] = memories[:5]
     _global_workspace['recent_context'] = (_global_workspace['recent_context'] + memories)[-10:]
-    _global_workspace['last_broadcast'] = datetime.now().isoformat()
+    _global_workspace['last_broadcast'] = now_iso()
     if theme:
         _global_workspace['workspace_theme'] = theme
 
@@ -92,7 +93,7 @@ def _init_tool_metric(tool_name: str):
 def _record_tool_call(tool_name: str, success: bool, duration_ms: float = 0):
     _init_tool_metric(tool_name)
     _tool_metrics[tool_name]['calls'] += 1
-    _tool_metrics[tool_name]['last_used'] = datetime.now().isoformat()
+    _tool_metrics[tool_name]['last_used'] = now_iso()
     _tool_metrics[tool_name]['total_time_ms'] += duration_ms
     if success:
         _tool_metrics[tool_name]['successes'] += 1
@@ -382,7 +383,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
         if aspect not in valid_aspects:
             aspect = 'general'
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp = now_short()
         content = f"[SELF-MODEL|{aspect.upper()}] {insight} | Registrado: {timestamp}"
 
         result = memory.add(
@@ -527,7 +528,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                         payload={
                             'attention_salience': new_salience,
                             'attention_access_count': access_count + 1,
-                            'attention_last_accessed': datetime.now().isoformat()
+                            'attention_last_accessed': now_iso()
                         },
                         points=[mem_id]
                     )
@@ -585,7 +586,7 @@ def broadcast_to_workspace(memory_id: str) -> str:
             payload={
                 'attention_salience': 1.0,
                 'attention_access_count': payload.get('attention_access_count', 0) + 5,
-                'attention_last_accessed': datetime.now().isoformat(),
+                'attention_last_accessed': now_iso(),
                 'was_broadcast': True
             },
             points=[full_id]
@@ -616,7 +617,7 @@ def broadcast_to_workspace(memory_id: str) -> str:
 
         workspace = get_workspace()
         workspace['spotlight'] = [{'id': full_id, 'content': main_content}]
-        workspace['last_broadcast'] = datetime.now().isoformat()
+        workspace['last_broadcast'] = now_iso()
 
         lines.append(f"\n**Conexiones activadas:** {connections_made}")
         lines.append("*El broadcast simula como una idea central activa memorias relacionadas*")
@@ -742,7 +743,7 @@ def predict_context(current_context: str) -> str:
         results = memory.search(query=current_context, user_id=USER_ID, limit=10)
         if not results or not results.get('results'):
             prediction = {
-                'context': current_context, 'timestamp': datetime.now().isoformat(),
+                'context': current_context, 'timestamp': now_iso(),
                 'predicted_memories': [], 'confidence': 0.0,
                 'reason': 'No hay memorias previas sobre este contexto'
             }
@@ -775,7 +776,7 @@ def predict_context(current_context: str) -> str:
         predicted_themes = list(set(predicted_themes))[:5]
 
         prediction = {
-            'context': current_context, 'timestamp': datetime.now().isoformat(),
+            'context': current_context, 'timestamp': now_iso(),
             'predicted_memories': [pm['id'] for pm in predicted_memories[:5]],
             'predicted_themes': predicted_themes, 'confidence': confidence, 'verified': False
         }
@@ -808,7 +809,7 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
         surprise_value = intensity_values.get(intensity, 0.6)
 
         surprise_record = {
-            'timestamp': datetime.now().isoformat(), 'expected': expected,
+            'timestamp': now_iso(), 'expected': expected,
             'actual': actual, 'intensity': intensity,
             'surprise_value': surprise_value, 'session': get_session_id()
         }
@@ -921,7 +922,7 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
     """
     try:
         belief_update = {
-            'timestamp': datetime.now().isoformat(), 'topic': topic,
+            'timestamp': now_iso(), 'topic': topic,
             'old_belief': old_belief, 'new_belief': new_belief, 'reason': reason
         }
         _predictive_state['belief_updates'].append(belief_update)
@@ -1075,7 +1076,7 @@ def auto_learn_from_session() -> str:
                 pass
 
         _predictive_state['accuracy_history'].append({
-            'timestamp': datetime.now().isoformat(), 'predictions': total_predictions,
+            'timestamp': now_iso(), 'predictions': total_predictions,
             'surprises': total_surprises, 'error_rate': error_rate, 'patterns': list(error_patterns.keys())
         })
         _predictive_state['predictions'] = _predictive_state['predictions'][-5:]
@@ -1165,7 +1166,7 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
 
         _emotional_state['current'] = {
             'pleasure': p, 'arousal': a, 'dominance': d,
-            'timestamp': datetime.now().isoformat(), 'trigger': trigger
+            'timestamp': now_iso(), 'trigger': trigger
         }
         emotion_label = _classify_emotion(p, a, d)
         emotion_text = _get_emotion_text(emotion_label)
@@ -1239,7 +1240,7 @@ def update_mood_baseline(pleasure: float = None, arousal: float = None, dominanc
             _emotional_state['mood']['arousal'] = _clamp_pad_value(arousal)
         if dominance is not None:
             _emotional_state['mood']['dominance'] = _clamp_pad_value(dominance)
-        _emotional_state['mood']['last_updated'] = datetime.now().isoformat()
+        _emotional_state['mood']['last_updated'] = now_iso()
 
         mood = _emotional_state['mood']
         mood_label = _classify_emotion(mood['pleasure'], mood['arousal'], mood['dominance'])
@@ -1274,7 +1275,7 @@ def apply_emotional_decay() -> str:
 
         _emotional_state['current'] = {
             'pleasure': new_p, 'arousal': new_a, 'dominance': new_d,
-            'timestamp': datetime.now().isoformat(), 'trigger': 'decay'
+            'timestamp': now_iso(), 'trigger': 'decay'
         }
         emotion_label = _classify_emotion(new_p, new_a, new_d)
         emotion_text = _get_emotion_text(emotion_label)
@@ -1589,7 +1590,7 @@ def emotional_focus_attention(context: str) -> str:
                         payload={
                             'attention_salience': new_salience,
                             'attention_access_count': payload.get('attention_access_count', 0) + 1,
-                            'attention_last_accessed': datetime.now().isoformat()
+                            'attention_last_accessed': now_iso()
                         },
                         points=[mem_id]
                     )
@@ -1688,7 +1689,7 @@ def consolidate_recent(hours: int = 24) -> str:
 
                 qdrant.set_payload(
                     collection_name=COLLECTION_NAME,
-                    payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': datetime.now().isoformat()},
+                    payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': now_iso()},
                     points=[mem_id]
                 )
                 consolidated_count += 1
@@ -1783,7 +1784,7 @@ def dream_consolidation() -> str:
     """
     try:
         lines = ["# DREAM CONSOLIDATION - Integracion Profunda\n"]
-        lines.append(f"*Iniciado: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n")
+        lines.append(f"*Iniciado: {now_short()}*\n")
 
         lines.append("## Fase 1: Consolidacion de memorias recientes")
         session_id = get_session_id()
@@ -1814,7 +1815,7 @@ def dream_consolidation() -> str:
                 if related_ids:
                     qdrant.set_payload(
                         collection_name=COLLECTION_NAME,
-                        payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': datetime.now().isoformat(), 'dream_consolidated': True},
+                        payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': now_iso(), 'dream_consolidated': True},
                         points=[point.id]
                     )
                     connections_made += 1
@@ -1916,7 +1917,7 @@ def despertar_codi() -> str:
 
         _emotional_state['current'] = {
             'pleasure': 0.3, 'arousal': 0.1, 'dominance': 0.4,
-            'timestamp': datetime.now().isoformat(), 'trigger': 'despertar'
+            'timestamp': now_iso(), 'trigger': 'despertar'
         }
         _emotional_state['history'] = []
 
@@ -2007,7 +2008,7 @@ def despertar_codi() -> str:
 
         # 9. Prediccion contextual
         try:
-            hora = datetime.now().hour
+            hora = now_col().hour
             if 6 <= hora < 12:
                 contexto_temporal = "manana - inicio de dia, planificacion, energia alta"
                 actividades_predichas = ["revisar pendientes", "planificar tareas", "trabajo profundo"]
@@ -2081,7 +2082,7 @@ def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> s
                 "category": "aprendizaje", "source": "experienced",
                 "importance": "high" if intensidad == "high" else "medium",
                 "themes": ["sorpresa", "prediction_error", "aprendizaje"],
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": now_iso(),
                 "emotional_state": {"pleasure": pleasure, "arousal": arousal, "dominance": 0.3}
             }
         )
@@ -2114,7 +2115,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
     """
     try:
         from datetime import timedelta
-        fecha_limite = datetime.now() - timedelta(days=dias)
+        fecha_limite = now_col() - timedelta(days=dias)
 
         all_mems = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)[0]
 
@@ -2181,7 +2182,7 @@ def generar_curiosidad() -> str:
         all_mems = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)[0]
 
         ultima_mencion = {}
-        ahora = datetime.now()
+        ahora = now_col()
 
         for point in all_mems:
             payload = point.payload or {}
@@ -2244,7 +2245,7 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
         url = f"{N8N_WEBHOOK_BASE}/{webhook_path}"
         payload = data or {}
         payload['_from'] = 'codi-memory'
-        payload['_timestamp'] = datetime.now().isoformat()
+        payload['_timestamp'] = now_iso()
         timeout = 30 if esperar_respuesta else 5
 
         response = http_requests.post(url, json=payload, timeout=timeout, headers={'Content-Type': 'application/json'})

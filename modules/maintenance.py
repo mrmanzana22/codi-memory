@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime, timedelta, timezone
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import save_backup_json, calculate_confidence_score
 
@@ -36,7 +36,7 @@ def _verificar_tareas_vencidas():
 
     data = _cargar_mantenimiento()
     vencidas = []
-    hoy = datetime.now()
+    hoy = now_col()
 
     for tarea in data.get('tareas', []):
         if not tarea.get('activo', True):
@@ -128,7 +128,7 @@ def _verificar_mantenimiento() -> str:
     """
     try:
         data = _cargar_mantenimiento()
-        hoy = datetime.now()
+        hoy = now_col()
 
         resultado = "# ESTADO DE MANTENIMIENTO\n\n"
 
@@ -186,7 +186,7 @@ def _marcar_mantenimiento_hecho(tarea_id: str, notas: str = "") -> str:
     """
     try:
         data = _cargar_mantenimiento()
-        hoy = datetime.now()
+        hoy = now_col()
 
         for tarea in data['tareas']:
             if tarea['id'] == tarea_id:
@@ -239,7 +239,7 @@ def _mantenimiento_memorias() -> str:
         resultado += "## 1. Consolidacion de memorias recientes\n"
         try:
             from datetime import timedelta as td
-            hace_48h = datetime.now() - td(hours=48)
+            hace_48h = now_col() - td(hours=48)
 
             # Buscar memorias recientes
             points, _ = qdrant.scroll(
@@ -368,7 +368,7 @@ def _mantenimiento_memorias() -> str:
         else:
             resultado += "- No se realizaron acciones\n"
 
-        resultado += f"\n*Mantenimiento completado: {datetime.now().strftime('%Y-%m-%d %H:%M')}*"
+        resultado += f"\n*Mantenimiento completado: {now_short()}*"
 
         return resultado
 

@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
 
 # ============================================================
 # MODULE-LEVEL STATE AND HELPERS
@@ -227,7 +227,7 @@ def register_tools(mcp):
                 "evoca": evoca_list,
                 "contexto_a_buscar": contexto_a_buscar,
                 "creado_por": "aprendizaje_emocional",
-                "fecha_creacion": datetime.now().isoformat()
+                "fecha_creacion": now_iso()
             }
 
             if respuesta_automatica:

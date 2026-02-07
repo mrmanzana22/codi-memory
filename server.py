@@ -22,10 +22,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
-from datetime import datetime, timezone
-
 # Import MCP server and shared config from modules
-from modules.config import mcp, memory, qdrant, USER_ID, COLLECTION_NAME
+from modules.config import mcp, memory, qdrant, USER_ID, COLLECTION_NAME, now_iso
 
 # Import all modules with register_tools
 from modules import triggers
@@ -86,7 +84,7 @@ if __name__ == "__main__":
                     "mensaje": mensaje,
                     "prioridad": prioridad,
                     "origen": origen,
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": now_iso()
                 })
                 _guardar_recordatorios(data)
 
@@ -171,7 +169,7 @@ if __name__ == "__main__":
                         "pendientes": pendientes,
                         "recientes": recientes
                     },
-                    "timestamp": datetime.now().isoformat()
+                    "timestamp": now_iso()
                 })
 
             except Exception as e:
@@ -197,7 +195,7 @@ if __name__ == "__main__":
                         'ownership_source': source,
                         'ownership_confidence': 1.0 if source == 'experienced' else 0.8,
                         'narrative_importance': importance,
-                        'created_at': datetime.now(timezone.utc).isoformat()
+                        'created_at': now_iso()
                     }
                 )
 
