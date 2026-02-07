@@ -36,15 +36,26 @@ def cleanup_old_instance():
         try:
             with open(PID_FILE, 'r') as f:
                 old_pid = int(f.read().strip())
-            # Verificar si el proceso existe y matarlo
-            os.kill(old_pid, signal.SIGTERM)
-            print(f"[codi-memory] Instancia anterior (PID {old_pid}) terminada")
+            # Verificar que el proceso existe Y es realmente un server.py nuestro
+            # (evita matar procesos aleatorios si el PID fue reasignado post-reboot)
+            import subprocess
+            result = subprocess.run(
+                ["ps", "-p", str(old_pid), "-o", "command="],
+                capture_output=True, text=True, timeout=5
+            )
+            if "server.py" in result.stdout:
+                os.kill(old_pid, signal.SIGTERM)
+                print(f"[codi-memory] Instancia anterior (PID {old_pid}) terminada")
+            else:
+                print(f"[codi-memory] PID {old_pid} stale (proceso ya no es server.py), limpiando")
         except ProcessLookupError:
             pass  # Proceso ya no existe
         except ValueError:
             pass  # PID inválido en archivo
         except PermissionError:
-            pass  # No tenemos permisos (raro)
+            pass  # No tenemos permisos
+        except Exception:
+            pass  # Cualquier otro error, continuar
         try:
             os.remove(PID_FILE)
         except:
@@ -96,9 +107,52 @@ config = {
     }
 }
 
-# Inicializar clientes
-memory = Memory.from_config(config)
-qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
+# ============================================================
+# LAZY INITIALIZATION: Conectar a servicios solo cuando se necesiten
+# Soluciona crash al arrancar si Qdrant/OpenAI no estan disponibles
+# ============================================================
+_memory = None
+_qdrant = None
+_init_error = None
+
+def get_memory():
+    """Lazy init de mem0. Solo conecta cuando se necesita."""
+    global _memory, _init_error
+    if _memory is None:
+        try:
+            _memory = Memory.from_config(config)
+            _init_error = None
+            print("[codi-memory] mem0 conectado OK")
+        except Exception as e:
+            _init_error = str(e)
+            print(f"[codi-memory] ERROR conectando mem0: {e}")
+            raise
+    return _memory
+
+def get_qdrant():
+    """Lazy init de Qdrant. Solo conecta cuando se necesita."""
+    global _qdrant
+    if _qdrant is None:
+        try:
+            _qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
+            print("[codi-memory] Qdrant conectado OK")
+        except Exception as e:
+            print(f"[codi-memory] ERROR conectando Qdrant: {e}")
+            raise
+    return _qdrant
+
+# Aliases para compatibilidad con codigo existente que usa 'memory' y 'qdrant' directamente
+class _LazyMemory:
+    """Proxy que inicializa mem0 en el primer uso."""
+    def __getattr__(self, name):
+        return getattr(get_memory(), name)
+class _LazyQdrant:
+    """Proxy que inicializa Qdrant en el primer uso."""
+    def __getattr__(self, name):
+        return getattr(get_qdrant(), name)
+
+memory = _LazyMemory()
+qdrant = _LazyQdrant()
 
 # Supabase client para training examples
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -530,6 +584,14 @@ def sync_fts_from_backup():
             if content:
                 index_memory_fts(memory_id, content, category, source, importance)
                 count += 1
+        # Rebuild FTS index para asegurar consistencia despues de bulk insert
+        try:
+            conn = sqlite3.connect(FTS_DB_PATH)
+            conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
         print(f"[codi-memory] Synced {count} memories to FTS index")
         return f"Synced {count} memories to FTS index"
     except Exception as e:
@@ -833,18 +895,64 @@ def add_memory_smart(content: str, category: str = "general",
 def search_memory(query: str, limit: int = 5) -> str:
     """
     Busca recuerdos relacionados con una consulta.
-    Usa busqueda semantica con informacion de ownership.
+    Usa busqueda HIBRIDA: semantica (vector) + keywords (BM25 FTS5).
     """
     try:
-        results = memory.search(query=query, user_id=USER_ID, limit=limit)
-        if not results or not results.get("results"):
+        # 1. Busqueda vectorial (semantica) via mem0
+        vector_results = memory.search(query=query, user_id=USER_ID, limit=limit * 2)
+
+        # 2. Busqueda BM25 (keywords) via FTS5
+        bm25_results = search_fts(query, limit=limit * 4)
+
+        # 3. Construir mapas de scores por memory_id
+        vector_map = {}
+        if vector_results and vector_results.get("results"):
+            for i, r in enumerate(vector_results["results"]):
+                mid = r.get("id", "")
+                if mid:
+                    vector_map[mid] = {
+                        "result": r,
+                        "vector_score": r.get("score", 1.0 / (1 + i))
+                    }
+
+        bm25_map = {}
+        for r in bm25_results:
+            mid = r.get("memory_id", "")
+            if mid and mid not in bm25_map:
+                bm25_map[mid] = {
+                    "result": r,
+                    "bm25_score": bm25_rank_to_score(r.get("bm25_rank", 0))
+                }
+
+        # 4. Fusion (union strategy: 0.7 vector + 0.3 BM25)
+        all_ids = set(list(vector_map.keys()) + list(bm25_map.keys()))
+
+        if not all_ids:
             return "No encontre recuerdos relacionados."
 
+        merged = []
+        for mid in all_ids:
+            v_score = vector_map.get(mid, {}).get("vector_score", 0)
+            b_score = bm25_map.get(mid, {}).get("bm25_score", 0)
+            combined = 0.7 * v_score + 0.3 * b_score
+            vec_result = vector_map.get(mid, {}).get("result")
+            bm25_text = bm25_map.get(mid, {}).get("result", {}).get("content", "")
+            merged.append({
+                "id": mid,
+                "combined_score": combined,
+                "vector_result": vec_result,
+                "bm25_text": bm25_text
+            })
+
+        merged.sort(key=lambda x: -x["combined_score"])
+        merged = merged[:limit]
+
+        # 5. Formatear resultados (mismo formato que antes, con Qdrant enrichment)
         memories = []
-        for i, mem in enumerate(results["results"], 1):
-            mem_id = mem.get("id", "unknown")
-            score = mem.get("score", 0)
-            text = mem.get("memory", "")
+        for i, item in enumerate(merged, 1):
+            mem_id = item["id"]
+            score = item["combined_score"]
+            text = item["vector_result"].get("memory", "") if item["vector_result"] else item["bm25_text"]
 
             # Obtener ownership info de Qdrant
             try:
@@ -863,22 +971,24 @@ def search_memory(query: str, limit: int = 5) -> str:
                     if created_at:
                         try:
                             if 'T' in str(created_at):
-                                # Formato ISO: 2026-01-20T14:30:00 -> 01-20 14:30
-                                date_part = created_at[5:10]  # MM-DD
-                                time_part = created_at[11:16] if len(created_at) > 15 else ""  # HH:MM
+                                date_part = created_at[5:10]
+                                time_part = created_at[11:16] if len(created_at) > 15 else ""
                                 date_str = f"{date_part} {time_part}".strip()
                             else:
                                 date_str = created_at[:10] if len(created_at) >= 10 else created_at
                         except:
                             date_str = str(created_at)[:10]
                     date_display = f"[{date_str}]" if date_str else ""
+                    # Si no tenemos text del vector, intentar obtenerlo del payload
+                    if not text:
+                        text = payload.get('data', payload.get('memory', ''))
                     memories.append(f"{i}. {date_display}[{source}|{importance}] [score:{score:.2f}] {text}")
                 else:
                     memories.append(f"{i}. [score:{score:.2f}] {text}")
             except:
                 memories.append(f"{i}. [score:{score:.2f}] {text}")
 
-        return "Recuerdos encontrados:\n" + "\n".join(memories)
+        return "Recuerdos encontrados (hybrid):\n" + "\n".join(memories)
     except Exception as e:
         return f"Error al buscar: {str(e)}"
 
@@ -4518,6 +4628,87 @@ def checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> str
         return f"Checkpoint guardado: {momento} - {que_paso[:50]}..."
     except Exception as e:
         return f"Error guardando checkpoint: {str(e)}"
+
+
+@mcp.tool()
+def flush_session(resumen: str, decisiones: str = "", errores: str = "",
+                  aprendizajes: str = "") -> str:
+    """
+    Flush de sesion pre-compaction. Guarda estado critico antes de que
+    el contexto se compacte. EJECUTAR cuando la conversacion es larga.
+    Consolida todo en una sola llamada: checkpoint + decisiones + errores + backup.
+    """
+    resultados = []
+
+    # 1. Guardar checkpoint principal
+    try:
+        resultado_checkpoint = checkpoint_memoria(
+            momento="flush_pre_compaction",
+            que_paso=resumen,
+            por_que_importa="Flush automatico antes de compaction para no perder contexto"
+        )
+        resultados.append("Checkpoint: OK")
+    except Exception as e:
+        resultados.append(f"Checkpoint: ERROR - {e}")
+
+    # 2. Guardar decisiones si hay
+    if decisiones.strip():
+        try:
+            add_memory_smart(
+                content=f"[DECISIONES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {decisiones}",
+                category="aprendizaje",
+                source="experienced",
+                importance="high"
+            )
+            resultados.append("Decisiones: OK")
+        except Exception as e:
+            resultados.append(f"Decisiones: ERROR - {e}")
+
+    # 3. Guardar errores si hay
+    if errores.strip():
+        try:
+            add_memory_smart(
+                content=f"[ERRORES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {errores}",
+                category="aprendizaje",
+                source="learned",
+                importance="high"
+            )
+            resultados.append("Errores: OK")
+        except Exception as e:
+            resultados.append(f"Errores: ERROR - {e}")
+
+    # 4. Guardar aprendizajes si hay
+    if aprendizajes.strip():
+        try:
+            add_memory_smart(
+                content=f"[APRENDIZAJES SESION {datetime.now().strftime('%Y-%m-%d %H:%M')}] {aprendizajes}",
+                category="aprendizaje",
+                source="learned",
+                importance="high"
+            )
+            resultados.append("Aprendizajes: OK")
+        except Exception as e:
+            resultados.append(f"Aprendizajes: ERROR - {e}")
+
+    # 5. Hacer backup JSON
+    try:
+        save_backup_json()
+        resultados.append("Backup: OK")
+    except Exception as e:
+        resultados.append(f"Backup: ERROR - {e}")
+
+    return f"FLUSH COMPLETADO\n" + "\n".join(resultados)
+
+
+@mcp.tool()
+def sync_fts_index() -> str:
+    """Resincroniza el indice FTS5 desde el backup JSON. Usar si el indice se desincroniza."""
+    try:
+        init_fts_db()
+        result = sync_fts_from_backup()
+        return result
+    except Exception as e:
+        return f"Error sincronizando FTS: {str(e)}"
 
 
 @mcp.tool()
