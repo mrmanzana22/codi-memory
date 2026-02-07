@@ -360,6 +360,24 @@
       "creado_por": "aprendizaje_emocional",
       "fecha_creacion": "2026-01-23T09:26:14.546752",
       "respuesta_automatica": "Aprendizaje n8n detectado. Guardando en memoria."
+    },
+    "n8n_workflow_update": {
+      "patterns": [
+        "actualizar workflow",
+        "update workflow",
+        "modificar workflow",
+        "n8n_update",
+        "update_partial",
+        "cambiar nodo",
+        "editar nodo"
+      ],
+      "action": "recordar_mejores_practicas_n8n",
+      "agent": null,
+      "evoca": [],
+      "contexto_a_buscar": "n8n MCP update_partial_workflow sintaxis",
+      "creado_por": "aprendizaje_emocional",
+      "fecha_creacion": "2026-01-25T09:20:05.852864",
+      "respuesta_automatica": "ANTES de actualizar workflows en n8n: 1) El parámetro es \"updates\" NO \"properties\", 2) Formato: {\"type\": \"updateNode\", \"nodeName\": \"X\", \"updates\": {\"parameters\": {...}}}, 3) Usar context7 si necesito documentación actualizada."
     }
   },
   "indice_rapido": {
@@ -375,7 +393,8 @@
       "n8n",
       "automatizacion",
       "andre_neurociencia",
-      "n8n_aprendizaje"
+      "n8n_aprendizaje",
+      "n8n_workflow_update"
     ],
     "T": [
       "trading",

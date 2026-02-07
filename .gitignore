@@ -12,3 +12,16 @@ __pycache__/
 # Data
 *.db
 data/
+
+# Runtime
+.codi-memory.pid
+qdrant_data/
+
+# Backups de server.py (ya estan en git history)
+server.py.backup*
+
+# Memories backup (contiene datos sensibles del usuario)
+memories_backup.json
+
+# Claude Code server (subproyecto separado)
+claude-code-server/

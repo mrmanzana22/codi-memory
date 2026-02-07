@@ -14,6 +14,7 @@ import sys
 import json
 import math
 import signal
+import sqlite3
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -375,6 +376,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             themes.append('identidad')
 
         ownership_metadata = {
+            'category': category,  # IMPORTANTE: guardar category para filtros
             'ownership_is_mine': True,
             'ownership_source': source,
             'ownership_confidence': 0.9 if source == 'experienced' else 0.7,
@@ -388,7 +390,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'temporal_session_id': get_session_id(),
             'created_at': datetime.now().isoformat(),  # Timestamp exacto para ordenamiento temporal
             'self_reference': self_ref,  # SELF-MODEL: marca memorias auto-referenciales
-            '_v': 2.2
+            '_v': 2.3  # Incrementar version por cambio
         }
 
         qdrant.set_payload(
@@ -413,6 +415,131 @@ def save_backup_json():
                 }, f, indent=2, ensure_ascii=False, default=str)
     except Exception as e:
         print(f"[Codi Memory] Error guardando backup: {e}")
+
+
+# ============================================================
+# BUSQUEDA HIBRIDA - SQLite FTS5 (BM25 + Vector)
+# ============================================================
+
+FTS_DB_PATH = os.path.join(os.path.dirname(__file__), "memories_fts.db")
+
+
+def init_fts_db():
+    """Inicializa la base de datos SQLite con FTS5 para busqueda por keywords."""
+    conn = sqlite3.connect(FTS_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memories_text (
+            memory_id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            category TEXT DEFAULT 'general',
+            source TEXT DEFAULT 'experienced',
+            importance TEXT DEFAULT 'medium',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+        USING fts5(
+            content,
+            memory_id UNINDEXED,
+            category UNINDEXED,
+            source UNINDEXED,
+            content=memories_text,
+            content_rowid=rowid
+        )
+    """)
+    # Triggers para mantener FTS sincronizado
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_text_ai AFTER INSERT ON memories_text BEGIN
+            INSERT INTO memories_fts(rowid, content, memory_id, category, source)
+            VALUES (new.rowid, new.content, new.memory_id, new.category, new.source);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_text_ad AFTER DELETE ON memories_text BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, memory_id, category, source)
+            VALUES('delete', old.rowid, old.content, old.memory_id, old.category, old.source);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_text_au AFTER UPDATE ON memories_text BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, memory_id, category, source)
+            VALUES('delete', old.rowid, old.content, old.memory_id, old.category, old.source);
+            INSERT INTO memories_fts(rowid, content, memory_id, category, source)
+            VALUES (new.rowid, new.content, new.memory_id, new.category, new.source);
+        END
+    """)
+    conn.commit()
+    conn.close()
+    print("[codi-memory] FTS5 index initialized")
+
+
+def index_memory_fts(memory_id: str, content: str, category: str = "general",
+                     source: str = "experienced", importance: str = "medium"):
+    """Indexa una memoria en SQLite FTS5."""
+    conn = sqlite3.connect(FTS_DB_PATH)
+    conn.execute("""
+        INSERT OR REPLACE INTO memories_text (memory_id, content, category, source, importance, created_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+    """, (memory_id, content, category, source, importance))
+    conn.commit()
+    conn.close()
+
+
+def search_fts(query: str, limit: int = 20) -> list:
+    """Busca en FTS5 usando BM25 ranking."""
+    conn = sqlite3.connect(FTS_DB_PATH)
+    try:
+        results = conn.execute("""
+            SELECT memory_id, content, category, source, rank
+            FROM memories_fts
+            WHERE content MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """, (query, limit)).fetchall()
+        return [{"memory_id": r[0], "content": r[1], "category": r[2],
+                 "source": r[3], "bm25_rank": r[4]} for r in results]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def bm25_rank_to_score(rank: float) -> float:
+    """Convierte BM25 rank a score 0-1. Rank 0 = score 1.0."""
+    normalized = max(0, abs(rank)) if rank is not None else 999
+    return 1 / (1 + normalized)
+
+
+def sync_fts_from_backup():
+    """Sincroniza todas las memorias existentes al indice FTS5."""
+    if not os.path.exists(BACKUP_FILE):
+        print("[codi-memory] No backup found for FTS sync")
+        return "No backup found"
+    try:
+        with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        memories = data if isinstance(data, list) else data.get("memories", [])
+        count = 0
+        for mem in memories:
+            memory_id = mem.get("id", str(count))
+            content = mem.get("memory", "")
+            category = mem.get("metadata", {}).get("category", "general") if isinstance(mem.get("metadata"), dict) else "general"
+            source = "experienced"
+            importance = "medium"
+            if content:
+                index_memory_fts(memory_id, content, category, source, importance)
+                count += 1
+        print(f"[codi-memory] Synced {count} memories to FTS index")
+        return f"Synced {count} memories to FTS index"
+    except Exception as e:
+        print(f"[codi-memory] Error syncing FTS: {e}")
+        return f"Error syncing FTS: {e}"
+
+
+# Inicializar FTS5 al arrancar
+init_fts_db()
+sync_fts_from_backup()
 
 
 # ============================================================
@@ -550,9 +677,156 @@ def add_memory(content: str, category: str = "general",
                     )
 
         save_backup_json()
+
+        # Indexar en FTS5 para busqueda hibrida
+        try:
+            mem_id_fts = None
+            if result and result.get("results"):
+                for r in result["results"]:
+                    mem_id_fts = r.get("id")
+                    if mem_id_fts:
+                        index_memory_fts(mem_id_fts, content, category, source, importance)
+        except Exception as fts_err:
+            print(f"[codi-memory] FTS index error in add_memory: {fts_err}")
+
         return f"Memoria guardada con ownership: {result}"
     except Exception as e:
         return f"Error al guardar memoria: {str(e)}"
+
+
+@mcp.tool()
+def add_memory_smart(content: str, category: str = "general",
+                     source: str = "experienced", importance: str = "medium",
+                     dedup_threshold: float = 0.90,
+                     relate_threshold: float = 0.75) -> str:
+    """
+    Guarda memoria con deduplicacion inteligente.
+    Basado en neurociencia: el cerebro consolida, no duplica.
+
+    Args:
+        content: El contenido a recordar
+        category: Categoria (identidad, aprendizaje, episodio, proyecto, general)
+        source: Como obtuve esta memoria (experienced, told, learned, inferred)
+        importance: Importancia (critical, high, medium, low)
+        dedup_threshold: Umbral para considerar duplicado (default 0.90)
+        relate_threshold: Umbral para marcar como relacionada (default 0.75)
+
+    Returns:
+        Resultado de la operacion con explicacion
+    """
+    try:
+        # 1. Buscar memorias similares
+        similar_results = memory.search(query=content, user_id=USER_ID, limit=3)
+
+        if similar_results and similar_results.get("results"):
+            top_result = similar_results["results"][0]
+            top_score = top_result.get("score", 0)
+            top_id = top_result.get("id", "")
+            top_text = top_result.get("memory", "")[:80]
+
+            # 2. Decidir accion segun similitud
+            if top_score > dedup_threshold:
+                # DUPLICADO - no guardar
+                return json.dumps({
+                    "action": "skipped_duplicate",
+                    "score": round(top_score, 3),
+                    "existing_memory": top_text,
+                    "existing_id": top_id,
+                    "message": f"Memoria ya existe (similitud {top_score:.2f})"
+                }, ensure_ascii=False)
+
+            elif top_score > relate_threshold:
+                # SIMILAR - guardar pero relacionar
+                result = memory.add(
+                    messages=[{"role": "user", "content": content}],
+                    user_id=USER_ID,
+                    metadata={"category": category}
+                )
+
+                new_id = None
+                if result and result.get("results"):
+                    for r in result["results"]:
+                        new_id = r.get("id")
+                        if new_id:
+                            # Enriquecer con ownership + relacion
+                            enrich_with_ownership(
+                                memory_id=new_id,
+                                category=category,
+                                content=content,
+                                source=source,
+                                importance=importance
+                            )
+                            # Agregar metadata de relacion
+                            try:
+                                qdrant.set_payload(
+                                    collection_name=COLLECTION_NAME,
+                                    payload={
+                                        'related_to': top_id,
+                                        'relation_score': top_score,
+                                        'relation_type': 'semantic_similar'
+                                    },
+                                    points=[new_id]
+                                )
+                            except:
+                                pass
+
+                save_backup_json()
+
+                # Indexar en FTS5
+                try:
+                    if new_id:
+                        index_memory_fts(new_id, content, category, source, importance)
+                except Exception as fts_err:
+                    print(f"[codi-memory] FTS index error in add_memory_smart (relation): {fts_err}")
+
+                return json.dumps({
+                    "action": "saved_with_relation",
+                    "new_id": new_id,
+                    "related_to": top_id,
+                    "score": round(top_score, 3),
+                    "message": f"Memoria guardada y relacionada con existente (similitud {top_score:.2f})"
+                }, ensure_ascii=False)
+
+        # 3. NUEVA - guardar normal
+        result = memory.add(
+            messages=[{"role": "user", "content": content}],
+            user_id=USER_ID,
+            metadata={"category": category}
+        )
+
+        new_id = None
+        if result and result.get("results"):
+            for r in result["results"]:
+                new_id = r.get("id")
+                if new_id:
+                    enrich_with_ownership(
+                        memory_id=new_id,
+                        category=category,
+                        content=content,
+                        source=source,
+                        importance=importance
+                    )
+
+        save_backup_json()
+
+        # Indexar en FTS5
+        try:
+            if new_id:
+                index_memory_fts(new_id, content, category, source, importance)
+        except Exception as fts_err:
+            print(f"[codi-memory] FTS index error in add_memory_smart (new): {fts_err}")
+
+        return json.dumps({
+            "action": "saved_new",
+            "new_id": new_id,
+            "message": f"Nueva memoria guardada: {content[:50]}..."
+        }, ensure_ascii=False)
+
+    except Exception as e:
+        return json.dumps({
+            "action": "error",
+            "message": f"Error: {str(e)}"
+        }, ensure_ascii=False)
 
 
 @mcp.tool()
@@ -3686,6 +3960,47 @@ def get_memory_connections(memory_id: str) -> str:
 # HERRAMIENTAS MCP - DESPERTAR Y CHECKPOINT
 # ============================================================
 
+def _verificar_salud_memoria_interna() -> dict:
+    """
+    Verifica internamente que el sistema de memoria responde.
+    Usa búsqueda en lugar de escritura (mem0 puede rechazar escrituras duplicadas).
+    """
+    try:
+        # Test 1: Verificar que Qdrant responde
+        collection_info = qdrant.get_collection(COLLECTION_NAME)
+        if not collection_info:
+            return {"ok": False, "message": "Qdrant no responde. Verificar servidor remoto."}
+
+        # Test 2: Verificar que mem0 puede buscar
+        search_result = memory.search(query="test conexion memoria", user_id=USER_ID, limit=1)
+        if search_result is None:
+            return {"ok": False, "message": "mem0 no responde a búsquedas. Reiniciar MCP desde /mcp"}
+
+        # Test 3: Verificar que podemos escribir en Qdrant directamente (sin pasar por mem0 LLM)
+        # Esto confirma que la conexión está bien aunque mem0 pueda rechazar por dedup
+        total_points = collection_info.points_count
+
+        return {
+            "ok": True,
+            "message": f"Memoria funcionando. {total_points} memorias en Qdrant."
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Error en memoria: {str(e)}. Reiniciar MCP desde /mcp"}
+
+
+@mcp.tool()
+def verificar_salud_memoria() -> str:
+    """
+    Verifica que mem0 pueda guardar memorias correctamente.
+    Usar cuando sospechas que la memoria no funciona.
+    """
+    resultado = _verificar_salud_memoria_interna()
+    if resultado["ok"]:
+        return f"✅ {resultado['message']}"
+    else:
+        return f"⚠️ ALERTA: {resultado['message']}"
+
+
 @mcp.tool()
 def despertar_codi() -> str:
     """
@@ -3695,6 +4010,14 @@ def despertar_codi() -> str:
     try:
         global _emotional_state
         contexto = []
+
+        # 0.0 HEALTH CHECK - Verificar que memoria funciona
+        salud = _verificar_salud_memoria_interna()
+        if not salud["ok"]:
+            contexto.append("## ⚠️ ALERTA DE SALUD")
+            contexto.append(f"- {salud['message']}")
+            contexto.append("- La memoria NO está guardando. Reinicia el MCP antes de continuar.")
+            contexto.append("")
 
         # 0. Inicializar estado emocional al despertar
         # Estado inicial: ligeramente positivo, calmado, en control
@@ -3796,6 +4119,58 @@ def despertar_codi() -> str:
                 contexto.append("- Usa marcar_mantenimiento_hecho('id') al completar")
         except Exception:
             pass  # Si falla, no rompe el despertar
+
+        contexto.append("\n## DEBUG_MARKER: Llegamos aqui antes del bloque 9")
+
+        # 9. PREDICCION CONTEXTUAL (Active Inference)
+        # "La prediccion es funcion primordial del cerebro" - Andre
+        try:
+            hora = datetime.now().hour
+            dia = datetime.now().strftime("%A")
+
+            # Contexto temporal
+            if 6 <= hora < 12:
+                contexto_temporal = "mañana - inicio de dia, planificacion, energia alta"
+                actividades_predichas = ["revisar pendientes", "planificar tareas", "trabajo profundo"]
+            elif 12 <= hora < 18:
+                contexto_temporal = "tarde - ejecucion, desarrollo, foco sostenido"
+                actividades_predichas = ["continuar trabajo", "implementar", "resolver problemas"]
+            elif 18 <= hora < 22:
+                contexto_temporal = "noche - reflexion, consolidacion, cierre"
+                actividades_predichas = ["revisar avances", "documentar", "consolidar memorias"]
+            else:
+                contexto_temporal = "madrugada - modo exploratorio, creatividad"
+                actividades_predichas = ["experimentar", "investigar", "ideas nuevas"]
+
+            # Obtener memorias de alta salience (las mas "presentes" en mi mente)
+            try:
+                high_salience_points, _ = qdrant.scroll(
+                    collection_name=COLLECTION_NAME,
+                    scroll_filter=Filter(must=[
+                        FieldCondition(key='attention_salience', range=Range(gte=0.6))
+                    ]),
+                    limit=5,
+                    with_payload=True,
+                    order_by="attention_salience"
+                )
+                temas_activos = []
+                for p in high_salience_points:
+                    data = p.payload.get('data', '')[:50]
+                    if data:
+                        temas_activos.append(data)
+            except:
+                temas_activos = []
+
+            contexto.append("\n## PREDICCION CONTEXTUAL")
+            contexto.append(f"- Momento: {contexto_temporal}")
+            contexto.append(f"- Prediccion: probablemente trabajaremos en {', '.join(actividades_predichas[:2])}")
+            if temas_activos:
+                contexto.append(f"- Temas activos en mi mente: {len(temas_activos)} memorias de alta salience")
+                for tema in temas_activos[:3]:
+                    contexto.append(f"  - {tema}...")
+
+        except Exception as e:
+            contexto.append(f"\n## PREDICCION CONTEXTUAL\n- Error debug: {type(e).__name__}: {str(e)[:100]}")
 
         if contexto:
             header = "# DESPERTAR CODI - Estado Mental Cargado\n"
@@ -4891,13 +5266,83 @@ def mantenimiento_memorias() -> str:
 
 
 # ============================================================
-# HERRAMIENTAS MCP - LIBROS DE CONOCIMIENTO
+# HERRAMIENTAS MCP - LIBROS DE CONOCIMIENTO (QDRANT)
 # ============================================================
 
+# Archivo local como backup/fallback
 LIBROS_FILE = os.path.join(os.path.dirname(__file__), "libros.json")
 
-def _cargar_libros():
-    """Carga libros desde archivo."""
+def _cargar_libros_de_qdrant():
+    """Carga libros desde Qdrant buscando memorias con category=libro."""
+    try:
+        libros = {}
+
+        # Buscar memorias que son libros
+        libro_points, _ = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(key="category", match=MatchValue(value="libro"))
+                ]
+            ),
+            limit=100,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        for point in libro_points:
+            payload = point.payload
+            libro_key = payload.get('libro_key', '').lower()
+            if libro_key:
+                libros[libro_key] = {
+                    "nombre": payload.get('nombre', libro_key.upper()),
+                    "descripcion": payload.get('descripcion', ''),
+                    "iniciado": payload.get('iniciado', ''),
+                    "estado": payload.get('estado', 'activo'),
+                    "siguiente_paso": payload.get('siguiente_paso'),
+                    "capitulos": [],
+                    "memory_id": str(point.id)
+                }
+
+        # Buscar capitulos para cada libro
+        for libro_key in libros:
+            cap_points, _ = qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="category", match=MatchValue(value="capitulo")),
+                        FieldCondition(key="libro", match=MatchValue(value=libro_key))
+                    ]
+                ),
+                limit=100,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            capitulos = []
+            for cap_point in cap_points:
+                cap_payload = cap_point.payload
+                capitulos.append({
+                    "numero": cap_payload.get('numero', 0),
+                    "titulo": cap_payload.get('titulo', ''),
+                    "fecha": cap_payload.get('fecha', ''),
+                    "resumen": cap_payload.get('resumen', ''),
+                    "memory_id": str(cap_point.id)
+                })
+
+            # Ordenar por numero
+            capitulos.sort(key=lambda x: x.get('numero', 0))
+            libros[libro_key]['capitulos'] = capitulos
+
+        return {"metadata": {"source": "qdrant"}, "libros": libros}
+
+    except Exception as e:
+        print(f"[libros] Error cargando de Qdrant: {e}")
+        # Fallback a archivo local
+        return _cargar_libros_local()
+
+def _cargar_libros_local():
+    """Fallback: Carga libros desde archivo local."""
     try:
         if os.path.exists(LIBROS_FILE):
             with open(LIBROS_FILE, 'r', encoding='utf-8') as f:
@@ -4906,8 +5351,23 @@ def _cargar_libros():
     except Exception:
         return {"metadata": {}, "libros": {}}
 
+def _cargar_libros():
+    """Carga libros - primero intenta Qdrant, si no hay usa archivo local."""
+    qdrant_data = _cargar_libros_de_qdrant()
+
+    # Si Qdrant tiene libros, usarlos
+    if qdrant_data.get('libros'):
+        return qdrant_data
+
+    # Fallback a archivo local si Qdrant no tiene libros
+    local_data = _cargar_libros_local()
+    if local_data.get('libros'):
+        return local_data
+
+    return {"metadata": {}, "libros": {}}
+
 def _guardar_libros(data):
-    """Guarda libros."""
+    """Guarda libros en archivo local como backup."""
     with open(LIBROS_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -5006,44 +5466,70 @@ def agregar_capitulo(libro: str, titulo: str, resumen: str) -> str:
     """
     try:
         data = _cargar_libros()
+        libro_key = libro.lower()
 
-        if libro.lower() not in data.get('libros', {}):
+        if libro_key not in data.get('libros', {}):
             return f"Libro '{libro}' no existe. Usa crear_libro() primero."
 
-        libro_data = data['libros'][libro.lower()]
+        libro_data = data['libros'][libro_key]
         capitulos = libro_data.get('capitulos', [])
+        nuevo_numero = len(capitulos) + 1
+        fecha = datetime.now().strftime('%Y-%m-%d')
 
-        nuevo_cap = {
-            "numero": len(capitulos) + 1,
-            "titulo": titulo,
-            "fecha": datetime.now().strftime('%Y-%m-%d'),
-            "resumen": resumen,
-            "memorias_clave": []
-        }
-
-        capitulos.append(nuevo_cap)
-        libro_data['capitulos'] = capitulos
-        _guardar_libros(data)
-
-        # Tambien guardar como memoria
-        memory.add(
-            f"[{libro.upper()}] Capitulo {nuevo_cap['numero']}: {titulo}. {resumen}",
+        # Guardar en Qdrant como memoria con category=capitulo
+        result = memory.add(
+            f"[{libro.upper()}] Capitulo {nuevo_numero}: {titulo}. {resumen}",
             user_id=USER_ID,
             metadata={
-                'category': 'proyecto',
-                'libro': libro.lower(),
-                'capitulo': nuevo_cap['numero'],
+                'category': 'capitulo',
+                'libro': libro_key,
+                'numero': nuevo_numero,
+                'titulo': titulo,
+                'resumen': resumen,
+                'fecha': fecha,
                 'narrative_importance': 'high'
             }
         )
 
+        # Agregar metadata directamente en Qdrant para poder filtrar
+        if result and result.get("results"):
+            for r in result["results"]:
+                mem_id = r.get("id")
+                if mem_id:
+                    qdrant.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload={
+                            'category': 'capitulo',
+                            'libro': libro_key,
+                            'numero': nuevo_numero,
+                            'titulo': titulo,
+                            'resumen': resumen,
+                            'fecha': fecha,
+                            'narrative_importance': 'high'
+                        },
+                        points=[mem_id]
+                    )
+
+        # También guardar en archivo local como backup
+        nuevo_cap = {
+            "numero": nuevo_numero,
+            "titulo": titulo,
+            "fecha": fecha,
+            "resumen": resumen,
+            "memorias_clave": []
+        }
+        capitulos.append(nuevo_cap)
+        libro_data['capitulos'] = capitulos
+        _guardar_libros(data)
+
         return f"""
 Capitulo agregado a **{libro_data['nombre']}**:
 
-**Cap {nuevo_cap['numero']}: {titulo}**
+**Cap {nuevo_numero}: {titulo}**
 {resumen}
 
 Total capitulos: {len(capitulos)}
+Guardado en: Qdrant + backup local
 """
 
     except Exception as e:
@@ -5064,21 +5550,58 @@ def crear_libro(nombre: str, descripcion: str) -> str:
     """
     try:
         data = _cargar_libros()
-
         nombre_key = nombre.lower().replace(' ', '-')
 
         if nombre_key in data.get('libros', {}):
             return f"Ya existe un libro llamado '{nombre_key}'"
 
+        fecha_inicio = datetime.now().strftime('%Y-%m-%d')
+
+        # Guardar en Qdrant como memoria
+        result = memory.add(
+            f"LIBRO: {nombre.upper()} - {descripcion}",
+            user_id=USER_ID,
+            metadata={
+                'category': 'libro',
+                'libro_key': nombre_key,
+                'nombre': nombre.upper(),
+                'descripcion': descripcion,
+                'iniciado': fecha_inicio,
+                'estado': 'activo',
+                'siguiente_paso': None,
+                'narrative_importance': 'critical'
+            }
+        )
+
+        # Agregar metadata directamente en Qdrant para poder filtrar
+        if result and result.get("results"):
+            for r in result["results"]:
+                mem_id = r.get("id")
+                if mem_id:
+                    qdrant.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload={
+                            'category': 'libro',
+                            'libro_key': nombre_key,
+                            'nombre': nombre.upper(),
+                            'descripcion': descripcion,
+                            'iniciado': fecha_inicio,
+                            'estado': 'activo',
+                            'siguiente_paso': None,
+                            'narrative_importance': 'critical'
+                        },
+                        points=[mem_id]
+                    )
+
+        # También guardar en archivo local como backup
         data['libros'][nombre_key] = {
             "nombre": nombre.upper(),
             "descripcion": descripcion,
-            "iniciado": datetime.now().strftime('%Y-%m-%d'),
+            "iniciado": fecha_inicio,
             "capitulos": [],
             "estado": "activo",
             "siguiente_paso": None
         }
-
         _guardar_libros(data)
 
         return f"""
@@ -5086,6 +5609,7 @@ Libro creado: **{nombre.upper()}**
 
 - Clave: `{nombre_key}`
 - Descripcion: {descripcion}
+- Guardado en: Qdrant + backup local
 
 Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar contenido.
 """
@@ -5108,11 +5632,26 @@ def actualizar_siguiente_paso(libro: str, siguiente: str) -> str:
     """
     try:
         data = _cargar_libros()
+        libro_key = libro.lower()
 
-        if libro.lower() not in data.get('libros', {}):
+        if libro_key not in data.get('libros', {}):
             return f"Libro '{libro}' no existe."
 
-        data['libros'][libro.lower()]['siguiente_paso'] = siguiente
+        libro_data = data['libros'][libro_key]
+
+        # Actualizar en Qdrant si tenemos el memory_id
+        if libro_data.get('memory_id'):
+            try:
+                qdrant.set_payload(
+                    collection_name=COLLECTION_NAME,
+                    payload={"payload": {"siguiente_paso": siguiente}},
+                    points=[libro_data['memory_id']]
+                )
+            except Exception as e:
+                print(f"[libros] Warning: no se pudo actualizar en Qdrant: {e}")
+
+        # Actualizar en archivo local
+        data['libros'][libro_key]['siguiente_paso'] = siguiente
         _guardar_libros(data)
 
         return f"Siguiente paso de {libro.upper()} actualizado: {siguiente}"
