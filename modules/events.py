@@ -37,6 +37,10 @@ class Events:
     WORKSPACE_BROADCAST = 'workspace_broadcast'
     CONSOLIDATION_COMPLETE = 'consolidation_complete'
     PREDICTION_ERROR = 'prediction_error'
+    WORKSPACE_COMPETITION_COMPLETE = 'workspace_competition_complete'  # WIRING-6
+    RETRIEVAL_QUALITY = 'retrieval_quality'                            # WIRING-7
+    SCHEMA_UPDATED = 'schema_updated'                                  # Phase 3A
+    RECONSOLIDATION_TRIGGERED = 'reconsolidation_triggered'            # Phase 4
 
 
 class EventBus:

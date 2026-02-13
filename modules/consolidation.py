@@ -45,7 +45,8 @@ from modules.config import (
     RECONSOLIDATION_STRENGTH_CEILING,
     RECONSOLIDATION_MAX_BLEND,
 )
-from modules.utils import compute_activation, now_iso
+from modules.utils import now_iso
+from modules.activation import compute_unified_activation
 
 # OpenAI client (lazy, uses OPENAI_API_KEY from env)
 _oai_client = None
@@ -815,9 +816,16 @@ def check_reconsolidation(memory_id: str, memory_payload: dict,
         {should_reconsolidate: bool, prediction_error: float,
          memory_strength: float, reason: str}
     """
-    # Compute memory strength
-    activation = compute_activation(memory_payload, noise=False)
-    strength = activation
+    # Compute memory strength via unified scorer
+    result = compute_unified_activation(
+        created_at=memory_payload.get('created_at', ''),
+        last_accessed=memory_payload.get('attention_last_accessed', ''),
+        access_count=memory_payload.get('attention_access_count', 0),
+        access_timestamps=memory_payload.get('access_timestamps'),
+        importance=memory_payload.get('narrative_importance', 'medium'),
+        noise=False,
+    )
+    strength = result.total
 
     # Boundary conditions
     if strength < RECONSOLIDATION_STRENGTH_FLOOR:
@@ -883,20 +891,99 @@ def clear_expired_labile():
 
 
 def correct_memory(memory_id: str, correction: str) -> str:
-    """Correct a specific memory via explicit user request.
+    """Update a memory based on new evidence (reconsolidation).
 
-    MCP tool for user-driven corrections.
+    Nader 2000: Recalled memories enter a labile state where they can be
+    updated by prediction errors. This is how brains correct false beliefs.
+
+    Pipeline:
+      1. Resolve full ID
+      2. Retrieve old payload from Qdrant
+      3. Log old content to reconsolidation_log
+      4. Adjust confidence (decrement by 0.1 for contradiction)
+      5. Append correction note to content
+      6. Update Qdrant payload
+      7. Emit RECONSOLIDATION_TRIGGERED event
 
     Args:
         memory_id: ID (or prefix) of the memory to correct
         correction: The correct/updated information
+
+    Returns:
+        Summary of reconsolidation action
     """
-    # TODO: Sub-phase 1.3 - Full reconsolidation implementation
-    # 1. Resolve memory_id to full ID
-    # 2. Log old content
-    # 3. Update memory with blended content
-    # 4. Log to reconsolidation_log
-    return f"[reconsolidation] correct_memory stub - will be implemented in sub-phase 1.3"
+    from modules.utils import resolve_memory_id as _resolve
+
+    # 1. Resolve full ID
+    full_id = _resolve(memory_id)
+    if not full_id:
+        return f"[reconsolidation] Could not resolve memory ID: {memory_id}"
+
+    # 2. Retrieve old payload
+    try:
+        pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+        if not pts:
+            return f"[reconsolidation] Memory {full_id[:8]} not found in Qdrant"
+        old_payload = pts[0].payload or {}
+    except Exception as e:
+        return f"[reconsolidation] Qdrant retrieve error: {e}"
+
+    old_content = old_payload.get("data", "") or old_payload.get("memory", "")
+    old_confidence = float(old_payload.get("confidence", old_payload.get("narrative_importance_score", 0.5)))
+
+    # 3. Log old content to reconsolidation_log
+    try:
+        conn = _consolidation_conn()
+        new_content = f"{old_content}\n[CORRECTED {now_iso()}]: {correction}"
+        conn.execute("""
+            INSERT INTO reconsolidation_log
+            (memory_id, memory_type, action, prediction_error, memory_strength,
+             old_content, new_content, blend_weight, trigger_context, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (full_id, "episodic", "correct_memory", 0.5, old_confidence,
+              old_content[:500], new_content[:500], RECONSOLIDATION_MAX_BLEND,
+              correction[:200], now_iso()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[consolidation] WARNING: Could not log reconsolidation: {e}")
+
+    # 4. Adjust confidence (decrement by 0.1)
+    new_confidence = max(0.0, old_confidence - 0.1)
+
+    # 5. Update Qdrant payload with corrected content
+    try:
+        update_payload = {
+            "data": new_content,
+            "confidence": new_confidence,
+            "reconsolidated_at": now_iso(),
+            "reconsolidation_count": int(old_payload.get("reconsolidation_count", 0)) + 1,
+        }
+        qdrant.set_payload(
+            collection_name=COLLECTION_NAME,
+            payload=update_payload,
+            points=[full_id],
+        )
+    except Exception as e:
+        return f"[reconsolidation] Qdrant update error: {e}"
+
+    # 6. Emit event
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.RECONSOLIDATION_TRIGGERED, {
+            "memory_id": full_id,
+            "action": "correct_memory",
+            "old_confidence": old_confidence,
+            "new_confidence": new_confidence,
+        })
+    except Exception:
+        pass
+
+    return (
+        f"[reconsolidation] Memory {full_id[:8]} corrected. "
+        f"Confidence: {old_confidence:.2f} -> {new_confidence:.2f}. "
+        f"Correction appended and logged."
+    )
 
 
 # ============================================================
@@ -1058,47 +1145,6 @@ def count_unconsolidated_episodic(lookback_hours: int = 24) -> int:
         offset = next_offset
 
     return count
-
-
-# ============================================================
-# DIFFERENTIAL DECAY
-# ============================================================
-
-def compute_effective_decay(payload: dict, memory_type: str = "episodic") -> float:
-    """Compute the effective decay parameter for a memory.
-
-    Uses differential decay: episodic decays faster than semantic.
-    Modulated by importance and emotional arousal.
-    """
-    from modules.config import (
-        EPISODIC_DECAY_BASE, EPISODIC_DECAY_CRITICAL, EPISODIC_DECAY_HIGH,
-        EPISODIC_DECAY_EMOTIONAL, SEMANTIC_DECAY_BASE, SEMANTIC_DECAY_CRITICAL,
-        SEMANTIC_EVIDENCE_BOOST,
-    )
-
-    if memory_type == "semantic":
-        d = SEMANTIC_DECAY_BASE
-        importance = payload.get("narrative_importance", "medium")
-        if importance == "critical":
-            d = SEMANTIC_DECAY_CRITICAL
-        evidence = int(payload.get("evidence_count", 1) or 1)
-        d = max(0.01, d - SEMANTIC_EVIDENCE_BOOST * evidence)
-        return d
-
-    # Episodic
-    d = EPISODIC_DECAY_BASE
-    importance = payload.get("narrative_importance", "medium")
-    if importance == "critical":
-        d = EPISODIC_DECAY_CRITICAL
-    elif importance == "high":
-        d = EPISODIC_DECAY_HIGH
-
-    # Emotional protection (high arousal memories decay slower)
-    arousal = float(payload.get("pad_arousal", 0.0) or 0.0)
-    if abs(arousal) > 0.5:
-        d = EPISODIC_DECAY_EMOTIONAL
-
-    return d
 
 
 # ============================================================

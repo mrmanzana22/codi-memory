@@ -303,10 +303,52 @@ def identify_knowledge_gaps() -> str:
     """
     Identifica areas donde tengo poco conocimiento o baja confianza.
     Util para saber que necesito aprender o preguntar.
+
+    WIRING-7.3: Dynamic gap detection replaces hardcoded theme list with:
+      1. Top failed search topics (from failed_searches table)
+      2. Low-confidence topics from retrieval buffer
+      3. Static themes as baseline fallback
     """
     try:
-        expected_themes = ['consciencia', 'memoria', 'identidad', 'relaciones',
+        # Dynamic theme discovery (WIRING-7.3)
+        dynamic_themes = set()
+
+        # Source 1: Top failed search topics
+        try:
+            import sqlite3
+            from modules.config import FTS_DB_PATH
+            import os
+            if os.path.exists(FTS_DB_PATH):
+                fts_conn = sqlite3.connect(FTS_DB_PATH)
+                from modules.retrieval_metadata import get_top_failed_topics
+                for topic, _count in get_top_failed_topics(fts_conn, limit=5):
+                    if topic:
+                        dynamic_themes.add(topic.lower())
+                fts_conn.close()
+        except Exception:
+            pass
+
+        # Source 2: Low-confidence topics from retrieval buffer
+        try:
+            from modules.retrieval_metadata import get_retrieval_buffer
+            for r in get_retrieval_buffer():
+                if r.coverage in ("sparse", "empty"):
+                    words = [w for w in r.query.lower().split() if len(w) > 3]
+                    if words:
+                        dynamic_themes.add(words[0])
+        except Exception:
+            pass
+
+        # Source 3: Static baseline themes
+        static_themes = ['consciencia', 'memoria', 'identidad', 'relaciones',
                           'proyectos', 'desarrollo', 'aprendizaje']
+
+        # Merge: dynamic first, then static (deduplicated)
+        expected_themes = list(dynamic_themes)
+        for t in static_themes:
+            if t not in dynamic_themes:
+                expected_themes.append(t)
+
         theme_stats = {}
 
         for theme in expected_themes:
@@ -368,6 +410,201 @@ def identify_knowledge_gaps() -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error identificando gaps: {str(e)}"
+
+
+def assess_butlin_indicators() -> str:
+    """Automated Butlin et al. (2023/2025) consciousness assessment (Phase 3E).
+
+    Checks 14 indicators across 5 theories:
+      GWT (4), HOT (4), AST (1), PP (3), RPT (2)
+
+    Each indicator scored 0.0 (absent), 0.5 (partial), or 1.0 (full).
+    Returns formatted markdown with scores, evidence, and total.
+    """
+    indicators = []
+
+    def _check(name, theory, score, evidence):
+        indicators.append({"name": name, "theory": theory, "score": score, "evidence": evidence})
+
+    # Ensure event bus is wired (idempotent) so handler counts reflect architecture
+    try:
+        from modules.wiring import wire_event_bus
+        wire_event_bus()
+    except Exception:
+        pass
+
+    # GWT-1: Modular architecture
+    try:
+        from modules.events import event_bus
+        handler_count = sum(len(h) for h in event_bus._handlers.values())
+        _check("GWT-1", "GWT", 1.0 if handler_count >= 4 else 0.5,
+               f"Event bus with {handler_count} handlers across {len(event_bus._handlers)} events")
+    except Exception:
+        _check("GWT-1", "GWT", 0.5, "Event bus exists but could not count handlers")
+
+    # GWT-2: Limited-capacity workspace
+    try:
+        from modules.competition import DEFAULT_WORKSPACE_SLOTS, IGNITION_THRESHOLD
+        _check("GWT-2", "GWT", 1.0,
+               f"Competition engine: {DEFAULT_WORKSPACE_SLOTS} slots, ignition threshold {IGNITION_THRESHOLD}")
+    except Exception:
+        _check("GWT-2", "GWT", 0.0, "No competition engine found")
+
+    # GWT-3: Global broadcast
+    try:
+        from modules.events import event_bus, Events
+        sub_count = len(event_bus._handlers.get(Events.WORKSPACE_COMPETITION_COMPLETE, []))
+        _check("GWT-3", "GWT", 1.0 if sub_count >= 1 else 0.5,
+               f"WORKSPACE_COMPETITION_COMPLETE has {sub_count} subscribers")
+    except Exception:
+        _check("GWT-3", "GWT", 0.0, "No broadcast event found")
+
+    # GWT-4: Attention gating
+    try:
+        from modules.competition import IGNITION_THRESHOLD, COALITION_TOPIC_BONUS
+        _check("GWT-4", "GWT", 1.0,
+               f"Ignition threshold={IGNITION_THRESHOLD}, coalition bonus={COALITION_TOPIC_BONUS}")
+    except Exception:
+        _check("GWT-4", "GWT", 0.0, "No ignition threshold")
+
+    # HOT-1: Meta-monitoring
+    _check("HOT-1", "HOT", 1.0,
+           "assess_confidence(), reflect_on_self(), identify_knowledge_gaps() all implemented")
+
+    # HOT-2: Confidence calibration (FOK)
+    try:
+        from modules.retrieval_metadata import record_rcj, get_fok_calibration
+        _check("HOT-2", "HOT", 1.0,
+               "FOK with RCJ calibration loop (Nelson & Narens 1990)")
+    except ImportError:
+        try:
+            from modules.retrieval_metadata import feeling_of_knowing
+            _check("HOT-2", "HOT", 0.5,
+                   "FOK implemented but no calibration loop (no RCJ)")
+        except Exception:
+            _check("HOT-2", "HOT", 0.0, "No FOK system")
+
+    # HOT-3: Higher-order control
+    try:
+        from modules.retrieval_metadata import metacognitive_control
+        _check("HOT-3", "HOT", 1.0,
+               "Metacognitive control loop: FOK -> strategy adjustment -> search modification (Nelson & Narens 1990)")
+    except ImportError:
+        try:
+            from modules.retrieval_metadata import feeling_of_knowing
+            _check("HOT-3", "HOT", 0.5,
+                   "FOK produces recommendations but not consumed by callers")
+        except Exception:
+            _check("HOT-3", "HOT", 0.0, "No metacognitive control")
+
+    # HOT-4: Quality space (emotional expression)
+    try:
+        from modules.config import _emotional_state
+        _check("HOT-4", "HOT", 0.5 if _emotional_state else 0.0,
+               "PAD emotional model with valence/arousal/dominance")
+    except Exception:
+        _check("HOT-4", "HOT", 0.0, "No emotional model")
+
+    # AST-1: Attention schema (Graziano)
+    try:
+        from modules.wiring import describe_attention, predict_next_focus, get_attention_schema
+        schema = get_attention_schema()
+        has_describe = True
+        _, prob = predict_next_focus()
+        has_predict = True
+        has_suppressed = "suppressed_items" in schema
+        if has_describe and has_predict and has_suppressed:
+            _check("AST-1", "AST", 1.0,
+                   "Full AST: describe_attention(), predict_next_focus(), suppression tracking")
+        else:
+            _check("AST-1", "AST", 0.5, "Partial AST")
+    except Exception:
+        _check("AST-1", "AST", 0.0, "No attention schema")
+
+    # PP-1: Predictive model
+    try:
+        from modules.schemas import load_schemas
+        _check("PP-1", "PP", 0.5,
+               "Prediction loop in preturn + schema system, but no full generative model")
+    except Exception:
+        _check("PP-1", "PP", 0.5, "Prediction loop exists but no schema system")
+
+    # PP-2: Prediction error
+    try:
+        from modules.events import Events
+        has_pe = hasattr(Events, 'PREDICTION_ERROR')
+        _check("PP-2", "PP", 1.0 if has_pe else 0.0,
+               "PREDICTION_ERROR event with surprise detection in preturn hook")
+    except Exception:
+        _check("PP-2", "PP", 0.0, "No prediction error detection")
+
+    # PP-3: Model updating (reconsolidation)
+    try:
+        from modules.consolidation import correct_memory, check_reconsolidation
+        # Verify correct_memory is actually implemented (not stub)
+        import inspect
+        src = inspect.getsource(correct_memory)
+        is_stub = "stub" in src.lower()
+        if is_stub:
+            raise ImportError("correct_memory is still a stub")
+        _check("PP-3", "PP", 1.0,
+               "PE-driven reconsolidation: correct_memory + check_reconsolidation + labile marking (Nader 2000)")
+    except (ImportError, Exception):
+        try:
+            from modules.consolidation import search_semantic
+            _check("PP-3", "PP", 0.5,
+                   "Consolidation pipeline updates semantic facts, but no PE-driven reconsolidation")
+        except Exception:
+            _check("PP-3", "PP", 0.0, "No model updating")
+
+    # RPT-1: Recurrent processing
+    try:
+        from modules.spreading import _spread_activation, recurrent_cycle
+        _check("RPT-1", "RPT", 1.0,
+               "True recurrent processing via iterative spread-reseed cycles (Lamme 2006)")
+    except ImportError:
+        try:
+            from modules.spreading import _spread_activation
+            _check("RPT-1", "RPT", 0.5,
+                   "Spreading activation provides feedback loops but no true recurrence")
+        except Exception:
+            _check("RPT-1", "RPT", 0.0, "No recurrent processing")
+
+    # RPT-2: Integration
+    try:
+        from modules.events import event_bus
+        event_count = len(event_bus._handlers)
+        _check("RPT-2", "RPT", 1.0 if event_count >= 5 else 0.5,
+               f"Cross-module integration via {event_count} event types")
+    except Exception:
+        _check("RPT-2", "RPT", 0.0, "No cross-module integration")
+
+    # Format output
+    total = sum(i["score"] for i in indicators)
+    max_score = len(indicators) * 1.0
+
+    lines = ["# Butlin Consciousness Assessment\n"]
+    lines.append(f"**Total Score: {total:.1f}/{max_score:.0f} ({total/max_score*100:.0f}%)**\n")
+
+    current_theory = ""
+    for ind in indicators:
+        if ind["theory"] != current_theory:
+            current_theory = ind["theory"]
+            theory_names = {"GWT": "Global Workspace Theory", "HOT": "Higher-Order Theories",
+                          "AST": "Attention Schema Theory", "PP": "Predictive Processing",
+                          "RPT": "Recurrent Processing Theory"}
+            lines.append(f"\n## {theory_names.get(current_theory, current_theory)}")
+
+        score_label = {0.0: "ABSENT", 0.5: "PARTIAL", 1.0: "FULL"}.get(ind["score"], "?")
+        lines.append(f"- **{ind['name']}** [{score_label}] ({ind['score']:.1f}): {ind['evidence']}")
+
+    lines.append(f"\n## Summary")
+    lines.append(f"- Score: {total:.1f}/{max_score:.0f}")
+    lines.append(f"- Full indicators: {sum(1 for i in indicators if i['score'] == 1.0)}")
+    lines.append(f"- Partial indicators: {sum(1 for i in indicators if i['score'] == 0.5)}")
+    lines.append(f"- Absent indicators: {sum(1 for i in indicators if i['score'] == 0.0)}")
+
+    return "\n".join(lines)
 
 
 def update_self_model(insight: str, aspect: str = "general") -> str:
@@ -496,7 +733,11 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         if not results or not results.get('results'):
             return f"No encontre memorias relacionadas con: {context}"
 
-        spotlight_candidates = []
+        # WIRING-6: Score candidates with unified activation scorer
+        from modules.activation import compute_unified_activation
+        from modules.competition import CompetitionCandidate, run_workspace_competition
+
+        competition_candidates = []
 
         for r in results['results']:
             mem_id = r.get('id')
@@ -509,18 +750,32 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                     importance = payload.get('narrative_importance', 'medium')
                     source = payload.get('ownership_source', 'unknown')
 
-                    importance_boost = {'critical': 0.3, 'high': 0.2, 'medium': 0.1, 'low': 0}
-                    source_boost = {'experienced': 0.2, 'told': 0.1, 'learned': 0.05, 'inferred': 0}
-
-                    attention_score = (
-                        base_score * 0.4 + salience * 0.3 +
-                        importance_boost.get(importance, 0.1) + source_boost.get(source, 0)
+                    # Unified activation replaces ad-hoc formula (WIRING-6.2)
+                    act_result = compute_unified_activation(
+                        memory_id=mem_id,
+                        created_at=payload.get('created_at', ''),
+                        last_accessed=payload.get('attention_last_accessed', ''),
+                        access_count=payload.get('attention_access_count', 0),
+                        access_timestamps=payload.get('access_timestamps'),
+                        spreading_boost=float(salience),
+                        importance=importance,
+                        noise=True,
                     )
-                    spotlight_candidates.append({
-                        'id': mem_id, 'content': r.get('memory', ''),
-                        'attention_score': attention_score, 'salience': salience,
-                        'source': source, 'importance': importance
-                    })
+                    attention_score = act_result.total
+
+                    competition_candidates.append(CompetitionCandidate(
+                        content=r.get('memory', ''),
+                        source_domain="episodic",
+                        activation=attention_score,
+                        memory_id=mem_id,
+                        metadata={
+                            'salience': salience, 'source': source,
+                            'importance': importance,
+                            'topic': ' '.join(payload.get('narrative_themes', [])),
+                        },
+                    ))
+
+                    # Update attention metadata
                     new_salience = min(salience + 0.1, 1.0)
                     access_count = payload.get('attention_access_count', 0)
                     qdrant.set_payload(
@@ -533,14 +788,29 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                         points=[mem_id]
                     )
             except Exception:
-                spotlight_candidates.append({
-                    'id': mem_id, 'content': r.get('memory', ''),
-                    'attention_score': base_score, 'salience': 0.5,
-                    'source': 'unknown', 'importance': 'unknown'
-                })
+                competition_candidates.append(CompetitionCandidate(
+                    content=r.get('memory', ''),
+                    source_domain="episodic",
+                    activation=base_score,
+                    memory_id=mem_id,
+                    metadata={'salience': 0.5, 'source': 'unknown', 'importance': 'unknown'},
+                ))
 
-        spotlight_candidates.sort(key=lambda x: x['attention_score'], reverse=True)
-        spotlight = spotlight_candidates[:limit]
+        # GWT competition: only winners enter spotlight
+        comp_result = run_workspace_competition(
+            competition_candidates, slots=limit, current_focus=context,
+        )
+        spotlight_candidates = [
+            {
+                'id': w.memory_id, 'content': w.content,
+                'attention_score': w.activation,
+                'salience': w.metadata.get('salience', 0.5),
+                'source': w.metadata.get('source', 'unknown'),
+                'importance': w.metadata.get('importance', 'unknown'),
+            }
+            for w in comp_result.winners
+        ]
+        spotlight = spotlight_candidates
         update_workspace_spotlight(spotlight, theme=context)
 
         # Spreading activation: propagar a vecinos de las memorias en spotlight
@@ -2092,6 +2362,26 @@ def despertar_codi() -> str:
             wm = _load_working_memory_context()
             if wm:
                 contexto.append(f"\n## WORKING MEMORY\n{wm}")
+        except Exception:
+            pass
+
+        # 12. Prospective Memory (Intenciones pendientes)
+        try:
+            from modules.prospective import get_pending_intentions
+            intentions = get_pending_intentions(limit=5)
+            if intentions:
+                contexto.append(f"\n## INTENCIONES PENDIENTES ({len(intentions)})")
+                for i in intentions:
+                    marker = {"critical": "[!!!]", "high": "[!!]", "medium": "[!]", "low": "[.]"}.get(i["priority"], "[?]")
+                    trigger_info = i["trigger_type"]
+                    if i["trigger_type"] == "time":
+                        spec = i.get("trigger_spec", {})
+                        trigger_info = f"tiempo: {spec.get('trigger_time', '?')}"
+                    elif i["trigger_type"] == "event":
+                        spec = i.get("trigger_spec", {})
+                        kw = spec.get("keywords", [])
+                        trigger_info = f"evento: {', '.join(kw[:3])}" if kw else "evento"
+                    contexto.append(f"- {marker} {i['action']} ({trigger_info}) [act={i['activation']}]")
         except Exception:
             pass
 

@@ -11,11 +11,16 @@ from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, SEMANTIC_CO
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import (
     enrich_with_ownership, resolve_memory_id, calculate_confidence_score,
-    compute_activation, compute_pad_retrieval_bias, _get_emotional_state,
+    compute_pad_retrieval_bias, _get_emotional_state,
 )
+from modules.activation import compute_unified_activation
 from modules.memory_smart import index_memory_fts, delete_memory_fts, search_fts, bm25_rank_to_score
 from modules.consolidation import search_semantic
 from modules.events import event_bus, Events
+from modules.retrieval_metadata import (
+    wrap_retrieval_result, init_failed_searches_table, log_failed_search,
+    metacognitive_control,
+)
 
 
 # ============================================================
@@ -203,13 +208,28 @@ def search_memory(query: str, limit: int = 5) -> str:
       - Canal 2 (Semantico): vector (codi_semantic) + confidence + evidence
 
     Scoring formulas:
-      Episodic:  0.40*vector + 0.15*bm25 + 0.30*activation + 0.05*pad + 0.10*importance
+      Episodic:  0.40*vector + 0.15*bm25 + 0.45*unified_activation (WIRING-5)
+        (unified scorer absorbs importance, emotion, spreading, prediction error)
       Semantic:  0.45*vector + 0.20*confidence + 0.15*evidence + 0.10*recency + 0.10*pad
 
     Results from both channels compete in a unified ranking.
     Semantic facts are labeled [FACT] in output for transparency.
     """
     try:
+        # ============================================================
+        # METACOGNITIVE CONTROL (HOT-3): FOK -> strategy adjustment
+        # ============================================================
+        fok_control = None
+        confidence_flag = ""
+        try:
+            from modules.config import FTS_DB_PATH
+            fok_control = metacognitive_control(query, fts_db_path=FTS_DB_PATH)
+            confidence_flag = fok_control.get("confidence_flag", "")
+            limit_multiplier = fok_control.get("adjusted_limit", 1)
+            limit = limit * limit_multiplier
+        except Exception:
+            pass
+
         # ============================================================
         # CHANNEL 1: EPISODIC (vector + BM25 + ACT-R)
         # ============================================================
@@ -265,15 +285,14 @@ def search_memory(query: str, limit: int = 5) -> str:
         except Exception:
             payload_map = {}
 
-        # Get current emotional state for mood-congruent bias
+        # Get current emotional state for mood-congruent retrieval
         try:
             emotional_state = _get_emotional_state()
             current_pleasure = emotional_state.get('current', {}).get('pleasure', 0.0)
+            current_arousal = abs(emotional_state.get('current', {}).get('arousal', 0.0))
         except Exception:
             current_pleasure = 0.0
-
-        # Importance weight map
-        importance_score_map = {'critical': 1.0, 'high': 0.8, 'medium': 0.5, 'low': 0.2}
+            current_arousal = 0.0
 
         merged = []
 
@@ -283,25 +302,45 @@ def search_memory(query: str, limit: int = 5) -> str:
             b_score = bm25_map.get(mid, {}).get("bm25_score", 0)
             payload = payload_map.get(str(mid), {})
 
-            # ACT-R activation (normalized 0-1 via sigmoid)
-            activation = compute_activation(payload, context_salience=0.0, noise=True)
-
-            # PAD mood-congruent bias
+            # Mood congruence for this memory (Bower 1981)
             mem_valence = payload.get('experiential_emotional_valence', 'neutral')
-            pad_bias = compute_pad_retrieval_bias(mem_valence, current_pleasure)
+            valence_num = {'positive': 1.0, 'neutral': 0.0, 'negative': -1.0}.get(mem_valence, 0.0)
+            congruence = valence_num * current_pleasure
 
-            # Importance score
-            imp = payload.get('narrative_importance', 'medium')
-            imp_score = importance_score_map.get(imp, 0.5)
+            # Unified activation (ACT-R base + importance + emotion + noise)
+            act_result = compute_unified_activation(
+                created_at=payload.get('created_at', ''),
+                last_accessed=payload.get('attention_last_accessed', ''),
+                access_count=payload.get('attention_access_count', 0),
+                access_timestamps=payload.get('access_timestamps'),
+                spreading_boost=float(payload.get('attention_salience', 0.5)),
+                emotional_arousal=current_arousal,
+                emotional_congruence=congruence,
+                importance=payload.get('narrative_importance', 'medium'),
+                noise=True,
+            )
+            activation = act_result.total
 
-            # ACT-R hybrid fusion (calibrated Feb 2026)
+            # Simplified fusion: unified scorer absorbs importance + emotion
             combined = (
                 0.40 * v_score +
                 0.15 * b_score +
-                0.30 * activation +
-                0.05 * max(0, pad_bias + 0.05) +
-                0.10 * imp_score
+                0.45 * activation
             )
+
+            # 3C: State-dependent retrieval bonus (Godden & Baddeley 1975)
+            pad_enc = payload.get('pad_at_encoding')
+            if pad_enc and isinstance(pad_enc, dict):
+                try:
+                    import math
+                    p_diff = current_pleasure - float(pad_enc.get('P', 0))
+                    a_diff = current_arousal - float(pad_enc.get('A', 0))
+                    d_diff = 0.0  # dominance not tracked at retrieval currently
+                    pad_dist = math.sqrt(p_diff**2 + a_diff**2 + d_diff**2)
+                    sdr_bonus = 0.08 * math.exp(-2.0 * pad_dist)
+                    combined += sdr_bonus
+                except Exception:
+                    pass
 
             vec_result = vector_map.get(mid, {}).get("result")
             bm25_text = bm25_map.get(mid, {}).get("result", {}).get("content", "")
@@ -365,6 +404,11 @@ def search_memory(query: str, limit: int = 5) -> str:
         merged = merged[:limit]
 
         # ============================================================
+        # METAMEMORY: Wrap retrieval result (WIRING-7.1)
+        # ============================================================
+        retrieval_meta = wrap_retrieval_result(query, merged)
+
+        # ============================================================
         # ACCESS TRACKING: Update metadata for retrieved memories
         # ============================================================
 
@@ -419,6 +463,30 @@ def search_memory(query: str, limit: int = 5) -> str:
         except Exception:
             pass
 
+        # Emit RETRIEVAL_QUALITY event (WIRING-7.4)
+        try:
+            event_bus.emit(Events.RETRIEVAL_QUALITY, {
+                'query': query,
+                'coverage': retrieval_meta.coverage,
+                'confidence': retrieval_meta.confidence_estimate,
+                'count': retrieval_meta.result_count,
+            })
+        except Exception:
+            pass
+
+        # Log failed/weak searches for FOK estimation (WIRING-7.2)
+        if retrieval_meta.result_count < 2 or retrieval_meta.top_activation < 0.3:
+            try:
+                import sqlite3
+                from modules.config import FTS_DB_PATH
+                fts_conn = sqlite3.connect(FTS_DB_PATH)
+                init_failed_searches_table(fts_conn)
+                topic = query.split()[0] if query.split() else ""
+                log_failed_search(fts_conn, query, retrieval_meta.result_count, retrieval_meta.top_activation, topic)
+                fts_conn.close()
+            except Exception:
+                pass
+
         # ============================================================
         # FORMAT OUTPUT
         # ============================================================
@@ -463,14 +531,57 @@ def search_memory(query: str, limit: int = 5) -> str:
 
                     date_display = f"[{date_str}]" if date_str else ""
 
+                    # 3D: Temporal distance label (Friedman 1993)
+                    temporal_label = ""
+                    if created_at:
+                        try:
+                            from datetime import datetime as _dt, timezone
+                            mem_dt = _dt.fromisoformat(str(created_at).replace('Z', '+00:00'))
+                            now_dt = _dt.now(timezone.utc) if mem_dt.tzinfo else _dt.now()
+                            delta_hours = (now_dt - mem_dt).total_seconds() / 3600
+                            if delta_hours < 1:
+                                temporal_label = "just_now"
+                            elif delta_hours < 24:
+                                temporal_label = "today"
+                            elif delta_hours < 168:
+                                temporal_label = "recently"
+                            elif delta_hours < 720:
+                                temporal_label = "weeks_ago"
+                            else:
+                                temporal_label = "long_ago"
+                        except Exception:
+                            pass
+                    temporal_tag = f"[{temporal_label}]" if temporal_label else ""
+
                     if not text:
                         text = payload.get("data", payload.get("memory", ""))
 
-                    memories.append(f"{i}. {date_display}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}] {text}")
+                    memories.append(f"{i}. {date_display}{temporal_tag}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}] {text}")
                 except Exception:
                     memories.append(f"{i}. [score:{score:.2f}] {text}")
 
-        return "Recuerdos encontrados (hybrid+ACT-R+semantic):\n" + "\n".join(memories)
+        # ============================================================
+        # RCJ CALIBRATION (HOT-2): Record FOK prediction vs actual outcome
+        # ============================================================
+        if fok_control:
+            try:
+                from modules.retrieval_metadata import record_rcj
+                from modules.config import FTS_DB_PATH
+                record_rcj(
+                    query=query,
+                    fok_predicted=fok_control["fok"]["fok_score"],
+                    actual_coverage=retrieval_meta.coverage,
+                    actual_count=retrieval_meta.result_count,
+                    actual_top_activation=retrieval_meta.top_activation,
+                    fts_db_path=FTS_DB_PATH,
+                )
+            except Exception:
+                pass
+
+        header = "Recuerdos encontrados (hybrid+ACT-R+semantic):"
+        if confidence_flag:
+            header = f"{confidence_flag} {header}"
+        return header + "\n" + "\n".join(memories)
     except Exception as e:
         return f"Error al buscar: {str(e)}"
 
