@@ -10,12 +10,16 @@ Pure helpers extracted from server.py:
   - Backup / export: save_backup_json, export_memories_to_files, append_to_daily_journal
   - PAD emotional model helpers: _clamp_pad_value, _classify_emotion,
     _get_emotion_text, _get_emotional_state, _calculate_emotional_intensity
+  - ACT-R activation scoring: compute_base_level_activation, compute_activation
 """
 
 import os
 import json
 import sqlite3
 import math
+import random
+import threading
+import time
 from datetime import datetime
 
 from modules.config import (
@@ -33,6 +37,9 @@ from modules.config import (
     _emotional_state,
     _current_session,
     CODI_EMOTION_MAP,
+    BACKUP_POLICY,
+    BACKUP_MIN_INTERVAL_SEC,
+    BACKUP_MAX_FILES,
     now_col, now_iso, now_short, now_display,
 )
 
@@ -207,7 +214,10 @@ def calculate_confidence_score(memories: list) -> dict:
 def enrich_with_ownership(memory_id: str, category: str, content: str,
                           source: str = "experienced", importance: str = "medium",
                           emotional_weight: float = 0.5, emotional_valence: str = "neutral"):
-    """Enriquece una memoria con ownership metadata usando Qdrant directo."""
+    """Enriquece una memoria con ownership metadata usando Qdrant directo.
+
+    Phase 0 ACT-R: Sets initial access_timestamps and applies PAD encoding boost.
+    """
     try:
         themes = infer_themes(content)
         if not themes:
@@ -218,8 +228,33 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
         if self_ref and 'identidad' not in themes:
             themes.append('identidad')
 
+        # Base salience from importance
+        base_salience = 0.7 if importance in ['critical', 'high'] else 0.5
+
+        # PAD encoding boost: high arousal/emotion strengthens encoding
+        try:
+            emotional_state = _get_emotional_state()
+            current = emotional_state.get('current', {})
+            arousal = current.get('arousal', 0.0)
+            pleasure = current.get('pleasure', 0.0)
+            pad_boost = compute_pad_encoding_boost(arousal, pleasure)
+            base_salience = min(1.0, base_salience + pad_boost)
+
+            # Capture emotional context at encoding time
+            emotional_valence_auto = 'neutral'
+            if pleasure > 0.3:
+                emotional_valence_auto = 'positive'
+            elif pleasure < -0.3:
+                emotional_valence_auto = 'negative'
+            if emotional_valence == 'neutral':
+                emotional_valence = emotional_valence_auto
+        except Exception:
+            pass
+
+        created_now = now_iso()
+
         ownership_metadata = {
-            'category': category,  # IMPORTANTE: guardar category para filtros
+            'category': category,
             'ownership_is_mine': True,
             'ownership_source': source,
             'ownership_confidence': 0.9 if source == 'experienced' else 0.7,
@@ -227,13 +262,14 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'experiential_emotional_valence': emotional_valence,
             'narrative_importance': importance,
             'narrative_themes': themes,
-            'attention_salience': 0.7 if importance in ['critical', 'high'] else 0.5,
+            'attention_salience': base_salience,
             'attention_access_count': 0,
             'attention_last_accessed': None,
+            'access_timestamps': [created_now],  # ACT-R: track access history
             'temporal_session_id': get_session_id(),
-            'created_at': now_iso(),  # Timestamp exacto para ordenamiento temporal
-            'self_reference': self_ref,  # SELF-MODEL: marca memorias auto-referenciales
-            '_v': 2.3  # Incrementar version por cambio
+            'created_at': created_now,
+            'self_reference': self_ref,
+            '_v': 3.0  # Phase 0: ACT-R + PAD active
         }
 
         qdrant.set_payload(
@@ -249,25 +285,101 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
 # BACKUP / EXPORT
 # ============================================================
 
-def save_backup_json():
-    """Guarda todas las memorias en JSON como backup"""
+_backup_lock = threading.Lock()
+_last_backup_time = 0.0
+
+
+def save_backup_json(reason: str = "manual") -> bool:
+    """Guarda todas las memorias en JSON como backup con rotacion de archivos.
+    Retorna True si el backup fue exitoso."""
     try:
         results = memory.get_all(user_id=USER_ID)
-        if results and results.get("results"):
-            with open(BACKUP_FILE, "w", encoding="utf-8") as f:
-                json.dump({
-                    "timestamp": now_iso(),
-                    "user_id": USER_ID,
-                    "memories": results["results"]
-                }, f, indent=2, ensure_ascii=False, default=str)
+        if not (results and results.get("results")):
+            return False
+
+        payload = {
+            "timestamp": now_iso(),
+            "reason": reason,
+            "user_id": USER_ID,
+            "memories": results["results"]
+        }
+
+        # Write to canonical path (for compatibility with export_memories_to_files)
+        with open(BACKUP_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
+
+        # Write timestamped copy for rotation
+        ts = now_col().strftime("%Y%m%d_%H%M%S")
+        rotated_path = os.path.join(BACKUP_DIR, f"memories_backup_{ts}.json")
+        try:
+            with open(rotated_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
+        except Exception as e:
+            print(f"[Codi Memory] Error escribiendo backup rotado: {e}")
+
+        # Rotate: keep only BACKUP_MAX_FILES most recent
+        _rotate_backups()
+
+        # Hook: exportar a markdown despues de cada backup
+        try:
+            if os.getenv('EXPORT_MD_ON_BACKUP', '0') in ('1', 'true', 'yes'):
+                export_memories_to_files()
+        except Exception as e:
+            print(f"[Codi Memory] Error exportando markdown: {e}")
+
+        return True
+
     except Exception as e:
         print(f"[Codi Memory] Error guardando backup: {e}")
+        return False
 
-    # Hook: exportar a markdown despues de cada backup
+
+def _rotate_backups():
+    """Mantiene solo BACKUP_MAX_FILES backups rotados mas recientes (por mtime)."""
     try:
-        export_memories_to_files()
-    except Exception as e:
-        print(f"[Codi Memory] Error exportando markdown: {e}")
+        files = []
+        for name in os.listdir(BACKUP_DIR):
+            if name.startswith("memories_backup_") and name.endswith(".json"):
+                path = os.path.join(BACKUP_DIR, name)
+                try:
+                    files.append((os.path.getmtime(path), path))
+                except OSError:
+                    continue
+        files.sort(reverse=True)  # newest first
+        for _, path in files[BACKUP_MAX_FILES:]:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
+def maybe_backup(reason: str = "", force: bool = False):
+    """
+    Backup con debounce. Solo ejecuta si:
+    - force=True (flush, checkpoint, noche), o
+    - BACKUP_POLICY=='always', o
+    - Paso suficiente tiempo desde el ultimo backup (BACKUP_MIN_INTERVAL_SEC)
+    """
+    global _last_backup_time
+
+    if not force and BACKUP_POLICY != "always":
+        elapsed = time.time() - _last_backup_time
+        if elapsed < BACKUP_MIN_INTERVAL_SEC:
+            return
+
+    acquired = _backup_lock.acquire(blocking=False)
+    if not acquired:
+        return  # Another backup in progress, skip
+
+    try:
+        save_backup_json(reason=reason or "debounced")
+        _last_backup_time = time.time()
+        if reason:
+            print(f"[Codi Memory] Backup completado ({reason})")
+    finally:
+        _backup_lock.release()
 
 
 def export_memories_to_files():
@@ -440,3 +552,226 @@ def _calculate_emotional_intensity(p: float, a: float, d: float) -> float:
     Valor entre 0 (neutral) y ~1.73 (maximo).
     """
     return math.sqrt(p**2 + a**2 + d**2)
+
+
+# ============================================================
+# ACT-R ACTIVATION SCORING (Phase 0 - Neuroscience Foundation)
+# ============================================================
+# Based on Anderson's ACT-R theory (2007):
+#   A_i = B_i + sum(W_j * S_ji) + epsilon
+# Where:
+#   B_i = base-level activation = ln(sum(t_k^{-d}))
+#   W_j * S_ji = spreading activation from context
+#   epsilon = stochastic noise for non-deterministic retrieval
+# ============================================================
+
+# ACT-R parameters (Phase 0 calibrated - Feb 2026)
+# Decay reduced from 0.5 to 0.4 for day/week timescales (Anderson & Schooler 1991)
+ACTR_DECAY = 0.4
+ACTR_TIME_UNIT = 3600         # Normalize to hours (was seconds) to recentre B_i range
+ACTR_NOISE_SIGMA = 0.15       # Was 0.05 (~1% range, deterministic). Now ~3% range for stochastic retrieval
+ACTR_SPREAD_WEIGHT = 0.3      # Single-source spreading, reasonable
+ACTR_MIN_ACTIVATION = -5.0    # Floor to prevent -inf from log(0)
+ACTR_SIGMOID_CENTER = -0.07   # Calibrated for d=0.4, unit=hours
+ACTR_SIGMOID_SCALE = 0.91     # Maps useful A_i range to 0.05-0.95
+
+
+def compute_base_level_activation(
+    created_at_str: str,
+    last_accessed_str: str = None,
+    access_count: int = 0,
+    access_timestamps: list = None,
+    decay: float = ACTR_DECAY
+) -> float:
+    """
+    Compute ACT-R base-level activation B_i = ln(sum(t_k^{-d})).
+
+    If full access_timestamps are available, uses them directly.
+    Otherwise, approximates using created_at, last_accessed, and access_count
+    by interpolating access times uniformly between creation and last access.
+
+    Args:
+        created_at_str: ISO timestamp of memory creation
+        last_accessed_str: ISO timestamp of last access (optional)
+        access_count: Number of times accessed
+        access_timestamps: List of ISO timestamps of each access (optional, preferred)
+        decay: Power-law decay parameter (default 0.5, Anderson 2007)
+
+    Returns:
+        Base-level activation value (float). Higher = more accessible.
+    """
+    now = datetime.now()
+
+    # Parse creation time
+    # Default: assume 30 days old if no timestamp (not "now" which inflates activation)
+    default_created = now - __import__('datetime').timedelta(days=30)
+    try:
+        if created_at_str and 'T' in str(created_at_str):
+            created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
+            if created_at.tzinfo:
+                created_at = created_at.replace(tzinfo=None)
+        else:
+            created_at = default_created
+    except Exception:
+        created_at = default_created
+
+    # If we have full access timestamps (best case), use them
+    if access_timestamps and len(access_timestamps) > 0:
+        total = 0.0
+        for ts_str in access_timestamps:
+            try:
+                ts = datetime.fromisoformat(str(ts_str).replace('Z', '+00:00'))
+                if ts.tzinfo:
+                    ts = ts.replace(tzinfo=None)
+                t_hours = max(1.0, (now - ts).total_seconds() / ACTR_TIME_UNIT)
+                total += t_hours ** (-decay)
+            except Exception:
+                continue
+        if total > 0:
+            return math.log(total)
+        return ACTR_MIN_ACTIVATION
+
+    # Approximation: interpolate access times between creation and last_access
+    # The creation itself counts as the first "access"
+    t_created = max(1.0, (now - created_at).total_seconds() / ACTR_TIME_UNIT)
+
+    # Parse last_accessed
+    t_last = t_created
+    if last_accessed_str:
+        try:
+            last_acc = datetime.fromisoformat(str(last_accessed_str).replace('Z', '+00:00'))
+            if last_acc.tzinfo:
+                last_acc = last_acc.replace(tzinfo=None)
+            t_last = max(1.0, (now - last_acc).total_seconds() / ACTR_TIME_UNIT)
+        except Exception:
+            pass
+
+    # Total presentations = access_count + 1 (the original encoding)
+    n_presentations = max(1, (access_count or 0) + 1)
+
+    if n_presentations == 1:
+        # Only the creation event
+        total = t_created ** (-decay)
+    else:
+        # Interpolate: assume accesses are uniformly distributed
+        # between t_created (oldest) and t_last (most recent)
+        total = 0.0
+        for k in range(n_presentations):
+            if n_presentations > 1:
+                # Fraction: 0 = creation time, 1 = last access time
+                frac = k / (n_presentations - 1)
+                t_k = t_created + frac * (t_last - t_created)
+            else:
+                t_k = t_created
+            t_k = max(1.0, t_k)
+            total += t_k ** (-decay)
+
+    if total > 0:
+        return math.log(total)
+    return ACTR_MIN_ACTIVATION
+
+
+def compute_activation(
+    payload: dict,
+    context_salience: float = 0.0,
+    noise: bool = True
+) -> float:
+    """
+    Compute full ACT-R activation for a memory.
+
+    A_i = B_i + W * S_context + epsilon
+
+    Args:
+        payload: Qdrant point payload with memory metadata
+        context_salience: Spreading activation from current context (0-1)
+        noise: Whether to add stochastic noise
+
+    Returns:
+        Activation value (float). Typical range: -5 to +3.
+        Normalized to 0-1 for fusion scoring.
+    """
+    # Extract metadata from payload
+    created_at = payload.get('created_at', '')
+    last_accessed = payload.get('attention_last_accessed', '')
+    access_count = payload.get('attention_access_count', 0)
+    access_timestamps = payload.get('access_timestamps', None)
+
+    # 1. Base-level activation
+    base_level = compute_base_level_activation(
+        created_at_str=created_at,
+        last_accessed_str=last_accessed,
+        access_count=access_count,
+        access_timestamps=access_timestamps
+    )
+
+    # 2. Spreading activation from context
+    # Use existing attention_salience as a proxy if no explicit context_salience
+    current_salience = float(payload.get('attention_salience', 0.5))
+    spread_component = ACTR_SPREAD_WEIGHT * max(context_salience, current_salience)
+
+    # 3. Noise (for non-deterministic retrieval)
+    epsilon = random.gauss(0, ACTR_NOISE_SIGMA) if noise else 0.0
+
+    # Raw activation
+    raw_activation = base_level + spread_component + epsilon
+
+    # Normalize to 0-1 using calibrated sigmoid
+    # With d=0.4 and unit=hours, raw A_i range is ~-3.5 to +2.0
+    # Calibrated to map: 30d/0acc->0.10, 1d/0acc->0.28, 1d/7acc->0.84
+    shifted = (raw_activation - ACTR_SIGMOID_CENTER) * ACTR_SIGMOID_SCALE
+    normalized = 1.0 / (1.0 + math.exp(-shifted))
+
+    return normalized
+
+
+def compute_pad_retrieval_bias(
+    memory_valence: str,
+    current_pleasure: float
+) -> float:
+    """
+    Compute mood-congruent retrieval bias based on PAD model.
+
+    Memories whose emotional valence matches current mood get a boost.
+    Based on Bower (1981) mood-congruent memory effect.
+
+    Args:
+        memory_valence: Emotional valence of the memory ('positive', 'negative', 'neutral')
+        current_pleasure: Current pleasure dimension of PAD state (-1 to 1)
+
+    Returns:
+        Bias value to add to retrieval score (range: -0.05 to +0.1)
+    """
+    valence_map = {'positive': 1.0, 'neutral': 0.0, 'negative': -1.0}
+    mem_val = valence_map.get(memory_valence, 0.0)
+
+    # Congruence: positive when mood and memory valence align
+    congruence = mem_val * current_pleasure
+
+    # Scale to small bias (max 0.1 boost, max -0.05 penalty)
+    if congruence > 0:
+        return min(0.1, congruence * 0.1)
+    else:
+        return max(-0.05, congruence * 0.05)
+
+
+def compute_pad_encoding_boost(arousal: float, pleasure: float) -> float:
+    """
+    Compute emotional encoding strength boost based on PAD state.
+
+    High arousal strengthens encoding (LaBar & Cabeza 2006).
+    Emotional memories (high arousal, strong valence) are encoded more strongly.
+
+    Args:
+        arousal: Current arousal level (-1 to 1)
+        pleasure: Current pleasure level (-1 to 1)
+
+    Returns:
+        Salience boost (0.0 to 0.3) to add to base attention_salience
+    """
+    # Arousal is the primary driver of encoding strength
+    arousal_boost = max(0.0, arousal) * 0.2  # 0 to 0.2
+
+    # Strong emotions (high |pleasure|) also boost encoding
+    valence_boost = abs(pleasure) * 0.1  # 0 to 0.1
+
+    return min(0.3, arousal_boost + valence_boost)

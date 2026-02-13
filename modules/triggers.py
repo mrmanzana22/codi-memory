@@ -130,7 +130,7 @@ def register_tools(mcp):
                     if resultado and resultado.get("results"):
                         for m in resultado["results"]:
                             contexto_memoria.append(m.get('memory', ''))
-                except:
+                except Exception:
                     pass
 
             return json.dumps({

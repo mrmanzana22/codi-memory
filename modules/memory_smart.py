@@ -6,10 +6,21 @@ FTS5 functions and add_memory_smart tool.
 import os
 import json
 import sqlite3
+
+
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH
-from modules.utils import enrich_with_ownership, save_backup_json
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso
+
+def _fts_conn():
+    conn = sqlite3.connect(FTS_DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=3000")
+    return conn
+
+from modules.utils import enrich_with_ownership
+from modules.events import event_bus, Events
 
 
 # ============================================================
@@ -18,7 +29,7 @@ from modules.utils import enrich_with_ownership, save_backup_json
 
 def init_fts_db():
     """Inicializa la base de datos SQLite con FTS5 para busqueda por keywords."""
-    conn = sqlite3.connect(FTS_DB_PATH)
+    conn = _fts_conn()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories_text (
             memory_id TEXT PRIMARY KEY,
@@ -61,26 +72,229 @@ def init_fts_db():
             VALUES (new.rowid, new.content, new.memory_id, new.category, new.source);
         END
     """)
+    # Retry queue for FTS consistency (P2A)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS fts_retry_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            payload_json TEXT,
+            status TEXT DEFAULT 'pending',
+            attempts INTEGER DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_fts_retry_mem_op
+        ON fts_retry_queue(memory_id, op)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fts_retry_status
+        ON fts_retry_queue(status, updated_at)
+    """)
     conn.commit()
     conn.close()
     print("[codi-memory] FTS5 index initialized")
 
 
+def _index_memory_fts_raw(memory_id: str, content: str, category: str = "general",
+                          source: str = "experienced", importance: str = "medium"):
+    """Raw FTS insert. Triggers sync FTS5 automatically. Raises on failure."""
+    conn = _fts_conn()
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO memories_text (memory_id, content, category, source, importance, created_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+        """, (memory_id, content, category, source, importance))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _delete_memory_fts_raw(memory_id: str):
+    """Raw FTS delete. Triggers sync FTS5 automatically. Raises on failure."""
+    conn = _fts_conn()
+    try:
+        conn.execute("DELETE FROM memories_text WHERE memory_id = ?", (memory_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def index_memory_fts(memory_id: str, content: str, category: str = "general",
-                     source: str = "experienced", importance: str = "medium"):
-    """Indexa una memoria en SQLite FTS5."""
-    conn = sqlite3.connect(FTS_DB_PATH)
-    conn.execute("""
-        INSERT OR REPLACE INTO memories_text (memory_id, content, category, source, importance, created_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
-    """, (memory_id, content, category, source, importance))
-    conn.commit()
-    conn.close()
+                     source: str = "experienced", importance: str = "medium") -> bool:
+    """Safe FTS index: tries raw insert, queues retry on failure."""
+    try:
+        _index_memory_fts_raw(memory_id, content, category, source, importance)
+        return True
+    except Exception as e:
+        queue_fts_op(
+            memory_id=memory_id,
+            op="upsert",
+            payload={"content": content, "category": category, "source": source, "importance": importance},
+            error=f"index_memory_fts failed: {e}",
+        )
+        return False
+
+
+def delete_memory_fts(memory_id: str) -> bool:
+    """Safe FTS delete: tries raw delete, queues retry on failure."""
+    try:
+        _delete_memory_fts_raw(memory_id)
+        return True
+    except Exception as e:
+        queue_fts_op(
+            memory_id=memory_id,
+            op="delete",
+            payload=None,
+            error=f"delete_memory_fts failed: {e}",
+        )
+        return False
+
+
+# ============================================================
+# FTS RETRY QUEUE (P2A)
+# ============================================================
+
+def queue_fts_op(memory_id: str, op: str, payload: dict = None, error: str = None) -> dict:
+    """Enqueue a failed FTS operation for retry. Idempotent by (memory_id, op)."""
+    op = (op or "").strip().lower()
+    if op not in ("upsert", "delete"):
+        return {"ok": False, "error": f"invalid op: {op}"}
+
+    now = now_iso()
+    payload_json = json.dumps(payload, ensure_ascii=False) if payload else None
+    error_short = (str(error) or "")[:500] if error else None
+
+    conn = _fts_conn()
+    try:
+        conn.execute("""
+            INSERT INTO fts_retry_queue
+                (memory_id, op, payload_json, status, attempts, last_error, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)
+            ON CONFLICT(memory_id, op) DO UPDATE SET
+                payload_json = COALESCE(excluded.payload_json, payload_json),
+                status = 'pending',
+                last_error = COALESCE(excluded.last_error, last_error),
+                updated_at = excluded.updated_at
+        """, (memory_id, op, payload_json, error_short, now, now))
+        conn.commit()
+        return {"ok": True, "memory_id": memory_id, "op": op}
+    except Exception as e:
+        print(f"[codi-memory] Error enqueuing FTS op: {e}")
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def process_fts_queue(limit: int = 50, max_attempts: int = 10) -> dict:
+    """Process pending FTS retry queue items. Idempotent and safe."""
+    limit = max(1, min(500, int(limit or 50)))
+    max_attempts = max(1, min(50, int(max_attempts or 10)))
+    now = now_iso()
+
+    conn = _fts_conn()
+    try:
+        rows = conn.execute("""
+            SELECT id, memory_id, op, payload_json, attempts
+            FROM fts_retry_queue
+            WHERE status = 'pending' AND attempts < ?
+            ORDER BY updated_at ASC
+            LIMIT ?
+        """, (max_attempts, limit)).fetchall()
+
+        processed = 0
+        succeeded = 0
+        failed = 0
+
+        for row in rows:
+            qid, mem_id, op, payload_json, attempts = row
+            processed += 1
+
+            try:
+                if op == "upsert":
+                    payload = json.loads(payload_json) if payload_json else {}
+                    content = payload.get("content", "")
+                    if not content:
+                        raise ValueError("missing content for upsert")
+                    _index_memory_fts_raw(
+                        mem_id,
+                        content=content,
+                        category=payload.get("category", "general"),
+                        source=payload.get("source", "experienced"),
+                        importance=payload.get("importance", "medium"),
+                    )
+                elif op == "delete":
+                    _delete_memory_fts_raw(mem_id)
+
+                conn.execute("""
+                    UPDATE fts_retry_queue
+                    SET status = 'done', updated_at = ?, last_error = NULL
+                    WHERE id = ?
+                """, (now, qid))
+                conn.commit()
+                succeeded += 1
+
+            except Exception as e:
+                new_attempts = (attempts or 0) + 1
+                new_status = "failed" if new_attempts >= max_attempts else "pending"
+                conn.execute("""
+                    UPDATE fts_retry_queue
+                    SET attempts = ?, last_error = ?, status = ?, updated_at = ?
+                    WHERE id = ?
+                """, (new_attempts, str(e)[:500], new_status, now, qid))
+                conn.commit()
+                failed += 1
+
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM fts_retry_queue WHERE status = 'pending'"
+        ).fetchone()[0]
+
+        return {
+            "ok": True,
+            "processed": processed,
+            "succeeded": succeeded,
+            "failed": failed,
+            "remaining_pending": pending,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def fts_queue_stats() -> dict:
+    """Get FTS retry queue statistics."""
+    conn = _fts_conn()
+    try:
+        pending = conn.execute("SELECT COUNT(*) FROM fts_retry_queue WHERE status='pending'").fetchone()[0]
+        failed = conn.execute("SELECT COUNT(*) FROM fts_retry_queue WHERE status='failed'").fetchone()[0]
+        done = conn.execute("SELECT COUNT(*) FROM fts_retry_queue WHERE status='done'").fetchone()[0]
+        max_att = conn.execute("SELECT COALESCE(MAX(attempts), 0) FROM fts_retry_queue").fetchone()[0]
+        oldest = conn.execute("""
+            SELECT created_at FROM fts_retry_queue
+            WHERE status = 'pending'
+            ORDER BY created_at ASC LIMIT 1
+        """).fetchone()
+        return {
+            "ok": True,
+            "pending": pending,
+            "failed": failed,
+            "done": done,
+            "max_attempts": int(max_att or 0),
+            "oldest_pending": oldest[0] if oldest else None,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
 
 
 def search_fts(query: str, limit: int = 20) -> list:
     """Busca en FTS5 usando BM25 ranking."""
-    conn = sqlite3.connect(FTS_DB_PATH)
+    conn = _fts_conn()
     try:
         results = conn.execute("""
             SELECT memory_id, content, category, source, rank
@@ -124,7 +338,7 @@ def sync_fts_from_backup():
                 count += 1
         # Rebuild FTS index para asegurar consistencia despues de bulk insert
         try:
-            conn = sqlite3.connect(FTS_DB_PATH)
+            conn = _fts_conn()
             conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
             conn.commit()
             conn.close()
@@ -213,17 +427,38 @@ def add_memory_smart(content: str, category: str = "general",
                                     },
                                     points=[new_id]
                                 )
-                            except:
+                            except Exception:
                                 pass
 
-                save_backup_json()
+                            # Mini spreading activation: activar vecinos de la nueva relacion
+                            try:
+                                from modules.spreading import _spread_activation
+                                spread_seeds = [top_id]
+                                if new_id:
+                                    spread_seeds.append(new_id)
+                                _spread_activation(spread_seeds, depth=1, factor=0.3, seed_boost=0.05)
+                            except Exception:
+                                pass
 
-                # Indexar en FTS5
+                # P1: backup removed from hot path
+
+                # Indexar en FTS5 (safe: auto-queues on failure)
+                if new_id:
+                    index_memory_fts(new_id, content, category, source, importance)
+
+                # Emit MEMORY_STORED event
                 try:
-                    if new_id:
-                        index_memory_fts(new_id, content, category, source, importance)
-                except Exception as fts_err:
-                    print(f"[codi-memory] FTS index error in add_memory_smart (relation): {fts_err}")
+                    event_bus.emit(Events.MEMORY_STORED, {
+                        'memory_id': new_id,
+                        'content': content[:200],
+                        'category': category,
+                        'source': source,
+                        'importance': importance,
+                        'action': 'saved_with_relation',
+                        'related_to': top_id,
+                    })
+                except Exception:
+                    pass
 
                 return json.dumps({
                     "action": "saved_with_relation",
@@ -253,14 +488,24 @@ def add_memory_smart(content: str, category: str = "general",
                         importance=importance
                     )
 
-        save_backup_json()
+        # P1: backup removed from hot path
 
-        # Indexar en FTS5
+        # Indexar en FTS5 (safe: auto-queues on failure)
+        if new_id:
+            index_memory_fts(new_id, content, category, source, importance)
+
+        # Emit MEMORY_STORED event
         try:
-            if new_id:
-                index_memory_fts(new_id, content, category, source, importance)
-        except Exception as fts_err:
-            print(f"[codi-memory] FTS index error in add_memory_smart (new): {fts_err}")
+            event_bus.emit(Events.MEMORY_STORED, {
+                'memory_id': new_id,
+                'content': content[:200],
+                'category': category,
+                'source': source,
+                'importance': importance,
+                'action': 'saved_new',
+            })
+        except Exception:
+            pass
 
         return json.dumps({
             "action": "saved_new",
@@ -289,7 +534,52 @@ def sync_fts_index() -> str:
 # REGISTER TOOLS
 # ============================================================
 
+def _process_fts_queue_now(limit: int = 100) -> str:
+    """Procesa la cola de reintentos FTS pendientes. Usar si sospechas desincronizacion FTS/Qdrant.
+
+    Args:
+        limit: Maximo de items a procesar (default 100)
+    """
+    result = process_fts_queue(limit=limit)
+    if result.get("ok"):
+        lines = ["# FTS Retry Queue - Procesado"]
+        lines.append(f"- Procesados: {result['processed']}")
+        lines.append(f"- Exitosos: {result['succeeded']}")
+        lines.append(f"- Fallidos: {result['failed']}")
+        lines.append(f"- Pendientes restantes: {result['remaining_pending']}")
+        return "\n".join(lines)
+    return f"Error procesando cola FTS: {result.get('error')}"
+
+
+def _get_fts_queue_stats() -> str:
+    """Muestra estadisticas de la cola de reintentos FTS. Util para diagnosticar desincronizacion."""
+    s = fts_queue_stats()
+    if s.get("ok"):
+        lines = ["# FTS Queue Stats"]
+        lines.append(f"- Pendientes: {s['pending']}")
+        lines.append(f"- Fallidos (max reintentos): {s['failed']}")
+        lines.append(f"- Completados: {s['done']}")
+        lines.append(f"- Max intentos en cola: {s['max_attempts']}")
+        lines.append(f"- Pendiente mas antiguo: {s['oldest_pending'] or 'ninguno'}")
+        if s['pending'] == 0 and s['failed'] == 0:
+            lines.append("\n*FTS y Qdrant estan sincronizados*")
+        elif s['pending'] > 0:
+            lines.append(f"\n*Hay {s['pending']} operaciones pendientes. Usa process_fts_queue_now() para procesarlas.*")
+        return "\n".join(lines)
+    return f"Error obteniendo stats: {s.get('error')}"
+
+
 def register_tools(mcp):
     """Registra las herramientas de memoria smart en el servidor MCP."""
     mcp.tool()(add_memory_smart)
     mcp.tool()(sync_fts_index)
+
+    @mcp.tool()
+    def process_fts_queue_now(limit: int = 100) -> str:
+        """Procesa la cola de reintentos FTS pendientes. Usar si sospechas desincronizacion FTS/Qdrant."""
+        return _process_fts_queue_now(limit=limit)
+
+    @mcp.tool()
+    def get_fts_queue_stats() -> str:
+        """Muestra estadisticas de la cola de reintentos FTS. Util para diagnosticar desincronizacion."""
+        return _get_fts_queue_stats()

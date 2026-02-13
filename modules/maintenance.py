@@ -1,9 +1,9 @@
 import os
 import json
 from datetime import datetime, timedelta, timezone
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short, TZ_COL
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-from modules.utils import save_backup_json, calculate_confidence_score
+from modules.utils import calculate_confidence_score
 
 
 # ============================================================
@@ -55,6 +55,8 @@ def _verificar_tareas_vencidas():
             })
         else:
             ultimo_fecha = datetime.fromisoformat(ultimo)
+            if ultimo_fecha.tzinfo is None:
+                ultimo_fecha = ultimo_fecha.replace(tzinfo=TZ_COL)
             dias_pasados = (hoy - ultimo_fecha).days
             if dias_pasados >= frecuencia:
                 vencidas.append({
@@ -146,6 +148,8 @@ def _verificar_mantenimiento() -> str:
                 vencidas.append(f"- **{tarea['nombre']}**: NUNCA HECHO - {tarea['descripcion']}")
             else:
                 ultimo_fecha = datetime.fromisoformat(ultimo)
+                if ultimo_fecha.tzinfo is None:
+                    ultimo_fecha = ultimo_fecha.replace(tzinfo=TZ_COL)
                 dias_pasados = (hoy - ultimo_fecha).days
                 dias_restantes = frecuencia - dias_pasados
 
@@ -305,7 +309,7 @@ def _mantenimiento_memorias() -> str:
                                 points=[p.id]
                             )
                             decayed += 1
-                    except:
+                    except Exception:
                         pass
 
             resultado += f"- Memorias con decay aplicado: {decayed}\n"
@@ -334,7 +338,7 @@ def _mantenimiento_memorias() -> str:
                         with_payload=False
                     )
                     # Solo mostrar si tiene memorias
-                except:
+                except Exception:
                     pass
 
             resultado += f"- Total memorias: {total}\n"
@@ -352,7 +356,7 @@ def _mantenimiento_memorias() -> str:
                     )
                     if pts:
                         resultado += f"- {imp}: {len(pts)}\n"
-                except:
+                except Exception:
                     pass
 
             acciones.append(f"Inventario: {total} memorias totales")
@@ -389,7 +393,7 @@ def _cargar_recordatorios():
             with open(RECORDATORIOS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return {"pendientes": []}
-    except:
+    except Exception:
         return {"pendientes": []}
 
 

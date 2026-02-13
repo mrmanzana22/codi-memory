@@ -7,10 +7,15 @@ import os
 import json
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE
+from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-from modules.utils import enrich_with_ownership, save_backup_json, resolve_memory_id, calculate_confidence_score
-from modules.memory_smart import index_memory_fts, search_fts, bm25_rank_to_score
+from modules.utils import (
+    enrich_with_ownership, resolve_memory_id, calculate_confidence_score,
+    compute_activation, compute_pad_retrieval_bias, _get_emotional_state,
+)
+from modules.memory_smart import index_memory_fts, delete_memory_fts, search_fts, bm25_rank_to_score
+from modules.consolidation import search_semantic
+from modules.events import event_bus, Events
 
 
 # ============================================================
@@ -41,7 +46,7 @@ def restore_memories() -> str:
                         metadata=full_metadata
                     )
                     restored += 1
-                except:
+                except Exception:
                     pass
 
         return f"Restauradas {restored} memorias desde backup"
@@ -83,11 +88,11 @@ def add_memory(content: str, category: str = "general",
                         importance=importance
                     )
 
-        save_backup_json()
+        # P1: backup removed from hot path (runs on flush/checkpoint/noche)
 
         # Indexar en FTS5 para busqueda hibrida
+        mem_id_fts = None
         try:
-            mem_id_fts = None
             if result and result.get("results"):
                 for r in result["results"]:
                     mem_id_fts = r.get("id")
@@ -95,6 +100,18 @@ def add_memory(content: str, category: str = "general",
                         index_memory_fts(mem_id_fts, content, category, source, importance)
         except Exception as fts_err:
             print(f"[codi-memory] FTS index error in add_memory: {fts_err}")
+
+        # Emit MEMORY_STORED event
+        try:
+            event_bus.emit(Events.MEMORY_STORED, {
+                'memory_id': mem_id_fts,
+                'content': content[:200],
+                'category': category,
+                'source': source,
+                'importance': importance,
+            })
+        except Exception:
+            pass
 
         return f"Memoria guardada con ownership: {result}"
     except Exception as e:
@@ -105,19 +122,105 @@ def add_memory(content: str, category: str = "general",
 # HYBRID SEARCH
 # ============================================================
 
+def _score_semantic_fact(fact: dict, current_pleasure: float = 0.0) -> float:
+    """Compute fusion score for a semantic fact from codi_semantic.
+
+    Semantic facts do NOT have ACT-R access_timestamps or BM25 index entries.
+    Their score is based on:
+    - Vector similarity (primary relevance signal, from Qdrant query_points)
+    - Confidence (quality of the extracted fact, from LLM at consolidation time)
+    - Evidence strength (how many episodes support this fact, log-normalized)
+    - Recency of last observation (when was this fact last confirmed by new episodes)
+    - PAD mood-congruent bias (subtle, same as episodic)
+
+    Formula rationale:
+    - vector_score dominates (0.45) because semantic relevance is the primary signal
+    - confidence (0.20) acts as a quality gate -- low-confidence facts get suppressed
+    - evidence (0.15) rewards facts supported by many episodes (log-normalized
+      so that going from 1->5 evidence matters more than 5->25)
+    - recency (0.10) keeps recently-confirmed facts slightly preferred
+    - pad_bias (0.10) maintains mood-congruent retrieval consistency with episodic path
+
+    Args:
+        fact: Dict from search_semantic() with keys: id, fact, topic, confidence,
+              evidence_count, score (cosine from query_points)
+        current_pleasure: Current PAD pleasure dimension for mood-congruent bias
+
+    Returns:
+        Float score in ~0-1 range, comparable to episodic combined scores.
+    """
+    import math
+
+    # 1. Vector similarity (already 0-1 from Qdrant cosine)
+    v_score = float(fact.get("score", 0.0))
+
+    # 2. Confidence (0-1, from LLM extraction)
+    confidence = float(fact.get("confidence", 0.5))
+
+    # 3. Evidence strength: log-normalized
+    # ln(1)=0, ln(3)=1.1, ln(5)=1.6, ln(10)=2.3, ln(50)=3.9
+    # Normalize to 0-1 using ln(evidence+1)/ln(51) so max at 50 episodes = 1.0
+    evidence_count = max(1, int(fact.get("evidence_count", 1)))
+    evidence_norm = math.log(evidence_count + 1) / math.log(51)
+    evidence_norm = min(1.0, evidence_norm)
+
+    # 4. Recency of last observation
+    # Semantic facts have last_observed (ISO timestamp from consolidation)
+    # More recent = higher score. Decay over 30 days to 0.
+    recency = 0.5  # default: moderate recency
+    last_observed = fact.get("last_observed", "")
+    if last_observed:
+        try:
+            last_dt = datetime.fromisoformat(str(last_observed).replace("Z", "+00:00"))
+            if last_dt.tzinfo:
+                last_dt = last_dt.replace(tzinfo=None)
+            hours_ago = max(0.1, (datetime.now() - last_dt).total_seconds() / 3600)
+            # Sigmoid-like decay: 1.0 at 0h, ~0.5 at 72h, ~0.1 at 720h (30d)
+            recency = 1.0 / (1.0 + (hours_ago / 72.0))
+        except Exception:
+            pass
+
+    # 5. PAD mood-congruent bias (reuse same function, neutral default for semantic)
+    pad_bias = compute_pad_retrieval_bias("neutral", current_pleasure)
+
+    # Fusion formula
+    combined = (
+        0.45 * v_score +
+        0.20 * confidence +
+        0.15 * evidence_norm +
+        0.10 * recency +
+        0.10 * max(0, pad_bias + 0.05)
+    )
+
+    return combined
+
+
 def search_memory(query: str, limit: int = 5) -> str:
     """
     Busca recuerdos relacionados con una consulta.
-    Usa busqueda HIBRIDA: semantica (vector) + keywords (BM25 FTS5).
+    Usa busqueda HIBRIDA de 3 canales:
+      - Canal 1 (Episodico): vector (mem0) + BM25 (FTS5) + ACT-R activation
+      - Canal 2 (Semantico): vector (codi_semantic) + confidence + evidence
+
+    Scoring formulas:
+      Episodic:  0.40*vector + 0.15*bm25 + 0.30*activation + 0.05*pad + 0.10*importance
+      Semantic:  0.45*vector + 0.20*confidence + 0.15*evidence + 0.10*recency + 0.10*pad
+
+    Results from both channels compete in a unified ranking.
+    Semantic facts are labeled [FACT] in output for transparency.
     """
     try:
-        # 1. Busqueda vectorial (semantica) via mem0
+        # ============================================================
+        # CHANNEL 1: EPISODIC (vector + BM25 + ACT-R)
+        # ============================================================
+
+        # 1a. Busqueda vectorial (semantica) via mem0
         vector_results = memory.search(query=query, user_id=USER_ID, limit=limit * 2)
 
-        # 2. Busqueda BM25 (keywords) via FTS5
+        # 1b. Busqueda BM25 (keywords) via FTS5
         bm25_results = search_fts(query, limit=limit * 4)
 
-        # 3. Construir mapas de scores por memory_id
+        # 1c. Construir mapas de scores por memory_id
         vector_map = {}
         if vector_results and vector_results.get("results"):
             for i, r in enumerate(vector_results["results"]):
@@ -137,71 +240,237 @@ def search_memory(query: str, limit: int = 5) -> str:
                     "bm25_score": bm25_rank_to_score(r.get("bm25_rank", 0))
                 }
 
-        # 4. Fusion (union strategy: 0.7 vector + 0.3 BM25)
-        all_ids = set(list(vector_map.keys()) + list(bm25_map.keys()))
+        # ============================================================
+        # CHANNEL 2: SEMANTIC (codi_semantic vector search)
+        # ============================================================
 
-        if not all_ids:
-            return "No encontre recuerdos relacionados."
+        # 2a. Search semantic store (safe: returns [] if empty or error)
+        semantic_results = search_semantic(query, limit=limit)
+
+        # ============================================================
+        # FUSION: Score and merge both channels
+        # ============================================================
+
+        # 3. Episodic fusion
+        episodic_ids = set(list(vector_map.keys()) + list(bm25_map.keys()))
+
+        # Prefetch episodic payloads en batch
+        payload_map = {}
+        try:
+            id_list = [mid for mid in episodic_ids if mid]
+            if id_list:
+                pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=id_list, with_payload=True)
+                if pts:
+                    payload_map = {str(p.id): (p.payload or {}) for p in pts}
+        except Exception:
+            payload_map = {}
+
+        # Get current emotional state for mood-congruent bias
+        try:
+            emotional_state = _get_emotional_state()
+            current_pleasure = emotional_state.get('current', {}).get('pleasure', 0.0)
+        except Exception:
+            current_pleasure = 0.0
+
+        # Importance weight map
+        importance_score_map = {'critical': 1.0, 'high': 0.8, 'medium': 0.5, 'low': 0.2}
 
         merged = []
-        for mid in all_ids:
+
+        # Score episodic memories
+        for mid in episodic_ids:
             v_score = vector_map.get(mid, {}).get("vector_score", 0)
             b_score = bm25_map.get(mid, {}).get("bm25_score", 0)
-            combined = 0.7 * v_score + 0.3 * b_score
+            payload = payload_map.get(str(mid), {})
+
+            # ACT-R activation (normalized 0-1 via sigmoid)
+            activation = compute_activation(payload, context_salience=0.0, noise=True)
+
+            # PAD mood-congruent bias
+            mem_valence = payload.get('experiential_emotional_valence', 'neutral')
+            pad_bias = compute_pad_retrieval_bias(mem_valence, current_pleasure)
+
+            # Importance score
+            imp = payload.get('narrative_importance', 'medium')
+            imp_score = importance_score_map.get(imp, 0.5)
+
+            # ACT-R hybrid fusion (calibrated Feb 2026)
+            combined = (
+                0.40 * v_score +
+                0.15 * b_score +
+                0.30 * activation +
+                0.05 * max(0, pad_bias + 0.05) +
+                0.10 * imp_score
+            )
+
             vec_result = vector_map.get(mid, {}).get("result")
             bm25_text = bm25_map.get(mid, {}).get("result", {}).get("content", "")
             merged.append({
                 "id": mid,
                 "combined_score": combined,
+                "activation": activation,
+                "memory_type": "episodic",
                 "vector_result": vec_result,
-                "bm25_text": bm25_text
+                "bm25_text": bm25_text,
             })
 
+        # Batch-fetch semantic payloads for last_observed and full metadata
+        semantic_payload_map = {}
+        sem_ids_to_fetch = [f.get("id", "") for f in semantic_results if f.get("id")]
+        if sem_ids_to_fetch:
+            try:
+                sem_pts = qdrant.retrieve(
+                    collection_name=SEMANTIC_COLLECTION,
+                    ids=sem_ids_to_fetch,
+                    with_payload=True,
+                )
+                if sem_pts:
+                    semantic_payload_map = {str(p.id): (p.payload or {}) for p in sem_pts}
+            except Exception:
+                pass
+
+        # Score semantic facts
+        for fact in semantic_results:
+            fact_id = fact.get("id", "")
+            if not fact_id:
+                continue
+
+            # Enrich fact with last_observed from batch-fetched payload
+            sem_payload = semantic_payload_map.get(fact_id, {})
+            fact_last_observed = sem_payload.get("last_observed", "")
+            # Store full payload for access tracking later
+            payload_map[f"sem_{fact_id}"] = sem_payload
+
+            fact_with_recency = {**fact, "last_observed": fact_last_observed}
+            combined = _score_semantic_fact(fact_with_recency, current_pleasure)
+
+            merged.append({
+                "id": fact_id,
+                "combined_score": combined,
+                "activation": float(fact.get("confidence", 0.5)),  # Use confidence as proxy for display
+                "memory_type": "semantic",
+                "fact_text": fact.get("fact", ""),
+                "topic": fact.get("topic", ""),
+                "confidence": fact.get("confidence", 0),
+                "evidence_count": fact.get("evidence_count", 0),
+                "vector_result": None,
+                "bm25_text": "",
+            })
+
+        if not merged:
+            return "No encontre recuerdos relacionados."
+
+        # Sort unified ranking
         merged.sort(key=lambda x: -x["combined_score"])
         merged = merged[:limit]
 
-        # 5. Formatear resultados (mismo formato que antes, con Qdrant enrichment)
+        # ============================================================
+        # ACCESS TRACKING: Update metadata for retrieved memories
+        # ============================================================
+
+        retrieved_ids = [item["id"] for item in merged]
+        for item in merged:
+            mid = item["id"]
+            try:
+                if item["memory_type"] == "episodic":
+                    # Episodic: update ACT-R access timestamps in codi_memories
+                    payload = payload_map.get(str(mid), {})
+                    access_count = int(payload.get('attention_access_count', 0) or 0)
+
+                    access_ts = list(payload.get('access_timestamps', []) or [])
+                    if not isinstance(access_ts, list):
+                        access_ts = []
+                    access_ts.append(now_iso())
+                    access_ts = access_ts[-20:]  # Keep last 20
+
+                    qdrant.set_payload(
+                        collection_name=COLLECTION_NAME,
+                        payload={
+                            'attention_access_count': access_count + 1,
+                            'attention_last_accessed': now_iso(),
+                            'access_timestamps': access_ts,
+                        },
+                        points=[mid]
+                    )
+                else:
+                    # Semantic: update last_observed in codi_semantic
+                    qdrant.set_payload(
+                        collection_name=SEMANTIC_COLLECTION,
+                        payload={
+                            'last_observed': now_iso(),
+                        },
+                        points=[mid]
+                    )
+            except Exception:
+                pass
+
+        # Emit MEMORY_RETRIEVED event
+        try:
+            episodic_count = sum(1 for m in merged if m["memory_type"] == "episodic")
+            semantic_count = sum(1 for m in merged if m["memory_type"] == "semantic")
+            event_bus.emit(Events.MEMORY_RETRIEVED, {
+                'query': query,
+                'result_count': len(merged),
+                'episodic_count': episodic_count,
+                'semantic_count': semantic_count,
+                'top_activation': merged[0]['activation'] if merged else 0,
+                'retrieved_ids': retrieved_ids,
+            })
+        except Exception:
+            pass
+
+        # ============================================================
+        # FORMAT OUTPUT
+        # ============================================================
+
         memories = []
         for i, item in enumerate(merged, 1):
             mem_id = item["id"]
             score = item["combined_score"]
-            text = item["vector_result"].get("memory", "") if item["vector_result"] else item["bm25_text"]
+            act = item["activation"]
 
-            # Obtener ownership info de Qdrant
-            try:
-                points = qdrant.retrieve(
-                    collection_name=COLLECTION_NAME,
-                    ids=[mem_id],
-                    with_payload=True
+            if item["memory_type"] == "semantic":
+                # Format semantic facts distinctly
+                text = item.get("fact_text", "")
+                topic = item.get("topic", "")
+                conf = item.get("confidence", 0)
+                evidence = item.get("evidence_count", 0)
+                memories.append(
+                    f"{i}. [FACT][{topic}] [score:{score:.2f}|conf:{conf:.2f}|ev:{evidence}] {text}"
                 )
-                if points:
-                    payload = points[0].payload
-                    source = payload.get('ownership_source', 'unknown')
-                    importance = payload.get('narrative_importance', 'unknown')
-                    created_at = payload.get('created_at', payload.get('temporal_session_id', ''))
-                    # Formatear fecha y hora si existe
+            else:
+                # Format episodic memories (original format)
+                text = item["vector_result"].get("memory", "") if item["vector_result"] else item["bm25_text"]
+
+                try:
+                    payload = payload_map.get(str(mem_id), {}) or {}
+                    source = payload.get("ownership_source", "unknown")
+                    importance = payload.get("narrative_importance", "unknown")
+                    created_at = payload.get("created_at", payload.get("temporal_session_id", ""))
+
                     date_str = ""
                     if created_at:
                         try:
-                            if 'T' in str(created_at):
-                                date_part = created_at[5:10]
-                                time_part = created_at[11:16] if len(created_at) > 15 else ""
+                            s = str(created_at)
+                            if "T" in s:
+                                date_part = s[5:10]
+                                time_part = s[11:16] if len(s) > 15 else ""
                                 date_str = f"{date_part} {time_part}".strip()
                             else:
-                                date_str = created_at[:10] if len(created_at) >= 10 else created_at
-                        except:
+                                date_str = s[:10] if len(s) >= 10 else s
+                        except Exception:
                             date_str = str(created_at)[:10]
-                    date_display = f"[{date_str}]" if date_str else ""
-                    # Si no tenemos text del vector, intentar obtenerlo del payload
-                    if not text:
-                        text = payload.get('data', payload.get('memory', ''))
-                    memories.append(f"{i}. {date_display}[{source}|{importance}] [score:{score:.2f}] {text}")
-                else:
-                    memories.append(f"{i}. [score:{score:.2f}] {text}")
-            except:
-                memories.append(f"{i}. [score:{score:.2f}] {text}")
 
-        return "Recuerdos encontrados (hybrid):\n" + "\n".join(memories)
+                    date_display = f"[{date_str}]" if date_str else ""
+
+                    if not text:
+                        text = payload.get("data", payload.get("memory", ""))
+
+                    memories.append(f"{i}. {date_display}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}] {text}")
+                except Exception:
+                    memories.append(f"{i}. [score:{score:.2f}] {text}")
+
+        return "Recuerdos encontrados (hybrid+ACT-R+semantic):\n" + "\n".join(memories)
     except Exception as e:
         return f"Error al buscar: {str(e)}"
 
@@ -264,7 +533,7 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
                         'importance': importance,
                         'text': text
                     })
-            except:
+            except Exception:
                 pass
 
         # Ordenar por fecha (mas reciente primero)
@@ -329,6 +598,7 @@ def delete_memory(memory_id: str) -> str:
     """Elimina un recuerdo especifico por su ID."""
     try:
         memory.delete(memory_id=memory_id)
+        delete_memory_fts(memory_id)
         return f"Recuerdo {memory_id} eliminado."
     except Exception as e:
         return f"Error al eliminar: {str(e)}"
@@ -358,8 +628,9 @@ def delete_by_content(search_query: str, confirm: bool = False) -> str:
             if mem_id:
                 try:
                     memory.delete(memory_id=mem_id)
+                    delete_memory_fts(mem_id)
                     deleted += 1
-                except:
+                except Exception:
                     pass
 
         return f"Eliminadas {deleted} memorias."
@@ -367,9 +638,11 @@ def delete_by_content(search_query: str, confirm: bool = False) -> str:
         return f"Error: {str(e)}"
 
 
-def clear_all_memories() -> str:
+def clear_all_memories(confirm_code: str = "") -> str:
     """PELIGRO: Elimina TODOS los recuerdos."""
     try:
+        if confirm_code != "DELETE_ALL_MEMORIES":
+            return "Bloqueado. Para borrar todo usa confirm_code='DELETE_ALL_MEMORIES'."
         memory.delete_all(user_id=USER_ID)
         return "Todos los recuerdos han sido eliminados."
     except Exception as e:

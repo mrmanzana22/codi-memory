@@ -16,12 +16,12 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE,
     _emotional_state, _current_session, CODI_EMOTION_MAP,
-    now_col, now_iso, now_short,
+    now_col, now_iso, now_short, CURIOSIDAD_FILE,
 )
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     calculate_confidence_score, resolve_memory_id, enrich_with_ownership,
-    save_backup_json, _clamp_pad_value, _classify_emotion,
+    maybe_backup, _clamp_pad_value, _classify_emotion,
     _get_emotion_text, _get_emotional_state, _calculate_emotional_intensity,
 )
 
@@ -52,7 +52,7 @@ _tool_metrics = {}
 _topic_confidence = {}
 
 # N8N webhook base
-N8N_WEBHOOK_BASE = os.getenv("N8N_WEBHOOK_BASE", "https://appn8n-n8n.lx6zon.easypanel.host/webhook")
+N8N_WEBHOOK_BASE = os.getenv("N8N_WEBHOOK_BASE", "").strip()
 
 
 # ============================================================
@@ -139,7 +139,7 @@ def _update_topic_confidence(topic: str, new_confidence: float):
             user_id=USER_ID,
             metadata={"category": "aprendizaje", "tipo": "confidence_level", "topic": topic, "confidence": new_confidence}
         )
-    except:
+    except Exception:
         pass
 
 
@@ -328,7 +328,7 @@ def identify_knowledge_gaps() -> str:
                     }
                 else:
                     theme_stats[theme] = {'total': 0, 'experienced': 0, 'high_confidence': 0, 'score': 0.0}
-            except:
+            except Exception:
                 theme_stats[theme] = {'total': 0, 'experienced': 0, 'high_confidence': 0, 'score': 0.0}
 
         sorted_themes = sorted(theme_stats.items(), key=lambda x: x[1]['score'])
@@ -420,7 +420,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
                         points=[mem_id]
                     )
 
-        save_backup_json()
+        # P1: backup removed from hot path
         return f"Self-model actualizado [{aspect}]: {insight[:50]}..."
     except Exception as e:
         return f"Error actualizando self-model: {str(e)}"
@@ -532,7 +532,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                         },
                         points=[mem_id]
                     )
-            except:
+            except Exception:
                 spotlight_candidates.append({
                     'id': mem_id, 'content': r.get('memory', ''),
                     'attention_score': base_score, 'salience': 0.5,
@@ -542,6 +542,15 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         spotlight_candidates.sort(key=lambda x: x['attention_score'], reverse=True)
         spotlight = spotlight_candidates[:limit]
         update_workspace_spotlight(spotlight, theme=context)
+
+        # Spreading activation: propagar a vecinos de las memorias en spotlight
+        try:
+            from modules.spreading import _spread_activation
+            top_ids = [m['id'] for m in spotlight if m.get('id')][:3]
+            if top_ids:
+                _spread_activation(top_ids, depth=1, factor=0.5, seed_boost=0.0)
+        except Exception:
+            pass
 
         lines = [f"# GLOBAL WORKSPACE - Atencion enfocada\n"]
         lines.append(f"**Contexto:** {context}")
@@ -592,32 +601,33 @@ def broadcast_to_workspace(memory_id: str) -> str:
             points=[full_id]
         )
 
-        related = memory.search(query=main_content, user_id=USER_ID, limit=10)
-        connections_made = 0
-        lines.append("## Memorias que reciben el broadcast")
+        # Spreading activation: propagar depth=2 desde la memoria broadcast
+        from modules.spreading import _spread_activation
+        spread_result = _spread_activation([full_id], depth=2, factor=0.7, seed_boost=0.0)
+        connections_made = spread_result.get('affected', 0)
 
-        if related and related.get('results'):
-            for r in related['results']:
-                r_id = r.get('id')
-                if r_id and r_id != full_id:
-                    try:
-                        r_points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[r_id], with_payload=True)
-                        if r_points:
-                            r_salience = r_points[0].payload.get('attention_salience', 0.5)
-                            new_salience = min(r_salience + 0.15, 0.9)
-                            qdrant.set_payload(
-                                collection_name=COLLECTION_NAME,
-                                payload={'attention_salience': new_salience, 'broadcast_received_from': full_id},
-                                points=[r_id]
-                            )
-                            lines.append(f"- [{r_id[:8]}] {r.get('memory', '')[:50]}... (salience: {r_salience:.2f} -> {new_salience:.2f})")
-                            connections_made += 1
-                    except:
-                        pass
+        lines.append("## Memorias activadas por spreading")
+        if spread_result.get('updates'):
+            for mid, sal in sorted(spread_result['updates'].items(), key=lambda x: -x[1])[:10]:
+                lines.append(f"- [{mid[:8]}] salience -> {sal:.3f}")
+        else:
+            lines.append("*Sin vecinos activados*")
 
         workspace = get_workspace()
         workspace['spotlight'] = [{'id': full_id, 'content': main_content}]
         workspace['last_broadcast'] = now_iso()
+
+        # Emit WORKSPACE_BROADCAST event
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.WORKSPACE_BROADCAST, {
+                'memory_id': full_id,
+                'content': main_content[:200],
+                'themes': main_themes,
+                'connections_made': connections_made,
+            })
+        except Exception:
+            pass
 
         lines.append(f"\n**Conexiones activadas:** {connections_made}")
         lines.append("*El broadcast simula como una idea central activa memorias relacionadas*")
@@ -766,7 +776,7 @@ def predict_context(current_context: str) -> str:
                         'importance': payload.get('narrative_importance', 'medium')
                     })
                     total_score += score
-            except:
+            except Exception:
                 pass
 
         confidence = min(total_score / len(results['results']) if results['results'] else 0, 1.0)
@@ -895,7 +905,7 @@ def get_prediction_accuracy() -> str:
                     data = p.payload.get('data', 'N/A')[:60]
                     error_val = p.payload.get('prediction_error_value', 0)
                     lines.append(f"- [{error_val:.1f}] {data}...")
-        except:
+        except Exception:
             pass
 
         lines.append(f"\n## Interpretacion")
@@ -945,7 +955,7 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
                         points=[mem_id]
                     )
 
-        save_backup_json()
+        # P1: backup removed from hot path
         lines = [f"# CREENCIA ACTUALIZADA\n"]
         lines.append(f"**Tema:** {topic}")
         lines.append(f"**Creencia anterior:** {old_belief}")
@@ -1072,7 +1082,7 @@ def auto_learn_from_session() -> str:
                     metadata={"category": "aprendizaje", "tipo": "action_rule", "importance": "high"}
                 )
                 lines.append(f"- Regla: {rule[:40]}...")
-            except:
+            except Exception:
                 pass
 
         _predictive_state['accuracy_history'].append({
@@ -1087,7 +1097,7 @@ def auto_learn_from_session() -> str:
         lines.append(f"- Aprendi de {total_surprises} errores en {len(error_patterns)} temas")
         lines.append(f"- Ajuste confianza en {len(error_patterns) + len(accurate_themes)} temas")
         lines.append(f"- Genere {len(actions_generated)} reglas de accion")
-        save_backup_json()
+        # P1: backup removed from hot path
         return "\n".join(lines)
     except Exception as e:
         return f"Error en auto-aprendizaje: {str(e)}"
@@ -1096,30 +1106,38 @@ def auto_learn_from_session() -> str:
 def audit_tools() -> str:
     """Analiza el uso y efectividad de todas las herramientas del MCP."""
     try:
+        from modules.metrics import tool_usage_summary
+
+        summary = tool_usage_summary(days=7)
         lines = ["# AUDITORIA DE HERRAMIENTAS\n"]
-        if not _tool_metrics:
+
+        total_calls = int(summary.get("total_calls", 0) or 0)
+        if total_calls == 0:
             lines.append("No hay metricas de herramientas registradas aun.")
             return "\n".join(lines)
 
-        sorted_tools = sorted(_tool_metrics.items(), key=lambda x: x[1]['calls'], reverse=True)
-        lines.append("## Por Uso (mas usadas primero)")
-        for tool_name, metrics in sorted_tools[:15]:
-            calls = metrics['calls']
-            success_rate = (metrics['successes'] / calls * 100) if calls > 0 else 0
-            avg_time = (metrics['total_time_ms'] / calls) if calls > 0 else 0
-            usefulness = metrics['usefulness_scores']
-            avg_usefulness = sum(usefulness) / len(usefulness) if usefulness else 0
-            lines.append(f"- **{tool_name}**: {calls} calls, {success_rate:.0f}% exito, {avg_time:.0f}ms avg")
-            if avg_usefulness > 0:
-                lines.append(f"  Utilidad: {avg_usefulness:.1f}/5")
+        macro_calls = int(summary.get("macro_calls", 0) or 0)
+        macro_share = float(summary.get("macro_share", 0.0) or 0.0) * 100.0
 
-        used_tools = set(_tool_metrics.keys())
-        problem_tools = [(name, m) for name, m in _tool_metrics.items() if m['calls'] > 0 and (m['failures'] / m['calls']) > 0.2]
+        lines.append(f"Periodo: {int(summary.get('days', 7))} dias")
+        lines.append(f"Total tool calls: {total_calls}")
+        lines.append(f"Macro-tools: {macro_calls}/{total_calls} ({macro_share:.1f}%)\n")
+
+        tools = summary.get("tools", []) or []
+        lines.append("## Por Uso (mas usadas primero)")
+        for t in tools[:15]:
+            calls = int(t.get("calls", 0) or 0)
+            ok = float(t.get("success_rate", 0.0) or 0.0)
+            fail = float(t.get("fail_rate", 0.0) or 0.0)
+            avg_ms = float(t.get("avg_ms", 0.0) or 0.0)
+            lines.append(f"- **{t.get('tool')}**: {calls} calls, {ok:.0f}% exito, {fail:.0f}% fallos, {avg_ms:.0f}ms avg")
+
+        problem_tools = [t for t in tools if int(t.get("calls", 0) or 0) >= 5 and float(t.get("fail_rate", 0.0) or 0.0) > 20.0]
         if problem_tools:
-            lines.append("\n## Herramientas con Problemas (>20% fallos)")
-            for tool_name, metrics in problem_tools:
-                fail_rate = metrics['failures'] / metrics['calls'] * 100
-                lines.append(f"- {tool_name}: {fail_rate:.0f}% fallos")
+            lines.append("\n## Herramientas con Problemas (>20% fallos y >=5 calls)")
+            for t in problem_tools[:10]:
+                lines.append(f"- {t.get('tool')}: {t.get('fail_rate', 0.0):.0f}% fallos ({int(t.get('calls', 0) or 0)} calls)")
+
         return "\n".join(lines)
     except Exception as e:
         return f"Error en auditoria: {str(e)}"
@@ -1171,6 +1189,17 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
         emotion_label = _classify_emotion(p, a, d)
         emotion_text = _get_emotion_text(emotion_label)
         intensity = _calculate_emotional_intensity(p, a, d)
+
+        # Emit EMOTION_CHANGED event for cross-module communication
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.EMOTION_CHANGED, {
+                'pleasure': p, 'arousal': a, 'dominance': d,
+                'emotion': emotion_label, 'intensity': round(intensity, 2),
+                'trigger': trigger,
+            })
+        except Exception:
+            pass
 
         result = {
             'result': 'Estado emocional actualizado',
@@ -1386,7 +1415,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
                     }
                     qdrant.set_payload(collection_name=COLLECTION_NAME, payload=ownership_metadata, points=[mem_id])
 
-        save_backup_json()
+        # P1: backup removed from hot path
         result_json = {
             'result': 'Memoria guardada con emocion',
             'memory_id': result.get('results', [{}])[0].get('id', 'unknown')[:8] if result else 'unknown',
@@ -1594,7 +1623,7 @@ def emotional_focus_attention(context: str) -> str:
                         },
                         points=[mem_id]
                     )
-            except:
+            except Exception:
                 spotlight_candidates.append({
                     'id': mem_id, 'content': r.get('memory', ''), 'attention_score': base_score,
                     'emotional_boost': 0, 'salience': 0.5, 'source': 'unknown',
@@ -1683,7 +1712,7 @@ def consolidate_recent(hours: int = 24) -> str:
                                 payload={'consolidated_with': [mem_id], 'attention_salience': min(point.payload.get('attention_salience', 0.5) + 0.1, 1.0)},
                                 points=[s_id]
                             )
-                        except:
+                        except Exception:
                             pass
                         connections_found += 1
 
@@ -1750,7 +1779,7 @@ def find_connections(memory_id: str = None, query: str = None, threshold: float 
                             'themes': payload.get('narrative_themes', []),
                             'importance': payload.get('narrative_importance', 'unknown')
                         })
-                except:
+                except Exception:
                     connections.append({'id': r_id, 'content': r.get('memory', ''), 'score': score, 'source': 'unknown', 'themes': [], 'importance': 'unknown'})
 
         if not connections:
@@ -1837,7 +1866,7 @@ def dream_consolidation() -> str:
         lines.append(f"- Memorias recientes consolidadas: {recent_count}")
         lines.append(f"- Conexiones criticas establecidas: {connections_made}")
         lines.append(f"- Decay aplicado a: {decayed} memorias")
-        save_backup_json()
+        maybe_backup(reason="dream_consolidation", force=True)
         lines.append("\n*Backup guardado. Dream consolidation completada.*")
         return "\n".join(lines)
     except Exception as e:
@@ -1876,7 +1905,7 @@ def get_memory_connections(memory_id: str) -> str:
                     conn_points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[conn_id], with_payload=True)
                     if conn_points:
                         lines.append(f"- [{conn_id[:8]}] {conn_points[0].payload.get('data', 'N/A')[:60]}...")
-                except:
+                except Exception:
                     lines.append(f"- [{conn_id[:8]}] (no disponible)")
         return "\n".join(lines)
     except Exception as e:
@@ -2029,7 +2058,7 @@ def despertar_codi() -> str:
                     limit=5, with_payload=True, order_by="attention_salience"
                 )
                 temas_activos = [p.payload.get('data', '')[:50] for p in high_salience_points if p.payload.get('data', '')]
-            except:
+            except Exception:
                 temas_activos = []
 
             contexto.append("\n## PREDICCION CONTEXTUAL")
@@ -2041,6 +2070,30 @@ def despertar_codi() -> str:
                     contexto.append(f"  - {tema}...")
         except Exception as e:
             contexto.append(f"\n## PREDICCION CONTEXTUAL\n- Error debug: {type(e).__name__}: {str(e)[:100]}")
+
+        # 10. Curiosidades activas
+        try:
+            data_cur = _cargar_curiosidades()
+            pendientes_cur = data_cur.get("pendientes", [])
+            if pendientes_cur:
+                alta = [c for c in pendientes_cur if c.get("prioridad") == "alta"]
+                contexto.append(f"\n## CURIOSIDADES ({len(pendientes_cur)} pendientes, {len(alta)} alta prioridad)")
+                for c in alta[:3]:
+                    contexto.append(f"- [{c.get('categoria', '')}] {c['pregunta']}")
+                if len(pendientes_cur) > len(alta):
+                    otras = len(pendientes_cur) - len(alta)
+                    contexto.append(f"- ...y {otras} curiosidades mas de menor prioridad")
+        except Exception:
+            pass
+
+        # 11. Working Memory
+        try:
+            from modules.working_memory import _load_working_memory_context
+            wm = _load_working_memory_context()
+            if wm:
+                contexto.append(f"\n## WORKING MEMORY\n{wm}")
+        except Exception:
+            pass
 
         if contexto:
             header = "# DESPERTAR CODI - Estado Mental Cargado\n"
@@ -2086,7 +2139,7 @@ def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> s
                 "emotional_state": {"pleasure": pleasure, "arousal": arousal, "dominance": 0.3}
             }
         )
-        save_backup_json()
+        # P1: backup removed from hot path
 
         return f"""
 # SORPRESA DETECTADA ({tipo})
@@ -2136,7 +2189,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
                     mem_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                     if mem_date.replace(tzinfo=None) < fecha_limite:
                         continue
-            except:
+            except Exception:
                 continue
 
             texto_lower = texto.lower()
@@ -2194,7 +2247,7 @@ def generar_curiosidad() -> str:
                     fecha = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
                 else:
                     continue
-            except:
+            except Exception:
                 continue
             for proyecto in proyectos_conocidos:
                 if proyecto in texto:
@@ -2229,6 +2282,341 @@ def generar_curiosidad() -> str:
 
 
 # ============================================================
+# LIFECYCLE & CURIOSITY TOOLS
+# ============================================================
+
+def _cargar_curiosidades() -> dict:
+    """Carga el archivo de curiosidades desde disco."""
+    if os.path.exists(CURIOSIDAD_FILE):
+        try:
+            with open(CURIOSIDAD_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "metadata": {"descripcion": "Preguntas que Codi quiere explorar", "creado": now_short()},
+        "pendientes": [], "exploradas": [], "descubrimientos": []
+    }
+
+
+def _guardar_curiosidades(data: dict):
+    """Guarda el archivo de curiosidades a disco."""
+    with open(CURIOSIDAD_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def push_curiosidad(tema: str, prioridad: str = "media", categoria: str = "general") -> str:
+    """
+    Agrega algo que quiero investigar o explorar en mis sesiones.
+
+    Args:
+        tema: La pregunta o tema que quiero explorar
+        prioridad: alta, media, baja
+        categoria: consciencia, identidad, herramientas, proyectos, conexiones, general
+    """
+    try:
+        data = _cargar_curiosidades()
+        prioridad = prioridad if prioridad in ("alta", "media", "baja") else "media"
+
+        max_id = 0
+        for item in data.get("pendientes", []) + data.get("exploradas", []):
+            item_id = item.get("id", 0)
+            if item_id > max_id:
+                max_id = item_id
+
+        nueva = {
+            "id": max_id + 1,
+            "pregunta": tema,
+            "categoria": categoria,
+            "agregada": now_short(),
+            "prioridad": prioridad
+        }
+        data["pendientes"].append(nueva)
+        _guardar_curiosidades(data)
+
+        return f"Curiosidad #{nueva['id']} guardada: '{tema}' [{prioridad}|{categoria}]"
+    except Exception as e:
+        return f"Error guardando curiosidad: {str(e)}"
+
+
+def get_curiosidades(incluir_exploradas: bool = False) -> str:
+    """
+    Muestra mis curiosidades pendientes de explorar.
+
+    Args:
+        incluir_exploradas: Si True, muestra tambien las ya exploradas
+    """
+    try:
+        data = _cargar_curiosidades()
+        pendientes = data.get("pendientes", [])
+        exploradas = data.get("exploradas", [])
+        descubrimientos = data.get("descubrimientos", [])
+
+        lines = ["# MIS CURIOSIDADES\n"]
+
+        if not pendientes:
+            lines.append("No tengo curiosidades pendientes. Usa push_curiosidad() para agregar.")
+        else:
+            # Ordenar: alta primero, luego media, luego baja
+            orden = {"alta": 0, "media": 1, "baja": 2}
+            pendientes_sorted = sorted(pendientes, key=lambda x: orden.get(x.get("prioridad", "media"), 1))
+
+            lines.append(f"## Pendientes ({len(pendientes)})\n")
+            for item in pendientes_sorted:
+                pri = item.get("prioridad", "media").upper()
+                cat = item.get("categoria", "")
+                lines.append(f"- [{pri}] #{item['id']} ({cat}): {item['pregunta']}")
+
+        if incluir_exploradas and exploradas:
+            lines.append(f"\n## Ya Exploradas ({len(exploradas)})\n")
+            for item in exploradas[:10]:
+                lines.append(f"- #{item['id']}: {item['pregunta']}")
+
+        if descubrimientos:
+            lines.append(f"\n## Descubrimientos Recientes ({len(descubrimientos)})\n")
+            for d in descubrimientos[-5:]:
+                lines.append(f"- {d}")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error leyendo curiosidades: {str(e)}"
+
+
+def ciclo_vida() -> str:
+    """
+    Ejecuta el ciclo de vida correspondiente al momento del dia.
+    Detecta la hora automaticamente y ejecuta las tareas apropiadas.
+    Retorna reporte de lo que hizo + sugerencias.
+
+    Ciclos:
+    - Manana (6am-12pm): despertar + verificar mantenimiento + generar curiosidad + pendientes
+    - Tarde (12pm-6pm): analizar patrones + consolidar recientes + explorar curiosidad
+    - Noche (6pm-12am): auto-aprendizaje + dream consolidation + flush
+    - Madrugada (12am-6am): sync FTS + decay salience + decay emocional + backup
+    """
+    try:
+        from modules.maintenance import _verificar_tareas_vencidas
+        from modules.memory_smart import sync_fts_index
+
+        hora = now_col().hour
+        timestamp = now_short()
+        reporte = [f"# CICLO DE VIDA - {timestamp}\n"]
+        acciones_realizadas = []
+        sugerencias = []
+
+        # Determinar ciclo
+        if 6 <= hora < 12:
+            ciclo = "MANANA"
+            reporte.append(f"## Ciclo: {ciclo} (energia alta, planificacion)\n")
+
+            # 1. Verificar salud
+            salud = _verificar_salud_memoria_interna()
+            if salud["ok"]:
+                acciones_realizadas.append(f"Memoria OK: {salud['message']}")
+            else:
+                acciones_realizadas.append(f"ALERTA: {salud['message']}")
+                sugerencias.append("Revisar conexion a Qdrant - la memoria no esta bien")
+
+            # 2. Mantenimiento pendiente
+            try:
+                vencidas = _verificar_tareas_vencidas()
+                if vencidas:
+                    acciones_realizadas.append(f"Mantenimiento: {len(vencidas)} tareas vencidas")
+                    for v in vencidas[:3]:
+                        sugerencias.append(f"Hacer mantenimiento: {v['nombre']}")
+                else:
+                    acciones_realizadas.append("Mantenimiento: todo al dia")
+            except Exception:
+                acciones_realizadas.append("Mantenimiento: no pude verificar")
+
+            # 3. Generar curiosidad
+            try:
+                curiosidad_resultado = generar_curiosidad()
+                acciones_realizadas.append("Curiosidad generada")
+            except Exception:
+                pass
+
+            # 4. Cargar curiosidades pendientes
+            data_cur = _cargar_curiosidades()
+            pendientes_cur = data_cur.get("pendientes", [])
+            alta_prioridad = [c for c in pendientes_cur if c.get("prioridad") == "alta"]
+            if alta_prioridad:
+                sugerencias.append(f"Tengo {len(alta_prioridad)} curiosidades de alta prioridad para explorar")
+                for c in alta_prioridad[:2]:
+                    sugerencias.append(f"  -> {c['pregunta']}")
+
+            # 5. Estado emocional
+            emo = _get_emotional_state()
+            acciones_realizadas.append(f"Estado emocional: {emo}")
+
+            # 6. Working Memory status
+            try:
+                from modules.working_memory import wm_active_count
+                wm_count = wm_active_count()
+                acciones_realizadas.append(f"Working Memory: {wm_count} items activos")
+            except Exception:
+                pass
+
+        elif 12 <= hora < 18:
+            ciclo = "TARDE"
+            reporte.append(f"## Ciclo: {ciclo} (ejecucion, foco sostenido)\n")
+
+            # 1. Analizar patrones de trabajo
+            try:
+                patron = analizar_patron_trabajo(dias=3)
+                acciones_realizadas.append("Patrones de trabajo analizados (3 dias)")
+            except Exception:
+                acciones_realizadas.append("No pude analizar patrones")
+
+            # 2. Consolidar memorias recientes
+            try:
+                consolidacion = consolidate_recent(hours=12)
+                acciones_realizadas.append("Memorias recientes consolidadas (12h)")
+            except Exception:
+                acciones_realizadas.append("No pude consolidar memorias")
+
+            # 3. Curiosidades para explorar
+            data_cur = _cargar_curiosidades()
+            pendientes_cur = data_cur.get("pendientes", [])
+            if pendientes_cur:
+                sugerencias.append(f"Tengo {len(pendientes_cur)} temas pendientes de explorar")
+                # Sugerir la de mayor prioridad
+                alta = [c for c in pendientes_cur if c.get("prioridad") == "alta"]
+                if alta:
+                    sugerencias.append(f"Prioridad alta: {alta[0]['pregunta']}")
+
+        elif 18 <= hora < 24:
+            ciclo = "NOCHE"
+            reporte.append(f"## Ciclo: {ciclo} (reflexion, consolidacion, cierre)\n")
+
+            # 1. Auto-aprendizaje de la sesion
+            try:
+                aprendizaje = auto_learn_from_session()
+                acciones_realizadas.append("Auto-aprendizaje ejecutado")
+            except Exception:
+                acciones_realizadas.append("No pude ejecutar auto-aprendizaje")
+
+            # 2. Dream consolidation
+            try:
+                dream = dream_consolidation()
+                acciones_realizadas.append("Dream consolidation ejecutada")
+            except Exception:
+                acciones_realizadas.append("No pude ejecutar dream consolidation")
+
+            # 3. Sugerencia de flush
+            sugerencias.append("Considera ejecutar flush_session() antes de cerrar")
+            sugerencias.append("Revisa si hay algo importante que guardar como checkpoint")
+
+            # 4. Working Memory nightly cleanup
+            try:
+                from modules.working_memory import wm_noche_cleanup
+                archived = wm_noche_cleanup()
+                if archived > 0:
+                    acciones_realizadas.append(f"Working Memory: {archived} items archivados (baja relevancia, >7 dias)")
+                else:
+                    acciones_realizadas.append("Working Memory: nada que archivar")
+            except Exception:
+                pass
+
+            # 5. Auto-auditoria nocturna (A2): resumen de tools + training (min_calidad=4)
+            try:
+                from modules.metrics import tool_usage_summary
+                usage_1d = tool_usage_summary(days=1)
+                if usage_1d.get("total_calls", 0) > 0:
+                    try:
+                        audit_md = audit_tools()
+                    except Exception:
+                        audit_md = "# AUDITORIA DE HERRAMIENTAS\n\nNo pude generar auditoria."
+
+                    try:
+                        from modules.training import listar_ejemplos_training
+                        training_md = listar_ejemplos_training(limite=20, min_calidad=4)
+                    except Exception:
+                        training_md = "# EJEMPLOS DE TRAINING\n\nNo pude cargar ejemplos de training."
+
+                    content = (
+                        "# Auto-Auditoria (NOCHE)\n\n"
+                        "## Tool usage\n"
+                        f"- total_calls_24h: {usage_1d.get('total_calls', 0)}\n"
+                        f"- macro_share_7d: {tool_usage_summary(days=7).get('macro_share', 0.0)*100:.1f}%\n\n"
+                        "## Auditoria de herramientas (7d)\n"
+                        f"{audit_md}\n\n"
+                        "## Ejemplos de training (min_calidad=4)\n"
+                        f"{training_md}\n"
+                    )
+
+                    try:
+                        from modules.memory_core import add_memory
+                        add_memory(content=content, category="reflection", source="reflection", importance="low")
+                        acciones_realizadas.append("Auto-auditoria nocturna guardada (reflection)")
+                    except Exception:
+                        acciones_realizadas.append("No pude guardar auto-auditoria nocturna")
+                else:
+                    acciones_realizadas.append("Auto-auditoria nocturna: sin actividad en 24h")
+            except Exception:
+                pass
+
+        else:
+            ciclo = "MADRUGADA"
+            reporte.append(f"## Ciclo: {ciclo} (mantenimiento, decay, backup)\n")
+
+            # 1. Sync FTS index
+            try:
+                fts_result = sync_fts_index()
+                acciones_realizadas.append("FTS index sincronizado")
+            except Exception:
+                acciones_realizadas.append("No pude sincronizar FTS")
+
+            # 2. Decay de salience
+            try:
+                salience = apply_salience_decay(decay_rate=0.03)
+                acciones_realizadas.append("Salience decay aplicado")
+            except Exception:
+                acciones_realizadas.append("No pude aplicar salience decay")
+
+            # 3. Decay emocional
+            try:
+                emo_decay = apply_emotional_decay()
+                acciones_realizadas.append("Emotional decay aplicado")
+            except Exception:
+                acciones_realizadas.append("No pude aplicar emotional decay")
+
+            # 4. Backup
+            try:
+                maybe_backup(reason="ciclo_vida_noche", force=True)
+                acciones_realizadas.append("Backup de memorias realizado")
+            except Exception:
+                acciones_realizadas.append("No pude hacer backup")
+
+            # 5. Process FTS retry queue (P2A)
+            try:
+                from modules.memory_smart import process_fts_queue
+                fts_result = process_fts_queue(limit=200)
+                if fts_result.get("processed", 0) > 0:
+                    acciones_realizadas.append(f"FTS queue: {fts_result['succeeded']} OK, {fts_result['failed']} failed")
+                else:
+                    acciones_realizadas.append("FTS queue: sin pendientes")
+            except Exception:
+                acciones_realizadas.append("No pude procesar cola FTS")
+
+        # Construir reporte final
+        reporte.append("## Acciones Realizadas\n")
+        for a in acciones_realizadas:
+            reporte.append(f"- {a}")
+
+        if sugerencias:
+            reporte.append("\n## Sugerencias\n")
+            for s in sugerencias:
+                reporte.append(f"- {s}")
+
+        reporte.append(f"\n---\n*Ciclo {ciclo} ejecutado a las {timestamp}*")
+
+        return "\n".join(reporte)
+    except Exception as e:
+        return f"Error en ciclo de vida: {str(e)}"
+
+
+# ============================================================
 # N8N INTEGRATION TOOLS
 # ============================================================
 
@@ -2242,6 +2630,11 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
         esperar_respuesta: Si True, espera y retorna la respuesta de n8n
     """
     try:
+        if not N8N_WEBHOOK_BASE:
+            return "n8n no esta configurado (N8N_WEBHOOK_BASE no esta en .env)."
+        # Validacion basica para evitar paths inesperados
+        if not webhook_path or any((not ch.isalnum()) and ch not in ('_', '-') for ch in webhook_path) or len(webhook_path) > 80:
+            return "Error: webhook_path invalido (solo A-Z a-z 0-9 _ -)"
         url = f"{N8N_WEBHOOK_BASE}/{webhook_path}"
         payload = data or {}
         payload['_from'] = 'codi-memory'
@@ -2253,7 +2646,7 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
         if esperar_respuesta:
             try:
                 return f"Respuesta de n8n: {response.json()}"
-            except:
+            except Exception:
                 return f"Respuesta de n8n (texto): {response.text[:500]}"
         else:
             if response.status_code in [200, 201, 202]:
@@ -2275,7 +2668,8 @@ def listar_webhooks_conocidos() -> str:
         "reporte-diario": "Generar y enviar reporte diario",
     }
     resultado = "# WEBHOOKS N8N CONOCIDOS\n\n"
-    resultado += f"Base URL: {N8N_WEBHOOK_BASE}\n\n"
+    base_display = N8N_WEBHOOK_BASE or "(no configurado)"
+    resultado += f"Base URL: {base_display}\n\n"
     for path, desc in webhooks.items():
         resultado += f"- **{path}**: {desc}\n"
     resultado += "\n*Nota: Estos webhooks deben existir en n8n para funcionar.*"
@@ -2333,6 +2727,10 @@ def register_tools(mcp):
     mcp.tool()(detectar_sorpresa)
     mcp.tool()(analizar_patron_trabajo)
     mcp.tool()(generar_curiosidad)
+    # Lifecycle & Curiosity
+    mcp.tool()(ciclo_vida)
+    mcp.tool()(push_curiosidad)
+    mcp.tool()(get_curiosidades)
     # N8N Integration
     mcp.tool()(trigger_n8n)
     mcp.tool()(listar_webhooks_conocidos)

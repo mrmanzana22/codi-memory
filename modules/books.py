@@ -397,7 +397,7 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
                 try:
                     qdrant.set_payload(
                         collection_name=COLLECTION_NAME,
-                        payload={"payload": {"siguiente_paso": siguiente}},
+                        payload={"siguiente_paso": siguiente},
                         points=[libro_data['memory_id']]
                     )
                 except Exception as e:

@@ -2,8 +2,8 @@ import os
 import json
 from datetime import datetime
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR, now_short, now_iso, now_col
-from modules.utils import enrich_with_ownership, save_backup_json, export_memories_to_files, append_to_daily_journal
-from modules.memory_smart import add_memory_smart
+from modules.utils import enrich_with_ownership, maybe_backup, export_memories_to_files, append_to_daily_journal
+from modules.memory_smart import add_memory_smart, process_fts_queue
 
 
 def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> str:
@@ -59,7 +59,13 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
                         emotional_valence=valence_map.get(momento, 'neutral')
                     )
 
-        save_backup_json()
+        maybe_backup(reason="checkpoint", force=True)
+
+        # Process pending FTS retry queue (P2A)
+        try:
+            process_fts_queue(limit=50)
+        except Exception:
+            pass
 
         # Hook: escribir en journal diario
         try:
@@ -133,10 +139,20 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
 
     # 5. Hacer backup JSON
     try:
-        save_backup_json()
+        maybe_backup(reason="flush_session", force=True)
         resultados.append("Backup: OK")
     except Exception as e:
         resultados.append(f"Backup: ERROR - {e}")
+
+    # 6. Process pending FTS retry queue (P2A)
+    try:
+        fts_result = process_fts_queue(limit=100)
+        if fts_result.get("processed", 0) > 0:
+            resultados.append(f"FTS queue: {fts_result['succeeded']} OK, {fts_result['failed']} failed")
+        else:
+            resultados.append("FTS queue: sin pendientes")
+    except Exception:
+        resultados.append("FTS queue: error procesando")
 
     return f"FLUSH COMPLETADO\n" + "\n".join(resultados)
 

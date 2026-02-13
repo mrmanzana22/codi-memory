@@ -24,6 +24,7 @@ warnings.filterwarnings("ignore")
 import os
 # Import MCP server and shared config from modules
 from modules.config import mcp, memory, qdrant, USER_ID, COLLECTION_NAME, now_iso
+from modules import metrics
 
 # Import all modules with register_tools
 from modules import triggers
@@ -34,6 +35,15 @@ from modules import training
 from modules import maintenance
 from modules import flush
 from modules import consciousness
+from modules import working_memory
+from modules import interface
+from modules import spreading
+from modules import consolidation
+
+# ============================================================
+# INSTRUMENTATION (A1) - must run BEFORE register_tools()
+# ============================================================
+metrics.instrument_mcp(mcp)
 
 # ============================================================
 # REGISTER ALL TOOLS
@@ -47,6 +57,10 @@ training.register_tools(mcp)
 maintenance.register_tools(mcp)
 flush.register_tools(mcp)
 consciousness.register_tools(mcp)
+working_memory.register_tools(mcp)
+interface.register_tools(mcp)
+spreading.register_tools(mcp)
+consolidation.register_consolidation_tools(mcp)
 
 print(f"[codi-memory] All modules loaded. Tools registered.")
 
@@ -66,14 +80,96 @@ if __name__ == "__main__":
         from starlette.responses import JSONResponse
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         from modules.maintenance import _cargar_recordatorios, _guardar_recordatorios
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.middleware import Middleware
+        import json
+        import time
+
+        # ============================================================
+        # BASIC HTTP SECURITY (API KEY + RATE LIMIT + SIZE LIMIT)
+        # ============================================================
+        CODI_API_KEY = os.getenv("CODI_API_KEY", "").strip()
+        MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", "262144"))  # 256KB
+        RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
+
+        _rate_window = {}  # ip -> (window_start_epoch, count)
+
+        def _client_ip(request) -> str:
+            try:
+                return request.client.host if request.client else "unknown"
+            except Exception:
+                return "unknown"
+
+        class SecurityMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                path = request.url.path
+
+                # Always allow health checks
+                if path == "/health":
+                    return await call_next(request)
+
+                ip = _client_ip(request)
+
+                # Authentication:
+                # - If CODI_API_KEY is set, require it.
+                # - If not set, allow only localhost (safer default for personal use).
+                if CODI_API_KEY:
+                    token = request.headers.get("x-api-key", "")
+                    auth = request.headers.get("authorization", "")
+                    if not token and auth.lower().startswith("bearer "):
+                        token = auth.split(" ", 1)[1].strip()
+                    if token != CODI_API_KEY:
+                        return JSONResponse({"error": "unauthorized"}, status_code=401)
+                else:
+                    if ip not in ("127.0.0.1", "::1"):
+                        return JSONResponse({"error": "server not configured (CODI_API_KEY missing)"}, status_code=503)
+
+                # Rate limiting per IP (rolling 60s window)
+                now = int(time.time())
+                window_start, count = _rate_window.get(ip, (now, 0))
+                if now - window_start >= 60:
+                    window_start, count = now, 0
+                count += 1
+                _rate_window[ip] = (window_start, count)
+                if count > RATE_LIMIT_PER_MIN:
+                    return JSONResponse({"error": "rate limited"}, status_code=429)
+
+                # Body size limit (best-effort using Content-Length)
+                if request.method in ("POST", "PUT", "PATCH"):
+                    cl = request.headers.get("content-length")
+                    if cl:
+                        try:
+                            if int(cl) > MAX_BODY_BYTES:
+                                return JSONResponse({"error": "payload too large"}, status_code=413)
+                        except Exception:
+                            pass
+
+                return await call_next(request)
+
 
         # Endpoint para recibir recordatorios de n8n u otros sistemas
         async def recibir_recordatorio(request):
             try:
-                body = await request.json()
+                raw = await request.body()
+                if raw and len(raw) > MAX_BODY_BYTES:
+                    return JSONResponse({"error": "payload too large"}, status_code=413)
+                try:
+                    body = json.loads(raw.decode("utf-8") if raw else "{}")
+                except Exception:
+                    return JSONResponse({"error": "json invalido"}, status_code=400)
+
                 mensaje = body.get('mensaje', '')
                 prioridad = body.get('prioridad', 'normal')
                 origen = body.get('origen', 'externo')
+
+                if not isinstance(mensaje, str) or not mensaje.strip():
+                    return JSONResponse({"error": "mensaje requerido"}, status_code=400)
+                if len(mensaje) > 2000:
+                    return JSONResponse({"error": "mensaje demasiado largo"}, status_code=413)
+                if prioridad not in ("baja", "media", "alta", "normal"):
+                    return JSONResponse({"error": "prioridad invalida"}, status_code=400)
+                if not isinstance(origen, str) or len(origen) > 64:
+                    return JSONResponse({"error": "origen invalido"}, status_code=400)
 
                 if not mensaje:
                     return JSONResponse({"error": "mensaje requerido"}, status_code=400)
@@ -178,11 +274,29 @@ if __name__ == "__main__":
         async def api_memory(request):
             """POST /api/memory - Guarda una nueva memoria"""
             try:
-                body = await request.json()
+                raw = await request.body()
+                if raw and len(raw) > MAX_BODY_BYTES:
+                    return JSONResponse({"error": "payload too large"}, status_code=413)
+                try:
+                    body = json.loads(raw.decode("utf-8") if raw else "{}")
+                except Exception:
+                    return JSONResponse({"error": "json invalido"}, status_code=400)
+
                 content = body.get('content', '')
                 category = body.get('category', 'general')
                 source = body.get('source', 'experienced')
                 importance = body.get('importance', 'medium')
+
+                if not isinstance(content, str):
+                    return JSONResponse({"error": "content debe ser string"}, status_code=400)
+                if len(content) > 10000:
+                    return JSONResponse({"error": "content demasiado largo"}, status_code=413)
+                if not isinstance(category, str) or len(category) > 64:
+                    return JSONResponse({"error": "category invalida"}, status_code=400)
+                if not isinstance(source, str) or len(source) > 32:
+                    return JSONResponse({"error": "source invalida"}, status_code=400)
+                if not isinstance(importance, str) or len(importance) > 32:
+                    return JSONResponse({"error": "importance invalida"}, status_code=400)
 
                 if not content:
                     return JSONResponse({"error": "content requerido"}, status_code=400)
@@ -212,7 +326,10 @@ if __name__ == "__main__":
             """GET /api/search?q=query&limit=5 - Busca memorias"""
             try:
                 query = request.query_params.get('q', '')
+                if len(query) > 512:
+                    return JSONResponse({'error': 'query demasiado largo'}, status_code=413)
                 limit = int(request.query_params.get('limit', 5))
+                limit = max(1, min(20, limit))
 
                 if not query:
                     return JSONResponse({"error": "q parameter requerido"}, status_code=400)
@@ -248,7 +365,7 @@ if __name__ == "__main__":
             Route("/recordatorio", recibir_recordatorio, methods=["POST"]),
             Route("/health", health, methods=["GET"]),
             Mount("/", app=mcp.sse_app())
-        ])
+        ], middleware=[Middleware(SecurityMiddleware)])
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()

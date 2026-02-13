@@ -53,6 +53,18 @@ TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
 FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
 JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
+CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
+
+# Working Memory limits
+WORKING_MEMORY_MAX_ACTIVE = 30
+
+# Spreading Activation (Fase 3)
+SPREAD_DEFAULT_FACTOR = 0.7
+SPREAD_DEFAULT_DEPTH = 2
+SPREAD_MIN_ACTIVATION = 0.05
+SPREAD_MAX_NEIGHBORS = 15
+SPREAD_SALIENCE_CAP = 1.0
+SPREAD_SALIENCE_FLOOR = 0.1
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -60,8 +72,44 @@ os.makedirs(DATA_DIR, exist_ok=True)
 load_dotenv(ENV_PATH)
 
 USER_ID = os.getenv("USER_ID", "hare")
-QDRANT_URL = "https://memorycodi-codi.lx6zon.easypanel.host:443"
-COLLECTION_NAME = "codi_memories"
+
+# Backup policy (P1) - must be after load_dotenv
+BACKUP_POLICY = os.getenv("BACKUP_POLICY", "on_demand").strip()  # "on_demand" | "always"
+BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))  # 10 min debounce
+BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "20"))  # rotation cap
+QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
+COLLECTION_NAME = "codi_memories"          # Episodic store (existing)
+SEMANTIC_COLLECTION = "codi_semantic"       # Semantic store (Phase 1)
+
+# ============================================================
+# PHASE 1: CONSOLIDATION PARAMETERS
+# ============================================================
+CONSOLIDATION_CLUSTER_MIN_SIZE = 3          # Min episodes to form a pattern
+CONSOLIDATION_SIMILARITY_THRESHOLD = 0.65   # Cosine sim threshold for clustering
+CONSOLIDATION_SEMANTIC_DEDUP_THRESHOLD = 0.85  # Dedup threshold for semantic facts
+CONSOLIDATION_MAX_EPISODES_PER_RUN = 200    # Cap per consolidation run
+
+# ============================================================
+# PHASE 1: RECONSOLIDATION PARAMETERS
+# ============================================================
+RECONSOLIDATION_WINDOW_HOURS = 1.0          # Lability window duration
+RECONSOLIDATION_PE_THRESHOLD = 0.3          # Min prediction error to trigger
+RECONSOLIDATION_STRENGTH_FLOOR = 0.15       # Too weak to reconsolidate
+RECONSOLIDATION_STRENGTH_CEILING = 0.90     # Too strong to reconsolidate
+RECONSOLIDATION_MAX_BLEND = 0.3             # Max 30% new content blends in
+
+# ============================================================
+# PHASE 1: DIFFERENTIAL DECAY PARAMETERS
+# ============================================================
+EPISODIC_DECAY_BASE = 0.5                   # Standard Anderson decay
+EPISODIC_DECAY_CRITICAL = 0.2               # 2.5x slower for critical
+EPISODIC_DECAY_HIGH = 0.35                  # 1.4x slower for high importance
+EPISODIC_DECAY_EMOTIONAL = 0.25             # 2x slower for high arousal
+SEMANTIC_DECAY_BASE = 0.15                  # 3.3x slower than episodic
+SEMANTIC_DECAY_CRITICAL = 0.05              # Near permanent
+SEMANTIC_EVIDENCE_BOOST = 0.02              # Each evidence reduces d by 0.02
+EPISODIC_PRUNE_THRESHOLD = 0.05             # Below this activation = prune candidate
+EPISODIC_PRUNE_MIN_AGE_DAYS = 30            # Don't prune anything younger
 
 # Mapeo de categoría a archivo markdown
 CATEGORY_FILE_MAP = {
@@ -79,34 +127,16 @@ RELATIONSHIP_KEYWORDS = ['andre', 'harec', 'hijo', 'esposa', 'familia', 'papa', 
 # AUTO-CLEANUP: Matar instancias anteriores del MCP
 # ============================================================
 
-def cleanup_old_instance():
-    """Mata cualquier instancia previa del MCP antes de iniciar."""
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE, 'r') as f:
-                old_pid = int(f.read().strip())
-            import subprocess
-            result = subprocess.run(
-                ["ps", "-p", str(old_pid), "-o", "command="],
-                capture_output=True, text=True, timeout=5
-            )
-            if "server.py" in result.stdout:
-                os.kill(old_pid, signal.SIGTERM)
-                print(f"[codi-memory] Instancia anterior (PID {old_pid}) terminada")
-            else:
-                print(f"[codi-memory] PID {old_pid} stale (proceso ya no es server.py), limpiando")
-        except (ProcessLookupError, ValueError, PermissionError, Exception):
-            pass
-        try:
-            os.remove(PID_FILE)
-        except Exception:
-            pass
+def register_pid():
+    """Registra el PID actual para debugging. No mata instancias anteriores."""
+    try:
+        with open(PID_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        print(f"[codi-memory] Instancia iniciada (PID {os.getpid()})")
+    except Exception:
+        pass
 
-    with open(PID_FILE, 'w') as f:
-        f.write(str(os.getpid()))
-    print(f"[codi-memory] Nueva instancia iniciada (PID {os.getpid()})")
-
-cleanup_old_instance()
+register_pid()
 
 # ============================================================
 # MEM0 CONFIGURATION
@@ -164,6 +194,11 @@ def get_qdrant():
     """Lazy init de Qdrant."""
     global _qdrant
     if _qdrant is None:
+        if not QDRANT_URL:
+            raise RuntimeError(
+                "QDRANT_URL no esta configurada. "
+                "Configurala en .env (ej: QDRANT_URL=https://<host>:443)."
+            )
         try:
             _qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
             print("[codi-memory] Qdrant conectado OK")
