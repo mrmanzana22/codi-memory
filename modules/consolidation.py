@@ -782,30 +782,112 @@ CORRECTION_PATTERNS = [
 ]
 
 
+NEGATION_MARKERS = [
+    "no ", "ya no", "no es", "nunca", "ni ", "tampoco",
+    "not ", "never", "don't", "doesn't", "isn't", "won't",
+    "sin ", "ninguno", "nada",
+]
+
+
+def _extract_key_entities(text: str) -> set:
+    """Extract key entities (nouns/proper names) from text.
+
+    Lightweight heuristic: words that are capitalized (not sentence-start),
+    or words longer than 4 chars that aren't common stopwords.
+    Based on: Kumaran & Maguire 2007 entity-overlap for mismatch detection.
+    """
+    stopwords = {
+        "para", "como", "este", "esta", "estos", "estas", "pero", "porque",
+        "cuando", "donde", "tiene", "hacer", "puede", "desde", "hasta",
+        "that", "this", "with", "from", "have", "been", "they", "their",
+        "which", "about", "would", "there", "what", "more", "some",
+        "also", "other", "just", "should", "could",
+    }
+    words = text.replace(",", " ").replace(".", " ").replace(":", " ").split()
+    entities = set()
+    for w in words:
+        clean = w.strip().lower()
+        if len(clean) > 4 and clean not in stopwords:
+            entities.add(clean)
+    return entities
+
+
 def detect_contradiction(memory_text: str, context: str) -> dict:
     """Detect contradiction between a memory and current context.
 
-    Lightweight method (no LLM):
-    1. Look for explicit correction patterns
-    2. Score prediction error based on signal count
+    Kumaran & Maguire 2006/2007: CA1 hippocampal comparator uses
+    multiple channels for match-mismatch detection, not just one signal.
+
+    3 channels (weighted sum):
+      Canal 1 - Keywords (0.3): Explicit correction patterns
+      Canal 2 - Semantic distance + entity overlap (0.4): High distance
+                WITH shared entities suggests genuine contradiction
+      Canal 3 - Negation detector (0.3): Same entities + logical inversion
 
     Returns:
-        {prediction_error: float, detail: str|None}
+        {prediction_error: float, detail: str|None, channels: dict}
     """
-    if not context:
-        return {"prediction_error": 0.0, "detail": None}
+    if not context or not memory_text:
+        return {"prediction_error": 0.0, "detail": None, "channels": {}}
 
     context_lower = context.lower()
+    memory_lower = memory_text.lower()
+
+    # Canal 1: Keywords (existing CORRECTION_PATTERNS)
     signals = [p for p in CORRECTION_PATTERNS if p in context_lower]
+    canal1_score = min(1.0, len(signals) * 0.25) if signals else 0.0
 
-    if not signals:
-        return {"prediction_error": 0.0, "detail": None}
+    # Canal 2: Semantic distance + entity overlap
+    mem_entities = _extract_key_entities(memory_text)
+    ctx_entities = _extract_key_entities(context)
+    shared_entities = mem_entities & ctx_entities
+    entity_overlap = len(shared_entities) / max(1, min(len(mem_entities), len(ctx_entities)))
 
-    pe = min(1.0, len(signals) * 0.2 + 0.1)
-    return {
-        "prediction_error": pe,
-        "detail": f"Correction signals: {signals}"
+    # Semantic distance via embedding (lightweight: only if entities overlap)
+    semantic_dist = 0.0
+    if shared_entities and len(shared_entities) >= 1:
+        try:
+            mem_vec = _embed_text(memory_text[:500])
+            ctx_vec = _embed_text(context[:500])
+            cosine_sim = _cosine_similarity(mem_vec, ctx_vec)
+            semantic_dist = max(0.0, 1.0 - cosine_sim)
+        except Exception:
+            semantic_dist = 0.0
+
+    # High distance + entity overlap = contradiction signal
+    canal2_score = semantic_dist * entity_overlap if shared_entities else 0.0
+
+    # Canal 3: Negation detection
+    canal3_score = 0.0
+    if shared_entities:
+        mem_negations = sum(1 for n in NEGATION_MARKERS if n in memory_lower)
+        ctx_negations = sum(1 for n in NEGATION_MARKERS if n in context_lower)
+        # One has negation, other doesn't = logical inversion
+        if (mem_negations > 0) != (ctx_negations > 0):
+            canal3_score = min(1.0, entity_overlap * 1.5)
+
+    # Weighted sum
+    pe = canal1_score * 0.3 + canal2_score * 0.4 + canal3_score * 0.3
+
+    channels = {
+        "keywords": canal1_score,
+        "semantic_distance": canal2_score,
+        "negation": canal3_score,
+        "shared_entities": list(shared_entities)[:10],
     }
+
+    detail = None
+    if pe > 0.0:
+        parts = []
+        if canal1_score > 0:
+            parts.append(f"keywords={signals}")
+        if canal2_score > 0:
+            parts.append(f"semantic_dist={semantic_dist:.2f},overlap={entity_overlap:.2f}")
+        if canal3_score > 0:
+            parts.append(f"negation_inversion")
+        detail = f"PE channels: {', '.join(parts)}"
+
+    return {"prediction_error": pe, "detail": detail, "channels": channels}
 
 
 def check_reconsolidation(memory_id: str, memory_payload: dict,
@@ -890,24 +972,27 @@ def clear_expired_labile():
         pass
 
 
-def correct_memory(memory_id: str, correction: str) -> str:
+def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
     """Update a memory based on new evidence (reconsolidation).
 
-    Nader 2000: Recalled memories enter a labile state where they can be
-    updated by prediction errors. This is how brains correct false beliefs.
+    Nader 2000: The original trace is DESTROYED and re-synthesized.
+    Sevenster 2013: Prediction error is a prerequisite for reconsolidation.
 
     Pipeline:
       1. Resolve full ID
       2. Retrieve old payload from Qdrant
-      3. Log old content to reconsolidation_log
-      4. Adjust confidence (decrement by 0.1 for contradiction)
-      5. Append correction note to content
-      6. Update Qdrant payload
-      7. Emit RECONSOLIDATION_TRIGGERED event
+      3. Labile gate: verify memory is labile OR has PE (force bypasses)
+      4. Log old content to reconsolidation_log
+      5. Adjust confidence (decrement by 0.1 for contradiction)
+      6. Build new content, generate new embedding
+      7. Upsert full PointStruct (vector + payload) -- re-embed, not post-it
+      8. Update FTS5 index
+      9. Emit RECONSOLIDATION_TRIGGERED event
 
     Args:
         memory_id: ID (or prefix) of the memory to correct
         correction: The correct/updated information
+        force: If True, bypass labile gate (for human-initiated corrections)
 
     Returns:
         Summary of reconsolidation action
@@ -931,16 +1016,45 @@ def correct_memory(memory_id: str, correction: str) -> str:
     old_content = old_payload.get("data", "") or old_payload.get("memory", "")
     old_confidence = float(old_payload.get("confidence", old_payload.get("narrative_importance_score", 0.5)))
 
-    # 3. Log old content to reconsolidation_log
+    # 3. Labile gate (Sevenster 2013): PE is prerequisite, not just reactivation
+    actual_pe = 0.0
+    if not force:
+        is_labile = False
+        try:
+            conn = _consolidation_conn()
+            row = conn.execute(
+                "SELECT 1 FROM labile_memories WHERE memory_id = ? AND window_expires > ?",
+                (full_id, datetime.now().isoformat())
+            ).fetchone()
+            conn.close()
+            is_labile = row is not None
+        except Exception:
+            pass
+
+        if not is_labile:
+            # Not labile -- run inline PE check
+            pe_result = check_reconsolidation(
+                full_id, old_payload, correction
+            )
+            actual_pe = pe_result.get("prediction_error", 0.0)
+            if not pe_result.get("should_reconsolidate", False):
+                return (
+                    f"[reconsolidation] Memory {full_id[:8]} rejected: "
+                    f"not labile and PE={actual_pe:.2f} "
+                    f"below threshold. Use force=True for manual override."
+                )
+
+    # 4. Build new content: REPLACE old trace, don't concatenate (Nader 2000)
+    # Old content is preserved in reconsolidation_log for audit trail
+    new_content = correction
     try:
         conn = _consolidation_conn()
-        new_content = f"{old_content}\n[CORRECTED {now_iso()}]: {correction}"
         conn.execute("""
             INSERT INTO reconsolidation_log
             (memory_id, memory_type, action, prediction_error, memory_strength,
              old_content, new_content, blend_weight, trigger_context, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (full_id, "episodic", "correct_memory", 0.5, old_confidence,
+        """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
               old_content[:500], new_content[:500], RECONSOLIDATION_MAX_BLEND,
               correction[:200], now_iso()))
         conn.commit()
@@ -948,26 +1062,49 @@ def correct_memory(memory_id: str, correction: str) -> str:
     except Exception as e:
         print(f"[consolidation] WARNING: Could not log reconsolidation: {e}")
 
-    # 4. Adjust confidence (decrement by 0.1)
+    # 5. Adjust confidence (decrement by 0.1)
     new_confidence = max(0.0, old_confidence - 0.1)
 
-    # 5. Update Qdrant payload with corrected content
+    # 6. Re-embed: generate new vector for corrected content (Nader 2000)
     try:
-        update_payload = {
+        new_vector = _embed_text(new_content)
+    except Exception as e:
+        return f"[reconsolidation] Embedding error: {e}"
+
+    # 7. Upsert full PointStruct -- destroy and re-synthesize the trace
+    try:
+        updated_payload = dict(old_payload)
+        updated_payload.update({
             "data": new_content,
             "confidence": new_confidence,
             "reconsolidated_at": now_iso(),
             "reconsolidation_count": int(old_payload.get("reconsolidation_count", 0)) + 1,
-        }
-        qdrant.set_payload(
+        })
+        qdrant.upsert(
             collection_name=COLLECTION_NAME,
-            payload=update_payload,
-            points=[full_id],
+            points=[PointStruct(
+                id=full_id,
+                vector=new_vector,
+                payload=updated_payload,
+            )],
         )
     except Exception as e:
-        return f"[reconsolidation] Qdrant update error: {e}"
+        return f"[reconsolidation] Qdrant upsert error: {e}"
 
-    # 6. Emit event
+    # 8. Update FTS5 index
+    try:
+        from modules.memory_smart import delete_memory_fts, index_memory_fts
+        delete_memory_fts(full_id)
+        index_memory_fts(
+            full_id, new_content,
+            category=old_payload.get("category", "general"),
+            source=old_payload.get("source", "experienced"),
+            importance=old_payload.get("narrative_importance", "medium"),
+        )
+    except Exception as e:
+        print(f"[consolidation] WARNING: FTS update failed: {e}")
+
+    # 9. Emit event
     try:
         from modules.events import event_bus, Events
         event_bus.emit(Events.RECONSOLIDATION_TRIGGERED, {
@@ -975,6 +1112,7 @@ def correct_memory(memory_id: str, correction: str) -> str:
             "action": "correct_memory",
             "old_confidence": old_confidence,
             "new_confidence": new_confidence,
+            "re_embedded": True,
         })
     except Exception:
         pass
@@ -982,7 +1120,7 @@ def correct_memory(memory_id: str, correction: str) -> str:
     return (
         f"[reconsolidation] Memory {full_id[:8]} corrected. "
         f"Confidence: {old_confidence:.2f} -> {new_confidence:.2f}. "
-        f"Correction appended and logged."
+        f"Vector re-embedded and FTS updated."
     )
 
 

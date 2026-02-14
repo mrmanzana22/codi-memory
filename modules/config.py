@@ -100,14 +100,17 @@ RECONSOLIDATION_MAX_BLEND = 0.3             # Max 30% new content blends in
 
 # ============================================================
 # PHASE 1: DIFFERENTIAL DECAY PARAMETERS
+# DEPRECATED (WIRING-5): Authoritative decay constants now live in
+# modules/activation.py (DECAY_EPISODIC, DECAY_SEMANTIC, etc.).
+# These are kept ONLY for backward compat; no code imports them.
 # ============================================================
-EPISODIC_DECAY_BASE = 0.5                   # Standard Anderson decay
-EPISODIC_DECAY_CRITICAL = 0.2               # 2.5x slower for critical
-EPISODIC_DECAY_HIGH = 0.35                  # 1.4x slower for high importance
-EPISODIC_DECAY_EMOTIONAL = 0.25             # 2x slower for high arousal
-SEMANTIC_DECAY_BASE = 0.15                  # 3.3x slower than episodic
-SEMANTIC_DECAY_CRITICAL = 0.05              # Near permanent
-SEMANTIC_EVIDENCE_BOOST = 0.02              # Each evidence reduces d by 0.02
+EPISODIC_DECAY_BASE = 0.5                   # DEPRECATED -> activation.py DECAY_EPISODIC=0.40
+EPISODIC_DECAY_CRITICAL = 0.2               # DEPRECATED -> activation.py DECAY_EPISODIC_CRITICAL=0.20
+EPISODIC_DECAY_HIGH = 0.35                  # DEPRECATED -> activation.py DECAY_EPISODIC_HIGH=0.30
+EPISODIC_DECAY_EMOTIONAL = 0.25             # DEPRECATED -> activation.py DECAY_EPISODIC_EMOTIONAL=0.25
+SEMANTIC_DECAY_BASE = 0.15                  # DEPRECATED -> activation.py DECAY_SEMANTIC=0.15
+SEMANTIC_DECAY_CRITICAL = 0.05              # DEPRECATED -> activation.py DECAY_SEMANTIC_MIN=0.05
+SEMANTIC_EVIDENCE_BOOST = 0.02              # DEPRECATED -> activation.py EVIDENCE_DECAY_REDUCTION=0.02
 EPISODIC_PRUNE_THRESHOLD = 0.05             # Below this activation = prune candidate
 EPISODIC_PRUNE_MIN_AGE_DAYS = 30            # Don't prune anything younger
 

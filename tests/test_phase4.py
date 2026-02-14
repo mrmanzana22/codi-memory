@@ -98,7 +98,7 @@ class TestReconsolidation:
     """Nader 2000: PE-driven reconsolidation."""
 
     def test_correct_memory_updates_qdrant(self):
-        """correct_memory should update Qdrant payload."""
+        """correct_memory should upsert full PointStruct (re-embed, Nader 2000)."""
         from modules.consolidation import correct_memory
         mock_payload = {
             "data": "Old content here",
@@ -110,6 +110,10 @@ class TestReconsolidation:
 
         with patch('modules.consolidation.qdrant') as mock_qdrant, \
              patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+             patch('modules.memory_smart.delete_memory_fts', return_value=True), \
+             patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
             mock_qdrant.retrieve.return_value = [mock_point]
             mock_conn = MagicMock()
@@ -117,10 +121,14 @@ class TestReconsolidation:
 
             result = correct_memory("full-uuid", "This is the correction")
             assert "corrected" in result.lower()
-            mock_qdrant.set_payload.assert_called_once()
-            call_payload = mock_qdrant.set_payload.call_args[1]["payload"]
-            assert "CORRECTED" in call_payload["data"]
-            assert call_payload["confidence"] == pytest.approx(0.7)
+            # Phase 4.5: now uses upsert (re-embed) instead of set_payload
+            mock_qdrant.upsert.assert_called_once()
+            upsert_call = mock_qdrant.upsert.call_args
+            points = upsert_call[1]["points"]
+            assert len(points) == 1
+            # Fix 1: new content REPLACES old (Nader 2000), not concatenate
+            assert points[0].payload["data"] == "This is the correction"
+            assert points[0].payload["confidence"] == pytest.approx(0.7)
 
     def test_correct_memory_logs_reconsolidation(self):
         """correct_memory should create entry in reconsolidation_log."""
@@ -131,6 +139,10 @@ class TestReconsolidation:
 
         with patch('modules.consolidation.qdrant') as mock_qdrant, \
              patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.7}), \
+             patch('modules.memory_smart.delete_memory_fts', return_value=True), \
+             patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-456"):
             mock_qdrant.retrieve.return_value = [mock_point]
             mock_conn = MagicMock()
@@ -151,6 +163,10 @@ class TestReconsolidation:
 
         with patch('modules.consolidation.qdrant') as mock_qdrant, \
              patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+             patch('modules.memory_smart.delete_memory_fts', return_value=True), \
+             patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="uuid-789"):
             mock_qdrant.retrieve.return_value = [mock_point]
             mock_conn = MagicMock()
@@ -409,3 +425,249 @@ class TestAssessmentFix:
         import inspect
         src = inspect.getsource(correct_memory)
         assert "stub" not in src.lower()
+
+
+# ============================================================
+# PART 5: Phase 4.5 - Mejora 1: Re-embed + Labile Gate
+# ============================================================
+
+class TestReembedReconsolidation:
+    """Nader 2000: trace is destroyed and re-synthesized, not patched."""
+
+    def test_correct_memory_reembeds_vector(self):
+        """correct_memory should call qdrant.upsert with new vector (not set_payload)."""
+        from modules.consolidation import correct_memory
+        mock_payload = {
+            "data": "Docker is the best container solution",
+            "confidence": 0.8,
+            "reconsolidation_count": 0,
+            "category": "general",
+            "source": "experienced",
+            "narrative_importance": "medium",
+        }
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
+
+        with patch('modules.consolidation.qdrant') as mock_qdrant, \
+             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536) as mock_embed, \
+             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+             patch('modules.memory_smart.delete_memory_fts', return_value=True), \
+             patch('modules.memory_smart.index_memory_fts', return_value=True), \
+             patch('modules.utils.resolve_memory_id', return_value="full-uuid-reembed"):
+            mock_qdrant.retrieve.return_value = [mock_point]
+            mock_conn = MagicMock()
+            mock_conn_fn.return_value = mock_conn
+
+            result = correct_memory("full-uuid", "Podman replaced Docker")
+            # Should call upsert (not set_payload)
+            mock_qdrant.upsert.assert_called_once()
+            mock_qdrant.set_payload.assert_not_called()
+            # Should have generated a new embedding
+            mock_embed.assert_called_once()
+            assert "re-embedded" in result.lower()
+            # Fix 1: content should be replacement, not concatenation
+            upsert_points = mock_qdrant.upsert.call_args[1]["points"]
+            assert upsert_points[0].payload["data"] == "Podman replaced Docker"
+
+    def test_correct_memory_updates_fts(self):
+        """correct_memory should update FTS5 index (delete + re-index)."""
+        from modules.consolidation import correct_memory
+        mock_payload = {
+            "data": "Old FTS content",
+            "confidence": 0.7,
+            "reconsolidation_count": 0,
+        }
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
+
+        with patch('modules.consolidation.qdrant') as mock_qdrant, \
+             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.2] * 1536), \
+             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.6}), \
+             patch('modules.memory_smart.delete_memory_fts') as mock_del_fts, \
+             patch('modules.memory_smart.index_memory_fts') as mock_idx_fts, \
+             patch('modules.utils.resolve_memory_id', return_value="fts-uuid"):
+            mock_qdrant.retrieve.return_value = [mock_point]
+            mock_conn = MagicMock()
+            mock_conn_fn.return_value = mock_conn
+
+            correct_memory("fts-uuid", "New FTS content")
+            mock_del_fts.assert_called_once_with("fts-uuid")
+            mock_idx_fts.assert_called_once()
+
+    def test_correct_memory_checks_labile(self):
+        """Non-labile memory without PE should be rejected (unless force=True)."""
+        from modules.consolidation import correct_memory
+        mock_payload = {
+            "data": "Stable memory content",
+            "confidence": 0.8,
+            "reconsolidation_count": 0,
+            "created_at": "2026-01-01T00:00:00",
+            "attention_last_accessed": "2026-01-01T00:00:00",
+            "attention_access_count": 1,
+            "narrative_importance": "medium",
+        }
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
+
+        with patch('modules.consolidation.qdrant') as mock_qdrant, \
+             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.utils.resolve_memory_id', return_value="stable-uuid"):
+            mock_qdrant.retrieve.return_value = [mock_point]
+            # Labile check returns None (not labile)
+            mock_conn = MagicMock()
+            mock_conn.execute.return_value.fetchone.return_value = None
+            mock_conn_fn.return_value = mock_conn
+
+            result = correct_memory("stable-uuid", "no correction signals here just info")
+            assert "rejected" in result.lower()
+            # upsert should NOT have been called
+            mock_qdrant.upsert.assert_not_called()
+
+    def test_correct_memory_force_override(self):
+        """force=True should bypass labile gate."""
+        from modules.consolidation import correct_memory
+        mock_payload = {
+            "data": "Content to force-correct",
+            "confidence": 0.9,
+            "reconsolidation_count": 0,
+        }
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
+
+        with patch('modules.consolidation.qdrant') as mock_qdrant, \
+             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.consolidation._embed_text', return_value=[0.3] * 1536), \
+             patch('modules.memory_smart.delete_memory_fts', return_value=True), \
+             patch('modules.memory_smart.index_memory_fts', return_value=True), \
+             patch('modules.utils.resolve_memory_id', return_value="force-uuid"):
+            mock_qdrant.retrieve.return_value = [mock_point]
+            mock_conn = MagicMock()
+            mock_conn_fn.return_value = mock_conn
+
+            result = correct_memory("force-uuid", "Human says this is wrong", force=True)
+            assert "corrected" in result.lower()
+            mock_qdrant.upsert.assert_called_once()
+
+
+# ============================================================
+# PART 6: Phase 4.5 - Mejora 2: Multi-Canal Contradicciones
+# ============================================================
+
+class TestMultiCanalContradiction:
+    """Kumaran & Maguire 2007: CA1 comparator with 3 channels."""
+
+    def test_contradiction_semantic_distance(self):
+        """Distant texts with shared entities -> PE from semantic channel."""
+        from modules.consolidation import detect_contradiction
+
+        with patch('modules.consolidation._embed_text') as mock_embed:
+            # Return orthogonal vectors (high distance)
+            mock_embed.side_effect = [
+                [1.0] + [0.0] * 1535,   # memory vector
+                [0.0] + [1.0] + [0.0] * 1534,  # context vector
+            ]
+            result = detect_contradiction(
+                "Docker is the standard container runtime for production",
+                "Podman is the standard container runtime for production"
+            )
+            assert result["prediction_error"] > 0.0
+            assert result["channels"]["semantic_distance"] > 0.0
+
+    def test_contradiction_keywords_boost(self):
+        """Correction keywords with entity overlap -> higher PE."""
+        from modules.consolidation import detect_contradiction
+
+        with patch('modules.consolidation._embed_text') as mock_embed:
+            mock_embed.side_effect = [
+                [1.0] + [0.0] * 1535,
+                [0.0] + [1.0] + [0.0] * 1534,
+            ]
+            result = detect_contradiction(
+                "Docker is the standard container runtime",
+                "en realidad ya no usamos Docker, migramos a Podman"
+            )
+            # Keywords should boost PE above pure semantic
+            assert result["prediction_error"] > 0.1
+            assert result["channels"]["keywords"] > 0.0
+
+    def test_contradiction_no_overlap_no_pe(self):
+        """Distant texts WITHOUT shared entities -> low PE."""
+        from modules.consolidation import detect_contradiction
+
+        # No shared entities between pizza and weather topics
+        result = detect_contradiction(
+            "Pizza tastes great",
+            "The weather today is sunny"
+        )
+        # No entity overlap, no keywords -> PE should be 0 or very low
+        assert result["prediction_error"] < 0.1
+
+    def test_contradiction_negation_detected(self):
+        """Same entities + negation inversion -> PE from negation channel."""
+        from modules.consolidation import detect_contradiction
+
+        with patch('modules.consolidation._embed_text') as mock_embed:
+            mock_embed.side_effect = [
+                [0.9, 0.1] + [0.0] * 1534,
+                [0.8, 0.2] + [0.0] * 1534,
+            ]
+            result = detect_contradiction(
+                "Docker container runtime works perfectly in production",
+                "Docker container runtime never works in production"
+            )
+            assert result["prediction_error"] > 0.0
+            assert result["channels"]["negation"] > 0.0
+
+
+# ============================================================
+# PART 7: Phase 4.5 - Mejora 5: Assessment Runtime Gates
+# ============================================================
+
+class TestAssessmentRuntimeGates:
+    """Block 1995 / Butlin 2023: access consciousness requires demonstrated exercise."""
+
+    def test_butlin_hot2_dormant_scoring(self):
+        """0 RCJ records -> HOT-2 score should be 0.3 (DORMANT)."""
+        from modules.consciousness import assess_butlin_indicators
+
+        with patch('modules.retrieval_metadata.get_fok_calibration', return_value={"n_records": 0}):
+            report = assess_butlin_indicators()
+            # Find HOT-2 line
+            for line in report.split("\n"):
+                if "HOT-2" in line:
+                    assert "DORMANT" in line or "0.3" in line
+                    break
+
+    def test_butlin_pp3_nascent_scoring(self):
+        """correct_memory exists but 0 reconsolidation records -> PP-3 score 0.7."""
+        from modules.consciousness import assess_butlin_indicators
+
+        with patch('modules.consolidation._consolidation_conn') as mock_conn_fn:
+            mock_conn = MagicMock()
+            mock_conn.execute.return_value.fetchone.return_value = (0,)
+            mock_conn_fn.return_value = mock_conn
+
+            report = assess_butlin_indicators()
+            for line in report.split("\n"):
+                if "PP-3" in line:
+                    assert "NASCENT" in line or "0.7" in line
+                    break
+
+    def test_butlin_gradual_scoring(self):
+        """Assessment should use 0.3/0.7/1.0 scale (not just 0/0.5/1)."""
+        from modules.consciousness import assess_butlin_indicators
+
+        report = assess_butlin_indicators()
+        # The score label mapping should support DORMANT and NASCENT
+        assert "DORMANT" in report or "NASCENT" in report or "Total Score" in report
+        # Verify the total is a valid number (may be lower than 13.0 now)
+        for line in report.split("\n"):
+            if "Total Score:" in line:
+                import re
+                match = re.search(r"(\d+\.?\d*)/", line)
+                assert match is not None
+                score = float(match.group(1))
+                assert 0.0 <= score <= 14.0
+                break

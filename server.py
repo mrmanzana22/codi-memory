@@ -39,6 +39,8 @@ from modules import working_memory
 from modules import interface
 from modules import spreading
 from modules import consolidation
+from modules import prospective
+from modules import wiring
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -61,8 +63,14 @@ working_memory.register_tools(mcp)
 interface.register_tools(mcp)
 spreading.register_tools(mcp)
 consolidation.register_consolidation_tools(mcp)
+prospective.register_prospective_tools(mcp)
 
-print(f"[codi-memory] All modules loaded. Tools registered.")
+# ============================================================
+# WIRE EVENT BUS (Thalamocortical Integration)
+# ============================================================
+wiring.wire_event_bus()
+
+print(f"[codi-memory] All modules loaded. Tools registered. Event bus wired.")
 
 
 # ============================================================

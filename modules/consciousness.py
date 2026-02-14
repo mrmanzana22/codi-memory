@@ -471,16 +471,28 @@ def assess_butlin_indicators() -> str:
     _check("HOT-1", "HOT", 1.0,
            "assess_confidence(), reflect_on_self(), identify_knowledge_gaps() all implemented")
 
-    # HOT-2: Confidence calibration (FOK)
+    # HOT-2: Confidence calibration (FOK) -- Block 1995: access consciousness requires exercise
     try:
         from modules.retrieval_metadata import record_rcj, get_fok_calibration
-        _check("HOT-2", "HOT", 1.0,
-               "FOK with RCJ calibration loop (Nelson & Narens 1990)")
+        try:
+            cal = get_fok_calibration()
+            n_records = cal.get("n_records", 0)
+        except Exception:
+            n_records = 0
+        if n_records >= 20:
+            _check("HOT-2", "HOT", 1.0,
+                   f"RCJ calibrated with {n_records} records (Nelson & Narens 1990)")
+        elif n_records >= 5:
+            _check("HOT-2", "HOT", 0.7,
+                   f"RCJ calibration nascent ({n_records} records, need 20)")
+        else:
+            _check("HOT-2", "HOT", 0.3,
+                   f"RCJ dormant ({n_records} records, need 5+ for nascent, 20+ for full)")
     except ImportError:
         try:
             from modules.retrieval_metadata import feeling_of_knowing
-            _check("HOT-2", "HOT", 0.5,
-                   "FOK implemented but no calibration loop (no RCJ)")
+            _check("HOT-2", "HOT", 0.3,
+                   "FOK implemented but no calibration loop (dormant)")
         except Exception:
             _check("HOT-2", "HOT", 0.0, "No FOK system")
 
@@ -538,22 +550,35 @@ def assess_butlin_indicators() -> str:
     except Exception:
         _check("PP-2", "PP", 0.0, "No prediction error detection")
 
-    # PP-3: Model updating (reconsolidation)
+    # PP-3: Model updating (reconsolidation) -- Block 1995: exercise required
     try:
-        from modules.consolidation import correct_memory, check_reconsolidation
-        # Verify correct_memory is actually implemented (not stub)
+        from modules.consolidation import correct_memory, check_reconsolidation, _consolidation_conn
         import inspect
         src = inspect.getsource(correct_memory)
         is_stub = "stub" in src.lower()
         if is_stub:
             raise ImportError("correct_memory is still a stub")
-        _check("PP-3", "PP", 1.0,
-               "PE-driven reconsolidation: correct_memory + check_reconsolidation + labile marking (Nader 2000)")
+        # Check if reconsolidation has been exercised
+        try:
+            conn = _consolidation_conn()
+            recon_count = conn.execute("SELECT COUNT(*) FROM reconsolidation_log").fetchone()[0]
+            conn.close()
+        except Exception:
+            recon_count = 0
+        if recon_count >= 5:
+            _check("PP-3", "PP", 1.0,
+                   f"PE-driven reconsolidation exercised ({recon_count} records, re-embed + labile gate)")
+        elif recon_count >= 1:
+            _check("PP-3", "PP", 0.7,
+                   f"Reconsolidation nascent ({recon_count} records, need 5+ for full)")
+        else:
+            _check("PP-3", "PP", 0.7,
+                   "Reconsolidation pipeline ready (re-embed + labile gate) but not yet exercised (0 records)")
     except (ImportError, Exception):
         try:
             from modules.consolidation import search_semantic
-            _check("PP-3", "PP", 0.5,
-                   "Consolidation pipeline updates semantic facts, but no PE-driven reconsolidation")
+            _check("PP-3", "PP", 0.3,
+                   "Consolidation exists but no PE-driven reconsolidation (dormant)")
         except Exception:
             _check("PP-3", "PP", 0.0, "No model updating")
 
@@ -595,7 +620,7 @@ def assess_butlin_indicators() -> str:
                           "RPT": "Recurrent Processing Theory"}
             lines.append(f"\n## {theory_names.get(current_theory, current_theory)}")
 
-        score_label = {0.0: "ABSENT", 0.5: "PARTIAL", 1.0: "FULL"}.get(ind["score"], "?")
+        score_label = {0.0: "ABSENT", 0.3: "DORMANT", 0.5: "PARTIAL", 0.7: "NASCENT", 1.0: "FULL"}.get(ind["score"], f"{ind['score']:.1f}")
         lines.append(f"- **{ind['name']}** [{score_label}] ({ind['score']:.1f}): {ind['evidence']}")
 
     lines.append(f"\n## Summary")
