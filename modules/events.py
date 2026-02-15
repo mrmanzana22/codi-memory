@@ -31,6 +31,8 @@ import time
 from collections import defaultdict
 from datetime import datetime
 
+from modules.tracing import get_trace_id
+
 
 class Events:
     """Event name constants."""
@@ -97,6 +99,11 @@ class EventBus:
         """
         if data is None:
             data = {}
+
+        # Auto-inject trace_id from contextvars (transparent to callers)
+        tid = get_trace_id()
+        if tid and "trace_id" not in data:
+            data["trace_id"] = tid
 
         # Record in history
         entry = {

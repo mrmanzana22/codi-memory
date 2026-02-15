@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
 from modules.config import FTS_DB_PATH, now_iso
+from modules.tracing import get_trace_id
 
 
 @contextmanager
@@ -144,7 +145,7 @@ def instrument_mcp(mcp: Any) -> None:
                             error_type=None,
                             args_size=args_size,
                             result_size=res_size,
-                            session_id=None,
+                            session_id=get_trace_id() or None,
                             tag=tag,
                         )
                         return result
@@ -158,7 +159,7 @@ def instrument_mcp(mcp: Any) -> None:
                             error_type=e.__class__.__name__,
                             args_size=args_size,
                             result_size=0,
-                            session_id=None,
+                            session_id=get_trace_id() or None,
                             tag=tag,
                         )
                         raise
@@ -182,7 +183,7 @@ def instrument_mcp(mcp: Any) -> None:
                         error_type=None,
                         args_size=args_size,
                         result_size=res_size,
-                        session_id=None,
+                        session_id=get_trace_id() or None,
                         tag=tag,
                     )
                     return result
@@ -196,7 +197,7 @@ def instrument_mcp(mcp: Any) -> None:
                         error_type=e.__class__.__name__,
                         args_size=args_size,
                         result_size=0,
-                        session_id=None,
+                        session_id=get_trace_id() or None,
                         tag=tag,
                     )
                     raise
