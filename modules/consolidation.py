@@ -43,8 +43,8 @@ from modules.config import (
     RECONSOLIDATION_PE_THRESHOLD,
     RECONSOLIDATION_STRENGTH_FLOOR,
     RECONSOLIDATION_STRENGTH_CEILING,
-    RECONSOLIDATION_MAX_BLEND,
 )
+# Note: RECONSOLIDATION_MAX_BLEND removed -- full replace per Nader 2000 (blend_weight=0.0 always)
 from modules.utils import now_iso
 from modules.activation import compute_unified_activation
 
@@ -223,6 +223,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     result["duration_ms"] = duration_ms
     _log_consolidation_run(result)
 
+    # Emit CONSOLIDATION_COMPLETE so wiring handlers can react (Baars 1988 broadcast)
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.CONSOLIDATION_COMPLETE, result)
+    except Exception:
+        pass
+
     report = (
         f"[consolidation:{batch_id}] {scope} complete\n"
         f"  Episodes scanned: {result['episodes_scanned']}\n"
@@ -247,7 +254,7 @@ def _phase_selection(lookback_hours: int) -> list:
         List of dicts: [{id, data, payload, score}]
     """
     cutoff = datetime.now() - timedelta(hours=lookback_hours)
-    importance_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2}
+    from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
     # Exclude already-consolidated episodes
     scroll_filter = Filter(must_not=[
@@ -792,22 +799,38 @@ NEGATION_MARKERS = [
 def _extract_key_entities(text: str) -> set:
     """Extract key entities (nouns/proper names) from text.
 
-    Lightweight heuristic: words that are capitalized (not sentence-start),
-    or words longer than 4 chars that aren't common stopwords.
+    Lightweight heuristic: words > 4 chars, excluding stopwords and
+    common verbs/adjectives that inflate overlap without being entities.
     Based on: Kumaran & Maguire 2007 entity-overlap for mismatch detection.
     """
     stopwords = {
+        # ES: pronouns, prepositions, conjunctions
         "para", "como", "este", "esta", "estos", "estas", "pero", "porque",
         "cuando", "donde", "tiene", "hacer", "puede", "desde", "hasta",
+        "siendo", "sobre", "entre", "antes", "despues", "mejor", "mayor",
+        # EN: pronouns, prepositions, conjunctions
         "that", "this", "with", "from", "have", "been", "they", "their",
         "which", "about", "would", "there", "what", "more", "some",
-        "also", "other", "just", "should", "could",
+        "also", "other", "just", "should", "could", "after", "before",
+        "every", "these", "those", "being", "still", "while", "where",
+        # ES: frequent verbs (inflated overlap without semantic value)
+        "tiene", "hacer", "puede", "estar", "haber", "tener", "poder",
+        "quiero", "quiere", "usamos", "usando", "vamos", "crear", "creo",
+        "implementar", "actualizar", "funciona", "necesita", "deberia",
+        # EN: frequent verbs
+        "using", "works", "would", "should", "could", "needs", "wants",
+        "create", "update", "implement", "function", "working", "getting",
+        # Tech noise (too common to be meaningful entities)
+        "error", "datos", "linea", "archivo", "system", "module",
     }
-    words = text.replace(",", " ").replace(".", " ").replace(":", " ").split()
+    words = text.replace(",", " ").replace(".", " ").replace(":", " ").replace("(", " ").replace(")", " ").split()
     entities = set()
     for w in words:
         clean = w.strip().lower()
         if len(clean) > 4 and clean not in stopwords:
+            # Skip words ending in very common suffixes (verbs/adverbs)
+            if clean.endswith(("mente", "ción", "ando", "endo", "aron", "ieron")):
+                continue
             entities.add(clean)
     return entities
 
@@ -818,11 +841,11 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
     Kumaran & Maguire 2006/2007: CA1 hippocampal comparator uses
     multiple channels for match-mismatch detection, not just one signal.
 
-    3 channels (weighted sum):
-      Canal 1 - Keywords (0.3): Explicit correction patterns
-      Canal 2 - Semantic distance + entity overlap (0.4): High distance
-                WITH shared entities suggests genuine contradiction
-      Canal 3 - Negation detector (0.3): Same entities + logical inversion
+    3 channels:
+      Canal 1 - Keywords (0.5 raw): Explicit correction patterns
+      Canal 2 - Topic confirmation (amplifier): cosine_sim * entity_overlap
+                Amplifies C1+C3 when same topic confirmed (0.4 to 1.0x)
+      Canal 3 - Negation detector (0.5 raw): Same entities + logical inversion
 
     Returns:
         {prediction_error: float, detail: str|None, channels: dict}
@@ -837,25 +860,27 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
     signals = [p for p in CORRECTION_PATTERNS if p in context_lower]
     canal1_score = min(1.0, len(signals) * 0.25) if signals else 0.0
 
-    # Canal 2: Semantic distance + entity overlap
+    # Canal 2: Topic confirmation (Kumaran 2006 match detection)
+    # High cosine similarity + entity overlap = same topic confirmed.
+    # This AMPLIFIES Canal 1 and Canal 3: contradictions only meaningful
+    # if texts discuss the same subject. (NOT distance -- contradictions
+    # like "Docker is good" vs "Docker is bad" have HIGH similarity.)
     mem_entities = _extract_key_entities(memory_text)
     ctx_entities = _extract_key_entities(context)
     shared_entities = mem_entities & ctx_entities
     entity_overlap = len(shared_entities) / max(1, min(len(mem_entities), len(ctx_entities)))
 
-    # Semantic distance via embedding (lightweight: only if entities overlap)
-    semantic_dist = 0.0
+    cosine_sim = 0.0
     if shared_entities and len(shared_entities) >= 1:
         try:
             mem_vec = _embed_text(memory_text[:500])
             ctx_vec = _embed_text(context[:500])
             cosine_sim = _cosine_similarity(mem_vec, ctx_vec)
-            semantic_dist = max(0.0, 1.0 - cosine_sim)
         except Exception:
-            semantic_dist = 0.0
+            cosine_sim = 0.5  # fallback: assume moderate similarity
 
-    # High distance + entity overlap = contradiction signal
-    canal2_score = semantic_dist * entity_overlap if shared_entities else 0.0
+    # Topic confirmation score: high sim + shared entities = same topic
+    canal2_score = cosine_sim * entity_overlap if shared_entities else 0.0
 
     # Canal 3: Negation detection
     canal3_score = 0.0
@@ -866,12 +891,16 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
         if (mem_negations > 0) != (ctx_negations > 0):
             canal3_score = min(1.0, entity_overlap * 1.5)
 
-    # Weighted sum
-    pe = canal1_score * 0.3 + canal2_score * 0.4 + canal3_score * 0.3
+    # Weighted sum: C2 (topic confirmation) amplifies C1+C3
+    # Without C1 or C3, same-topic alone is NOT contradiction
+    # With topic confirmed (C2~1), C1+C3 fire at full weight
+    # Without topic confirmed (C2~0), C1+C3 still fire at 40% (keywords alone still valid)
+    raw_pe = canal1_score * 0.5 + canal3_score * 0.5
+    pe = raw_pe * (0.4 + 0.6 * canal2_score)
 
     channels = {
         "keywords": canal1_score,
-        "semantic_distance": canal2_score,
+        "topic_confirmation": canal2_score,
         "negation": canal3_score,
         "shared_entities": list(shared_entities)[:10],
     }
@@ -882,7 +911,7 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
         if canal1_score > 0:
             parts.append(f"keywords={signals}")
         if canal2_score > 0:
-            parts.append(f"semantic_dist={semantic_dist:.2f},overlap={entity_overlap:.2f}")
+            parts.append(f"topic_sim={cosine_sim:.2f},overlap={entity_overlap:.2f}")
         if canal3_score > 0:
             parts.append(f"negation_inversion")
         detail = f"PE channels: {', '.join(parts)}"
@@ -1031,12 +1060,17 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
         except Exception:
             pass
 
-        if not is_labile:
-            # Not labile -- run inline PE check
+        # Always compute PE for the log, even when labile
+        pe_result = {"should_reconsolidate": False, "prediction_error": 0.0}
+        try:
             pe_result = check_reconsolidation(
                 full_id, old_payload, correction
             )
             actual_pe = pe_result.get("prediction_error", 0.0)
+        except Exception:
+            actual_pe = 0.0
+
+        if not is_labile:
             if not pe_result.get("should_reconsolidate", False):
                 return (
                     f"[reconsolidation] Memory {full_id[:8]} rejected: "
@@ -1055,15 +1089,17 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
              old_content, new_content, blend_weight, trigger_context, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
-              old_content[:500], new_content[:500], RECONSOLIDATION_MAX_BLEND,
+              old_content[:500], new_content[:500], 0.0,  # 0.0: full replace (Nader 2000), not blend
               correction[:200], now_iso()))
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"[consolidation] WARNING: Could not log reconsolidation: {e}")
 
-    # 5. Adjust confidence (decrement by 0.1)
-    new_confidence = max(0.0, old_confidence - 0.1)
+    # 5. Adjust confidence proportional to PE (Exton-McGuinness 2015)
+    # Higher PE = larger confidence decrement (0.05 base + 0.15 * PE)
+    confidence_delta = 0.05 + 0.15 * actual_pe
+    new_confidence = max(0.0, old_confidence - confidence_delta)
 
     # 6. Re-embed: generate new vector for corrected content (Nader 2000)
     try:

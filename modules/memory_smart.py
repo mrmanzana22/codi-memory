@@ -10,7 +10,12 @@ import sqlite3
 
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso
+from modules.config import (
+    memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso,
+    CONTRADICTION_SCORE_FLOOR, CONTRADICTION_PE_SILENT, CONTRADICTION_PE_ALERT,
+    CONTRADICTION_MIN_ENTITIES, CONTRADICTION_COOLDOWN_MINUTES,
+    CONTRADICTION_MAX_PER_SESSION,
+)
 
 def _fts_conn():
     conn = sqlite3.connect(FTS_DB_PATH)
@@ -312,9 +317,13 @@ def search_fts(query: str, limit: int = 20) -> list:
 
 
 def bm25_rank_to_score(rank: float) -> float:
-    """Convierte BM25 rank a score 0-1. Rank 0 = score 1.0."""
-    normalized = max(0, abs(rank)) if rank is not None else 999
-    return 1 / (1 + normalized)
+    """Convierte FTS5 BM25 rank a score 0-1.
+
+    FTS5 rank is negative (more negative = better match).
+    rank=-10 -> 0.91 (strong), rank=-2 -> 0.67 (weak), rank=0 -> 0.0.
+    """
+    normalized = abs(rank) if rank is not None else 0.0
+    return normalized / (normalized + 1.0)
 
 
 def sync_fts_from_backup():
@@ -355,6 +364,143 @@ def sync_fts_from_backup():
 # MCP TOOL FUNCTIONS
 # ============================================================
 
+# ============================================================
+# PHASE 5: INLINE CONTRADICTION DETECTION (Kumaran & Maguire 2007)
+# CA1 hippocampal comparator: check new memory against similar existing
+# ones at encoding time. PNAS 2025 confirms mismatch signals are
+# episodic-specific, not schematic.
+# ============================================================
+
+_contradiction_cooldown: dict = {}  # topic_key -> last_alert_iso
+_contradiction_session_count = 0
+
+
+def _inline_contradiction_check(
+    new_content: str,
+    candidates: list,
+    dedup_threshold: float = 0.90,
+) -> dict:
+    """Hippocampal comparator: check new memory against similar existing ones.
+
+    Returns:
+        {detected: bool, pe: float, conflicting_memory_id, conflicting_text,
+         detail, channels, shared_entities} or {detected: False, ...}
+    """
+    global _contradiction_session_count
+
+    if _contradiction_session_count >= CONTRADICTION_MAX_PER_SESSION:
+        return {"detected": False, "reason": "session_rate_limit"}
+
+    from modules.consolidation import detect_contradiction, _extract_key_entities
+
+    best_pe = 0.0
+    best_match = None
+
+    for candidate in candidates:
+        score = candidate.get("score", 0)
+        if score < CONTRADICTION_SCORE_FLOOR or score >= dedup_threshold:
+            continue
+
+        memory_text = candidate.get("memory", "")
+        memory_id = candidate.get("id", "")
+
+        if not memory_text or len(memory_text) < 10:
+            continue
+
+        # Quick entity overlap pre-screen (avoid expensive embedding)
+        new_entities = _extract_key_entities(new_content)
+        mem_entities = _extract_key_entities(memory_text)
+        shared = new_entities & mem_entities
+
+        if len(shared) < CONTRADICTION_MIN_ENTITIES:
+            continue
+
+        # Full 3-channel contradiction detection
+        result = detect_contradiction(memory_text, new_content)
+        pe = result.get("prediction_error", 0.0)
+
+        if pe > best_pe and pe >= CONTRADICTION_PE_SILENT:
+            best_pe = pe
+            best_match = {
+                "memory_id": memory_id,
+                "memory_text": memory_text[:300],
+                "pe": pe,
+                "detail": result.get("detail", ""),
+                "channels": result.get("channels", {}),
+                "shared_entities": list(shared)[:10],
+            }
+
+    if not best_match or best_pe < CONTRADICTION_PE_SILENT:
+        return {"detected": False, "pe": best_pe}
+
+    # Cooldown check by topic
+    topic_key = "_".join(sorted(best_match["shared_entities"][:3]))
+    now = datetime.now()
+    if topic_key in _contradiction_cooldown:
+        try:
+            last_alert = datetime.fromisoformat(_contradiction_cooldown[topic_key])
+            if (now - last_alert).total_seconds() < CONTRADICTION_COOLDOWN_MINUTES * 60:
+                return {"detected": False, "reason": "cooldown", "pe": best_pe}
+        except Exception:
+            pass
+
+    # Detected! Update counters
+    _contradiction_cooldown[topic_key] = now.isoformat()
+    _contradiction_session_count += 1
+
+    return {
+        "detected": True,
+        "pe": best_pe,
+        "conflicting_memory_id": best_match["memory_id"],
+        "conflicting_text": best_match["memory_text"],
+        "detail": best_match["detail"],
+        "channels": best_match["channels"],
+        "shared_entities": best_match["shared_entities"],
+    }
+
+
+def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None):
+    """Auto-connect new memory to top-K similar neighbors.
+
+    Densifies the graph so spreading activation has edges to traverse.
+    Stores connections in 'related_memories' (list) payload field.
+
+    Args:
+        new_id: ID of the newly saved memory
+        content: Content text (used for similarity search)
+        exclude_ids: IDs to skip (e.g. already connected via related_to)
+    """
+    from modules.config import (
+        GRAPH_AUTO_CONNECT_K, GRAPH_AUTO_CONNECT_MAX, GRAPH_AUTO_CONNECT_MIN_SCORE,
+    )
+    try:
+        exclude = set(exclude_ids or [])
+        exclude.add(new_id)
+
+        similar = memory.search(query=content, user_id=USER_ID, limit=GRAPH_AUTO_CONNECT_K + 2)
+        if not similar or not similar.get("results"):
+            return
+
+        connections = []
+        for r in similar["results"]:
+            rid = r.get("id", "")
+            score = r.get("score", 0)
+            if rid and rid not in exclude and score >= GRAPH_AUTO_CONNECT_MIN_SCORE:
+                connections.append(rid)
+                exclude.add(rid)
+            if len(connections) >= GRAPH_AUTO_CONNECT_MAX:
+                break
+
+        if connections:
+            qdrant.set_payload(
+                collection_name=COLLECTION_NAME,
+                payload={'related_memories': connections},
+                points=[new_id],
+            )
+    except Exception:
+        pass
+
+
 def add_memory_smart(content: str, category: str = "general",
                      source: str = "experienced", importance: str = "medium",
                      dedup_threshold: float = 0.90,
@@ -377,6 +523,7 @@ def add_memory_smart(content: str, category: str = "general",
     try:
         # 1. Buscar memorias similares
         similar_results = memory.search(query=content, user_id=USER_ID, limit=3)
+        contradiction_result = None  # Phase 5: set by inline check if similar found
 
         if similar_results and similar_results.get("results"):
             top_result = similar_results["results"][0]
@@ -395,7 +542,18 @@ def add_memory_smart(content: str, category: str = "general",
                     "message": f"Memoria ya existe (similitud {top_score:.2f})"
                 }, ensure_ascii=False)
 
-            elif top_score > relate_threshold:
+            # Phase 5: Inline contradiction check (Kumaran & Maguire 2007)
+            contradiction_result = None
+            try:
+                contradiction_result = _inline_contradiction_check(
+                    new_content=content,
+                    candidates=similar_results["results"],
+                    dedup_threshold=dedup_threshold,
+                )
+            except Exception:
+                pass
+
+            if top_score > relate_threshold:
                 # SIMILAR - guardar pero relacionar
                 result = memory.add(
                     messages=[{"role": "user", "content": content}],
@@ -445,6 +603,8 @@ def add_memory_smart(content: str, category: str = "general",
                 # Indexar en FTS5 (safe: auto-queues on failure)
                 if new_id:
                     index_memory_fts(new_id, content, category, source, importance)
+                    # Auto-connect to neighbors (graph densification)
+                    _auto_connect_neighbors(new_id, content, exclude_ids=[top_id])
 
                 # Emit MEMORY_STORED event
                 try:
@@ -459,6 +619,38 @@ def add_memory_smart(content: str, category: str = "general",
                     })
                 except Exception:
                     pass
+
+                # Phase 5: emit contradiction event if detected
+                if contradiction_result and contradiction_result.get("detected"):
+                    try:
+                        event_bus.emit(Events.CONTRADICTION_DETECTED, {
+                            'pe': contradiction_result['pe'],
+                            'conflicting_memory_id': contradiction_result['conflicting_memory_id'],
+                            'conflicting_text': contradiction_result['conflicting_text'],
+                            'new_content': content[:300],
+                            'new_memory_id': new_id,
+                            'detail': contradiction_result.get('detail', ''),
+                            'channels': contradiction_result.get('channels', {}),
+                            'shared_entities': contradiction_result.get('shared_entities', []),
+                        })
+                    except Exception:
+                        pass
+                    return json.dumps({
+                        "action": "saved_with_contradiction",
+                        "new_id": new_id,
+                        "related_to": top_id,
+                        "score": round(top_score, 3),
+                        "contradiction": {
+                            "detected": True,
+                            "pe": contradiction_result['pe'],
+                            "conflicting_memory_id": contradiction_result['conflicting_memory_id'],
+                            "conflicting_text": contradiction_result['conflicting_text'][:200],
+                        },
+                        "message": (
+                            f"Memoria guardada. CONTRADICCION DETECTADA (PE={contradiction_result['pe']:.2f}) "
+                            f"con memoria {contradiction_result['conflicting_memory_id'][:8]}."
+                        )
+                    }, ensure_ascii=False)
 
                 return json.dumps({
                     "action": "saved_with_relation",
@@ -493,6 +685,8 @@ def add_memory_smart(content: str, category: str = "general",
         # Indexar en FTS5 (safe: auto-queues on failure)
         if new_id:
             index_memory_fts(new_id, content, category, source, importance)
+            # Auto-connect to neighbors (graph densification)
+            _auto_connect_neighbors(new_id, content)
 
         # Emit MEMORY_STORED event
         try:
@@ -506,6 +700,36 @@ def add_memory_smart(content: str, category: str = "general",
             })
         except Exception:
             pass
+
+        # Phase 5: emit contradiction event if detected (new memory branch)
+        if contradiction_result and contradiction_result.get("detected"):
+            try:
+                event_bus.emit(Events.CONTRADICTION_DETECTED, {
+                    'pe': contradiction_result['pe'],
+                    'conflicting_memory_id': contradiction_result['conflicting_memory_id'],
+                    'conflicting_text': contradiction_result['conflicting_text'],
+                    'new_content': content[:300],
+                    'new_memory_id': new_id,
+                    'detail': contradiction_result.get('detail', ''),
+                    'channels': contradiction_result.get('channels', {}),
+                    'shared_entities': contradiction_result.get('shared_entities', []),
+                })
+            except Exception:
+                pass
+            return json.dumps({
+                "action": "saved_with_contradiction",
+                "new_id": new_id,
+                "contradiction": {
+                    "detected": True,
+                    "pe": contradiction_result['pe'],
+                    "conflicting_memory_id": contradiction_result['conflicting_memory_id'],
+                    "conflicting_text": contradiction_result['conflicting_text'][:200],
+                },
+                "message": (
+                    f"Memoria guardada. CONTRADICCION DETECTADA (PE={contradiction_result['pe']:.2f}) "
+                    f"con memoria {contradiction_result['conflicting_memory_id'][:8]}."
+                )
+            }, ensure_ascii=False)
 
         return json.dumps({
             "action": "saved_new",

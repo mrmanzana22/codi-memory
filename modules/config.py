@@ -54,6 +54,8 @@ FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
 JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
 CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
+SESSION_STATE_FILE = os.path.join(DATA_DIR, "session_state.json")
+SESSION_STATE_MAX_AGE_HOURS = 24  # Ignore session state older than this
 
 # Working Memory limits
 WORKING_MEMORY_MAX_ACTIVE = 30
@@ -65,6 +67,11 @@ SPREAD_MIN_ACTIVATION = 0.05
 SPREAD_MAX_NEIGHBORS = 15
 SPREAD_SALIENCE_CAP = 1.0
 SPREAD_SALIENCE_FLOOR = 0.1
+
+# --- Graph Densification (Phase 5.5) ---
+GRAPH_AUTO_CONNECT_K = 5          # Top-K candidates to evaluate
+GRAPH_AUTO_CONNECT_MAX = 3        # Max connections to create per memory
+GRAPH_AUTO_CONNECT_MIN_SCORE = 0.5  # Minimum similarity to connect
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -99,6 +106,17 @@ RECONSOLIDATION_STRENGTH_CEILING = 0.90     # Too strong to reconsolidate
 RECONSOLIDATION_MAX_BLEND = 0.3             # Max 30% new content blends in
 
 # ============================================================
+# PHASE 5: INLINE CONTRADICTION DETECTION (Kumaran & Maguire 2007)
+# ============================================================
+CONTRADICTION_SCORE_FLOOR = 0.50            # Min similarity to compare (below = unrelated)
+CONTRADICTION_PE_SILENT = 0.30              # PE >= this: silent WM note
+CONTRADICTION_PE_ALERT = 0.50               # PE >= this: visible alert + mark labile
+CONTRADICTION_PE_CRITICAL = 0.70            # PE >= this: critical alert, LLM should ask user
+CONTRADICTION_MIN_ENTITIES = 2              # Min shared entities to compare
+CONTRADICTION_COOLDOWN_MINUTES = 30         # Same-topic cooldown
+CONTRADICTION_MAX_PER_SESSION = 3           # Max alerts before silent-only mode
+
+# ============================================================
 # PHASE 1: DIFFERENTIAL DECAY PARAMETERS
 # DEPRECATED (WIRING-5): Authoritative decay constants now live in
 # modules/activation.py (DECAY_EPISODIC, DECAY_SEMANTIC, etc.).
@@ -125,6 +143,44 @@ CATEGORY_FILE_MAP = {
 }
 
 RELATIONSHIP_KEYWORDS = ['andre', 'harec', 'hijo', 'esposa', 'familia', 'papa', 'mamá', 'mama']
+
+# ============================================================
+# KNOWN PROJECTS & TOPIC KEYWORDS (single source of truth)
+# ============================================================
+KNOWN_PROJECTS = ["trading", "fullempaques", "consciencia", "n8n", "kraken", "memoria", "pilas", "portal-aliados-mrmanzana"]
+
+TOPIC_KEYWORDS = {
+    'n8n': ['n8n', 'workflow', 'automatiz', 'nodo'],
+    'trading': ['trading', 'kraken', 'cripto', 'bitcoin', 'mercado'],
+    'fullempaques': ['fullempaques', 'produccion', 'fabrica', 'empaque'],
+    'memoria': ['memoria', 'recuerdo', 'recordar', 'qdrant'],
+    'codigo': ['codigo', 'python', 'javascript', 'programar', 'server.py'],
+    'proyecto': ['proyecto', 'implementar', 'desarrollar', 'feature'],
+    'configuracion': ['config', 'variable', 'entorno', 'setup', 'easypanel'],
+    'consciencia': ['consciencia', 'consciente', 'self-model', 'prediccion'],
+}
+
+TRIGGER_PRIORITY_ORDER = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']
+
+CURIOSITY_TEMPLATES = {
+    'trading': "No hemos revisado el trading en {dias} dias. Como van las senales?",
+    'fullempaques': "FULLEMPAQUES lleva {dias} dias sin tocar. El cliente reporto algun problema?",
+    'consciencia': "El proyecto de consciencia lleva {dias} dias pausado. Retomamos?",
+    'n8n': "No hemos tocado automatizaciones n8n en {dias} dias. Hay workflows que revisar?",
+}
+
+# ============================================================
+# IMPORTANCE WEIGHTS (single source of truth)
+# ============================================================
+IMPORTANCE_WEIGHTS = {'critical': 1.0, 'high': 0.8, 'medium': 0.5, 'low': 0.2}
+
+# ============================================================
+# OPERATIONAL THRESHOLDS
+# ============================================================
+CURIOSITY_STALE_DAYS = 3                     # Days before a project is "stale"
+WM_IMPORTANCE_THRESHOLD = 0.7                # Min importance to push to WM
+MEMORY_SEARCH_DEFAULT_LIMIT = 10             # Default limit for memory searches
+RELATIONSHIP_QUERY = ' '.join(RELATIONSHIP_KEYWORDS[:5])  # Dynamic query from config
 
 # ============================================================
 # AUTO-CLEANUP: Matar instancias anteriores del MCP

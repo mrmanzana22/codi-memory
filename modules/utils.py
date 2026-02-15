@@ -158,12 +158,7 @@ def calculate_confidence_score(memories: list) -> dict:
         'inferred': 0.4
     }
 
-    importance_weights = {
-        'critical': 1.0,
-        'high': 0.8,
-        'medium': 0.5,
-        'low': 0.3
-    }
+    from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
     total_weight = 0
     source_counts = {'experienced': 0, 'told': 0, 'learned': 0, 'inferred': 0}

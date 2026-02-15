@@ -226,7 +226,17 @@ def search_memory(query: str, limit: int = 5) -> str:
             fok_control = metacognitive_control(query, fts_db_path=FTS_DB_PATH)
             confidence_flag = fok_control.get("confidence_flag", "")
             limit_multiplier = fok_control.get("adjusted_limit", 1)
-            limit = limit * limit_multiplier
+            limit = min(limit * limit_multiplier, 50)  # cap to prevent cascade blowup
+            # Emit runtime evidence for HOT-3 scoring (Block 1995)
+            try:
+                from modules.events import event_bus, Events
+                event_bus.emit(Events.METACOGNITIVE_CONTROL_APPLIED, {
+                    "strategy": fok_control.get("strategy", ""),
+                    "adjusted_limit": limit_multiplier,
+                    "fok_score": fok_control.get("fok", {}).get("fok_score", None),
+                })
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -402,6 +412,30 @@ def search_memory(query: str, limit: int = 5) -> str:
         # Sort unified ranking
         merged.sort(key=lambda x: -x["combined_score"])
         merged = merged[:limit]
+
+        # ============================================================
+        # GWT COMPETITION: Filter through workspace (Baars 1988, Dehaene 2011)
+        # ============================================================
+        try:
+            from modules.competition import run_workspace_competition, CompetitionCandidate
+            from modules.wiring import get_attention_schema
+            focus = get_attention_schema().get("focus", "")
+            candidates = [
+                CompetitionCandidate(
+                    content=(m.get("bm25_text") or m.get("fact_text") or "")[:200],
+                    source_domain="episodic" if m["memory_type"] == "episodic" else "semantic",
+                    activation=m["combined_score"],
+                    memory_id=m["id"],
+                    metadata={"topic": query.split()[0] if query.split() else ""},
+                )
+                for m in merged
+            ]
+            comp_result = run_workspace_competition(candidates, current_focus=focus)
+            if comp_result.winners:
+                winner_ids = {w.memory_id for w in comp_result.winners}
+                merged = [m for m in merged if m["id"] in winner_ids]
+        except Exception:
+            pass  # Fallback: no competition, keep all results
 
         # ============================================================
         # METAMEMORY: Wrap retrieval result (WIRING-7.1)

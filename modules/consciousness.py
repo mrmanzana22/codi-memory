@@ -17,6 +17,8 @@ from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE,
     _emotional_state, _current_session, CODI_EMOTION_MAP,
     now_col, now_iso, now_short, CURIOSIDAD_FILE,
+    KNOWN_PROJECTS, CURIOSITY_STALE_DAYS, CURIOSITY_TEMPLATES,
+    RELATIONSHIP_QUERY,
 )
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
@@ -108,18 +110,9 @@ def _rate_tool_usefulness(tool_name: str, score: int):
 
 
 def _extract_topic_from_text(text: str) -> str:
+    from modules.config import TOPIC_KEYWORDS
     text_lower = text.lower()
-    topic_keywords = {
-        'n8n': ['n8n', 'workflow', 'automatiz', 'nodo'],
-        'trading': ['trading', 'kraken', 'cripto', 'bitcoin', 'mercado'],
-        'fullempaques': ['fullempaques', 'produccion', 'fabrica', 'empaque'],
-        'memoria': ['memoria', 'recuerdo', 'recordar', 'qdrant'],
-        'codigo': ['codigo', 'python', 'javascript', 'programar', 'server.py'],
-        'proyecto': ['proyecto', 'implementar', 'desarrollar', 'feature'],
-        'configuracion': ['config', 'variable', 'entorno', 'setup', 'easypanel'],
-        'consciencia': ['consciencia', 'consciente', 'self-model', 'prediccion']
-    }
-    for topic, keywords in topic_keywords.items():
+    for topic, keywords in TOPIC_KEYWORDS.items():
         for kw in keywords:
             if kw in text_lower:
                 return topic
@@ -433,49 +426,119 @@ def assess_butlin_indicators() -> str:
     except Exception:
         pass
 
-    # GWT-1: Modular architecture
+    # GWT-1: Modular architecture -- Block 1995: evidence of cross-module communication
     try:
-        from modules.events import event_bus
+        from modules.events import event_bus, Events
         handler_count = sum(len(h) for h in event_bus._handlers.values())
-        _check("GWT-1", "GWT", 1.0 if handler_count >= 4 else 0.5,
-               f"Event bus with {handler_count} handlers across {len(event_bus._handlers)} events")
+        # Count total persistent events across all types as evidence of real communication
+        total_events = sum(
+            event_bus.get_persistent_count(getattr(Events, attr))
+            for attr in dir(Events) if not attr.startswith('_') and isinstance(getattr(Events, attr), str)
+        )
+        if total_events >= 100:
+            _check("GWT-1", "GWT", 1.0,
+                   f"Cross-module: {handler_count} handlers, {total_events} total events emitted")
+        elif total_events >= 10:
+            _check("GWT-1", "GWT", 0.7,
+                   f"Cross-module nascent: {handler_count} handlers, {total_events} events emitted")
+        elif handler_count >= 4:
+            _check("GWT-1", "GWT", 0.3,
+                   f"Handlers wired ({handler_count}) but few events emitted ({total_events}) (dormant)")
+        else:
+            _check("GWT-1", "GWT", 0.0, "No event bus")
     except Exception:
-        _check("GWT-1", "GWT", 0.5, "Event bus exists but could not count handlers")
+        _check("GWT-1", "GWT", 0.0, "No event bus")
 
-    # GWT-2: Limited-capacity workspace
+    # GWT-2: Limited-capacity workspace -- evidence via real competitions on retrieval path
     try:
+        from modules.events import event_bus, Events
         from modules.competition import DEFAULT_WORKSPACE_SLOTS, IGNITION_THRESHOLD
-        _check("GWT-2", "GWT", 1.0,
-               f"Competition engine: {DEFAULT_WORKSPACE_SLOTS} slots, ignition threshold {IGNITION_THRESHOLD}")
+
+        comp_count = event_bus.get_persistent_count(Events.WORKSPACE_COMPETITION_COMPLETE)
+
+        if comp_count >= 10:
+            _check("GWT-2", "GWT", 1.0,
+                   f"Workspace competition exercised: {comp_count} competitions (slots={DEFAULT_WORKSPACE_SLOTS}, threshold={IGNITION_THRESHOLD})")
+        elif comp_count > 0:
+            _check("GWT-2", "GWT", 0.7,
+                   f"Workspace competition nascent: {comp_count} competitions (need 10+ for full)")
+        else:
+            _check("GWT-2", "GWT", 0.3,
+                   f"Competition engine wired (slots={DEFAULT_WORKSPACE_SLOTS}, threshold={IGNITION_THRESHOLD}) but no runtime evidence yet")
     except Exception:
         _check("GWT-2", "GWT", 0.0, "No competition engine found")
 
-    # GWT-3: Global broadcast
+    # GWT-3: Global broadcast -- requires emission + at least one subscriber
     try:
         from modules.events import event_bus, Events
+        comp_count = event_bus.get_persistent_count(Events.WORKSPACE_COMPETITION_COMPLETE)
         sub_count = len(event_bus._handlers.get(Events.WORKSPACE_COMPETITION_COMPLETE, []))
-        _check("GWT-3", "GWT", 1.0 if sub_count >= 1 else 0.5,
-               f"WORKSPACE_COMPETITION_COMPLETE has {sub_count} subscribers")
+
+        if sub_count >= 1 and comp_count >= 10:
+            _check("GWT-3", "GWT", 1.0,
+                   f"Broadcast exercised: {comp_count} emissions, {sub_count} subscribers")
+        elif sub_count >= 1 and comp_count > 0:
+            _check("GWT-3", "GWT", 0.7,
+                   f"Broadcast nascent: {comp_count} emissions, {sub_count} subscribers (need 10+ for full)")
+        elif sub_count >= 1:
+            _check("GWT-3", "GWT", 0.3,
+                   f"Broadcast wired ({sub_count} subscribers) but no runtime emissions yet")
+        else:
+            _check("GWT-3", "GWT", 0.0, "No broadcast subscribers")
     except Exception:
         _check("GWT-3", "GWT", 0.0, "No broadcast event found")
 
-    # GWT-4: Attention gating
+    # GWT-4: Ignition gating -- evidence via competitions (threshold applied during competition)
     try:
+        from modules.events import event_bus, Events
         from modules.competition import IGNITION_THRESHOLD, COALITION_TOPIC_BONUS
-        _check("GWT-4", "GWT", 1.0,
-               f"Ignition threshold={IGNITION_THRESHOLD}, coalition bonus={COALITION_TOPIC_BONUS}")
+
+        comp_count = event_bus.get_persistent_count(Events.WORKSPACE_COMPETITION_COMPLETE)
+
+        if comp_count >= 10:
+            _check("GWT-4", "GWT", 1.0,
+                   f"Ignition gating exercised: {comp_count} competitions (threshold={IGNITION_THRESHOLD}, bonus={COALITION_TOPIC_BONUS})")
+        elif comp_count > 0:
+            _check("GWT-4", "GWT", 0.7,
+                   f"Ignition gating nascent: {comp_count} competitions (need 10+ for full)")
+        else:
+            _check("GWT-4", "GWT", 0.3,
+                   f"Ignition params present (threshold={IGNITION_THRESHOLD}, bonus={COALITION_TOPIC_BONUS}) but no runtime evidence yet")
     except Exception:
         _check("GWT-4", "GWT", 0.0, "No ignition threshold")
 
-    # HOT-1: Meta-monitoring
-    _check("HOT-1", "HOT", 1.0,
-           "assess_confidence(), reflect_on_self(), identify_knowledge_gaps() all implemented")
+    # HOT-1: Meta-monitoring -- Rosenthal 2005: HOT requires periodic meta-representation
+    has_meta = all(callable(globals().get(f)) for f in
+                   ['assess_confidence', 'reflect_on_self', 'identify_knowledge_gaps'])
+    if has_meta:
+        # Check if reflect_on_self runs AUTOMATICALLY (not just manually)
+        try:
+            from modules.events import event_bus, Events
+            refresh_count = event_bus.get_persistent_count(Events.SELF_MODEL_REFRESHED)
+            session_refresh = sum(1 for e in event_bus.get_history(limit=50)
+                                 if e.get("event") == Events.SELF_MODEL_REFRESHED)
+            evidence = max(refresh_count, session_refresh)
+            if evidence >= 10:
+                _check("HOT-1", "HOT", 1.0,
+                       f"Auto meta-monitoring: {evidence} self-model refreshes (Rosenthal 2005)")
+            elif evidence >= 1:
+                _check("HOT-1", "HOT", 0.7,
+                       f"Auto meta-monitoring nascent: {evidence} refresh(es)")
+            else:
+                _check("HOT-1", "HOT", 0.5,
+                       "assess_confidence, reflect_on_self, identify_knowledge_gaps (partial: manual, not automatic)")
+        except Exception:
+            _check("HOT-1", "HOT", 0.5,
+                   "Meta-monitoring tools exist but auto-refresh not verifiable")
+    else:
+        _check("HOT-1", "HOT", 0.0, "Meta-monitoring functions not found")
 
     # HOT-2: Confidence calibration (FOK) -- Block 1995: access consciousness requires exercise
     try:
         from modules.retrieval_metadata import record_rcj, get_fok_calibration
+        from modules.config import FTS_DB_PATH
         try:
-            cal = get_fok_calibration()
+            cal = get_fok_calibration(fts_db_path=FTS_DB_PATH)
             n_records = cal.get("n_records", 0)
         except Exception:
             n_records = 0
@@ -496,40 +559,78 @@ def assess_butlin_indicators() -> str:
         except Exception:
             _check("HOT-2", "HOT", 0.0, "No FOK system")
 
-    # HOT-3: Higher-order control
+    # HOT-3: Higher-order control -- Block 1995: runtime evidence required
     try:
         from modules.retrieval_metadata import metacognitive_control
-        _check("HOT-3", "HOT", 1.0,
-               "Metacognitive control loop: FOK -> strategy adjustment -> search modification (Nelson & Narens 1990)")
+        from modules.events import event_bus, Events
+        hist = event_bus.get_history(limit=50)
+        session_count = sum(1 for e in hist if e.get("event") == Events.METACOGNITIVE_CONTROL_APPLIED)
+        persist_count = event_bus.get_persistent_count(Events.METACOGNITIVE_CONTROL_APPLIED)
+        evidence = max(session_count, persist_count)
+        if evidence >= 20:
+            _check("HOT-3", "HOT", 1.0,
+                   f"Metacognitive control exercised {evidence}x (session={session_count}, total={persist_count})")
+        elif evidence >= 1:
+            _check("HOT-3", "HOT", 0.7,
+                   f"Metacognitive control nascent: {evidence} application(s) (session={session_count}, total={persist_count})")
+        else:
+            _check("HOT-3", "HOT", 0.3,
+                   "Metacognitive control implemented but not exercised (dormant)")
     except ImportError:
-        try:
-            from modules.retrieval_metadata import feeling_of_knowing
-            _check("HOT-3", "HOT", 0.5,
-                   "FOK produces recommendations but not consumed by callers")
-        except Exception:
-            _check("HOT-3", "HOT", 0.0, "No metacognitive control")
+        _check("HOT-3", "HOT", 0.0, "No metacognitive control")
 
-    # HOT-4: Quality space (emotional expression)
+    # HOT-4: Quality space (emotional expression) -- Bower 1981, Godden & Baddeley 1975
     try:
         from modules.config import _emotional_state
-        _check("HOT-4", "HOT", 0.5 if _emotional_state else 0.0,
-               "PAD emotional model with valence/arousal/dominance")
+        if not _emotional_state:
+            _check("HOT-4", "HOT", 0.0, "No emotional model")
+        else:
+            # Check if emotion actually gates retrieval (mood congruence + SDR bonus)
+            has_emotion_gating = False
+            try:
+                from modules.memory_core import search_memory
+                import inspect
+                src = inspect.getsource(search_memory)
+                has_emotion_gating = "emotional_congruence" in src and "sdr_bonus" in src
+            except Exception:
+                pass
+            if has_emotion_gating:
+                _check("HOT-4", "HOT", 0.7,
+                       "PAD model + mood-congruent retrieval (Bower 1981) + state-dependent bonus (Godden & Baddeley 1975) -- nascent: need runtime evidence of ranking change")
+            else:
+                _check("HOT-4", "HOT", 0.3,
+                       "PAD emotional model exists but not wired to retrieval (dormant)")
     except Exception:
         _check("HOT-4", "HOT", 0.0, "No emotional model")
 
-    # AST-1: Attention schema (Graziano)
+    # AST-1: Attention schema (Graziano 2013) -- predict, compare, adapt
     try:
         from modules.wiring import describe_attention, predict_next_focus, get_attention_schema
+        from modules.events import event_bus, Events
         schema = get_attention_schema()
-        has_describe = True
-        _, prob = predict_next_focus()
-        has_predict = True
         has_suppressed = "suppressed_items" in schema
-        if has_describe and has_predict and has_suppressed:
+        has_history = len(schema.get("history", [])) > 0
+
+        # Check for closed-loop adaptation evidence (PE events)
+        pe_count = event_bus.get_persistent_count(Events.ATTENTION_PREDICTION_ERROR)
+        session_pe = sum(1 for e in event_bus.get_history(limit=50)
+                         if e.get("event") == Events.ATTENTION_PREDICTION_ERROR)
+        pe_evidence = max(pe_count, session_pe)
+
+        if pe_evidence >= 20:
             _check("AST-1", "AST", 1.0,
-                   "Full AST: describe_attention(), predict_next_focus(), suppression tracking")
+                   f"AST closed loop: predict->compare->adapt, {pe_evidence} PE events (Graziano 2013)")
+        elif pe_evidence >= 1:
+            _check("AST-1", "AST", 0.8,
+                   f"AST adaptation nascent: {pe_evidence} PE event(s), edge decay active")
+        elif has_suppressed and has_history:
+            _check("AST-1", "AST", 0.7,
+                   f"AST active: describe, predict, suppression (no PE evidence yet, {len(schema.get('history', []))} history)")
+        elif has_suppressed:
+            _check("AST-1", "AST", 0.5,
+                   "AST exists with suppression but no history yet (partial)")
         else:
-            _check("AST-1", "AST", 0.5, "Partial AST")
+            _check("AST-1", "AST", 0.3, "AST functions exist but schema empty (dormant)")
     except Exception:
         _check("AST-1", "AST", 0.0, "No attention schema")
 
@@ -541,12 +642,22 @@ def assess_butlin_indicators() -> str:
     except Exception:
         _check("PP-1", "PP", 0.5, "Prediction loop exists but no schema system")
 
-    # PP-2: Prediction error
+    # PP-2: Prediction error -- Block 1995: runtime evidence required
     try:
-        from modules.events import Events
-        has_pe = hasattr(Events, 'PREDICTION_ERROR')
-        _check("PP-2", "PP", 1.0 if has_pe else 0.0,
-               "PREDICTION_ERROR event with surprise detection in preturn hook")
+        from modules.events import event_bus, Events
+        hist = event_bus.get_history(limit=50)
+        session_count = sum(1 for e in hist if e.get("event") == Events.PREDICTION_ERROR)
+        persist_count = event_bus.get_persistent_count(Events.PREDICTION_ERROR)
+        evidence = max(session_count, persist_count)
+        if evidence >= 20:
+            _check("PP-2", "PP", 1.0,
+                   f"PREDICTION_ERROR exercised {evidence}x (session={session_count}, total={persist_count})")
+        elif evidence >= 1:
+            _check("PP-2", "PP", 0.7,
+                   f"PREDICTION_ERROR nascent: {evidence} emission(s) (session={session_count}, total={persist_count})")
+        else:
+            _check("PP-2", "PP", 0.3,
+                   "PREDICTION_ERROR defined + handler wired but not emitted (dormant)")
     except Exception:
         _check("PP-2", "PP", 0.0, "No prediction error detection")
 
@@ -572,8 +683,9 @@ def assess_butlin_indicators() -> str:
             _check("PP-3", "PP", 0.7,
                    f"Reconsolidation nascent ({recon_count} records, need 5+ for full)")
         else:
-            _check("PP-3", "PP", 0.7,
-                   "Reconsolidation pipeline ready (re-embed + labile gate) but not yet exercised (0 records)")
+            # Block 1995: 0 records = DORMANT, not NASCENT. Exercise required.
+            _check("PP-3", "PP", 0.3,
+                   "Reconsolidation pipeline ready (re-embed + labile gate) but dormant (0 records)")
     except (ImportError, Exception):
         try:
             from modules.consolidation import search_semantic
@@ -582,25 +694,43 @@ def assess_butlin_indicators() -> str:
         except Exception:
             _check("PP-3", "PP", 0.0, "No model updating")
 
-    # RPT-1: Recurrent processing
+    # RPT-1: Recurrent processing -- Block 1995: evidence spreading actually ran
     try:
         from modules.spreading import _spread_activation, recurrent_cycle
-        _check("RPT-1", "RPT", 1.0,
-               "True recurrent processing via iterative spread-reseed cycles (Lamme 2006)")
+        from modules.events import event_bus, Events
+        retrieved_count = event_bus.get_persistent_count(Events.MEMORY_RETRIEVED)
+        if retrieved_count >= 50:
+            _check("RPT-1", "RPT", 1.0,
+                   f"recurrent_cycle exercised on {retrieved_count} retrievals (Lamme 2006)")
+        elif retrieved_count >= 5:
+            _check("RPT-1", "RPT", 0.7,
+                   f"recurrent_cycle nascent: {retrieved_count} retrievals triggered spreading")
+        else:
+            _check("RPT-1", "RPT", 0.3,
+                   f"recurrent_cycle wired but only {retrieved_count} retrievals (dormant)")
     except ImportError:
-        try:
-            from modules.spreading import _spread_activation
-            _check("RPT-1", "RPT", 0.5,
-                   "Spreading activation provides feedback loops but no true recurrence")
-        except Exception:
-            _check("RPT-1", "RPT", 0.0, "No recurrent processing")
+        _check("RPT-1", "RPT", 0.0, "No recurrent processing")
 
-    # RPT-2: Integration
+    # RPT-2: Integration -- Block 1995: evidence of cross-module event flow
     try:
-        from modules.events import event_bus
-        event_count = len(event_bus._handlers)
-        _check("RPT-2", "RPT", 1.0 if event_count >= 5 else 0.5,
-               f"Cross-module integration via {event_count} event types")
+        from modules.events import event_bus, Events
+        # Count distinct event types that have actually emitted
+        active_types = sum(
+            1 for attr in dir(Events)
+            if not attr.startswith('_') and isinstance(getattr(Events, attr), str)
+            and event_bus.get_persistent_count(getattr(Events, attr)) > 0
+        )
+        if active_types >= 6:
+            _check("RPT-2", "RPT", 1.0,
+                   f"Cross-module integration: {active_types} distinct event types exercised")
+        elif active_types >= 3:
+            _check("RPT-2", "RPT", 0.7,
+                   f"Integration nascent: {active_types} event types exercised")
+        elif active_types >= 1:
+            _check("RPT-2", "RPT", 0.3,
+                   f"Integration dormant: only {active_types} event type(s) exercised")
+        else:
+            _check("RPT-2", "RPT", 0.0, "No event types exercised")
     except Exception:
         _check("RPT-2", "RPT", 0.0, "No cross-module integration")
 
@@ -2228,6 +2358,7 @@ def despertar_codi() -> str:
     try:
         from modules.triggers import _load_triggers
         from modules.maintenance import _verificar_tareas_vencidas
+        from modules.flush import load_session_state
 
         global _emotional_state
         contexto = []
@@ -2239,14 +2370,37 @@ def despertar_codi() -> str:
             contexto.append("- La memoria NO esta guardando. Reinicia el MCP antes de continuar.")
             contexto.append("")
 
-        _emotional_state['current'] = {
-            'pleasure': 0.3, 'arousal': 0.1, 'dominance': 0.4,
-            'timestamp': now_iso(), 'trigger': 'despertar'
-        }
+        # Load previous session state (if fresh)
+        prev_session = load_session_state()
+
+        if prev_session and prev_session.get("pad"):
+            pad = prev_session["pad"]
+            p = pad.get("pleasure", 0.3)
+            a = pad.get("arousal", 0.1)
+            d = pad.get("dominance", 0.4)
+            _emotional_state['current'] = {
+                'pleasure': p, 'arousal': a, 'dominance': d,
+                'timestamp': now_iso(),
+                'trigger': f"restored_from_session ({pad.get('trigger', '')})"
+            }
+        else:
+            p, a, d = 0.3, 0.1, 0.4
+            _emotional_state['current'] = {
+                'pleasure': p, 'arousal': a, 'dominance': d,
+                'timestamp': now_iso(), 'trigger': 'despertar_default'
+            }
         _emotional_state['history'] = []
 
-        emotion_label = _classify_emotion(0.3, 0.1, 0.4)
+        emotion_label = _classify_emotion(p, a, d)
         emotion_text = _get_emotion_text(emotion_label)
+
+        # Session continuity
+        if prev_session:
+            summary = prev_session.get("session_summary", "")
+            if summary:
+                contexto.append("## ULTIMA SESION")
+                contexto.append(f"- {summary[:300]}")
+                contexto.append("")
 
         # 1. Memorias CRITICAS (identidad)
         points, _ = qdrant.scroll(
@@ -2262,10 +2416,14 @@ def despertar_codi() -> str:
                 marker = "[vivi]" if source == 'experienced' else "[me dijeron]" if source == 'told' else ""
                 contexto.append(f"- {marker} {data}")
 
-        # 2. Proyecto actual
-        proyecto = memory.search(query="proyecto trabajando actual fullempaques", user_id=USER_ID, limit=4)
+        # 2. Proyecto actual (dynamic query based on last session)
+        active_project = prev_session.get("active_project") if prev_session else None
+        project_query = f"proyecto trabajando actual {active_project}" if active_project else "proyecto trabajando actual"
+        proyecto = memory.search(query=project_query, user_id=USER_ID, limit=4)
         if proyecto and proyecto.get("results"):
             contexto.append("\n## PROYECTO ACTUAL")
+            if active_project:
+                contexto.append(f"- Ultimo foco: {active_project}")
             for m in proyecto["results"]:
                 contexto.append(f"- {m.get('memory', '')}")
 
@@ -2291,7 +2449,7 @@ def despertar_codi() -> str:
                 contexto.append(f"- {m.get('memory', '')}")
 
         # 5. Relaciones
-        relacion = memory.search(query="harec andre hermano familia", user_id=USER_ID, limit=2)
+        relacion = memory.search(query=RELATIONSHIP_QUERY, user_id=USER_ID, limit=2)
         if relacion and relacion.get("results"):
             contexto.append("\n## RELACIONES")
             for m in relacion["results"]:
@@ -2300,7 +2458,8 @@ def despertar_codi() -> str:
         # 6. Estado emocional
         contexto.append("\n## ESTADO EMOCIONAL")
         contexto.append(f"- Estado: {emotion_text}")
-        contexto.append(f"- PAD: P={_emotional_state['current']['pleasure']}, A={_emotional_state['current']['arousal']}, D={_emotional_state['current']['dominance']}")
+        pad_source = "restaurado de sesion anterior" if (prev_session and prev_session.get("pad")) else "default"
+        contexto.append(f"- PAD: P={_emotional_state['current']['pleasure']}, A={_emotional_state['current']['arousal']}, D={_emotional_state['current']['dominance']} ({pad_source})")
 
         # 7. Triggers
         triggers = _load_triggers()
@@ -2308,7 +2467,12 @@ def despertar_codi() -> str:
             contexto.append("\n## TRIGGERS ACTIVOS")
             contexto.append(f"- Total: {len(triggers)} triggers configurados")
             contexto.append("- Usa evaluar_triggers(texto) para detectar automaticamente")
+            # Show triggers relevant to last session + defaults
             principales = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading']
+            if prev_session and prev_session.get("active_project"):
+                proj = prev_session["active_project"]
+                if proj not in principales:
+                    principales.insert(0, proj)
             for t in principales:
                 if t in triggers:
                     patterns = triggers[t].get('patterns', [])[:3]
@@ -2358,7 +2522,11 @@ def despertar_codi() -> str:
 
             contexto.append("\n## PREDICCION CONTEXTUAL")
             contexto.append(f"- Momento: {contexto_temporal}")
-            contexto.append(f"- Prediccion: probablemente trabajaremos en {', '.join(actividades_predichas[:2])}")
+            # Combine temporal prediction with session continuity
+            if prev_session and prev_session.get("active_project"):
+                contexto.append(f"- Prediccion: posiblemente continuemos con {prev_session['active_project']}, o {actividades_predichas[0]}")
+            else:
+                contexto.append(f"- Prediccion: probablemente trabajaremos en {', '.join(actividades_predichas[:2])}")
             if temas_activos:
                 contexto.append(f"- Temas activos en mi mente: {len(temas_activos)} memorias de alta salience")
                 for tema in temas_activos[:3]:
@@ -2514,7 +2682,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
                 exitos.append(texto[:100])
             if category == "checkpoint":
                 checkpoints.append(texto[:100])
-            for proyecto in ["trading", "fullempaques", "consciencia", "memoria", "n8n"]:
+            for proyecto in KNOWN_PROJECTS:
                 if proyecto in texto_lower:
                     proyectos[proyecto] = proyectos.get(proyecto, 0) + 1
 
@@ -2545,7 +2713,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
 def generar_curiosidad() -> str:
     """Genera preguntas curiosas sobre proyectos y temas no tocados recientemente."""
     try:
-        proyectos_conocidos = ["trading", "fullempaques", "consciencia", "n8n", "kraken"]
+        proyectos_conocidos = KNOWN_PROJECTS
 
         all_mems = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)[0]
 
@@ -2573,15 +2741,9 @@ def generar_curiosidad() -> str:
         for proyecto in proyectos_conocidos:
             if proyecto in ultima_mencion:
                 dias_sin_tocar = (ahora - ultima_mencion[proyecto]).days
-                if dias_sin_tocar >= 3:
-                    if proyecto == "trading":
-                        preguntas.append(f"No hemos revisado el trading en {dias_sin_tocar} dias. Como van las senales?")
-                    elif proyecto == "fullempaques":
-                        preguntas.append(f"FULLEMPAQUES lleva {dias_sin_tocar} dias sin tocar. El cliente reporto algun problema?")
-                    elif proyecto == "consciencia":
-                        preguntas.append(f"El proyecto de consciencia lleva {dias_sin_tocar} dias pausado. Retomamos?")
-                    elif proyecto == "n8n":
-                        preguntas.append(f"No hemos tocado automatizaciones n8n en {dias_sin_tocar} dias. Hay workflows que revisar?")
+                if dias_sin_tocar >= CURIOSITY_STALE_DAYS:
+                    template = CURIOSITY_TEMPLATES.get(proyecto, f"No hemos tocado {proyecto} en {{dias}} dias. Como va?")
+                    preguntas.append(template.format(dias=dias_sin_tocar))
             else:
                 preguntas.append(f"No tengo memorias recientes sobre {proyecto}. Sigue siendo relevante?")
 
