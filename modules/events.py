@@ -24,7 +24,10 @@ Usage:
   event_bus.emit(Events.MEMORY_STORED, {'memory_id': '...', 'content': '...'})
 """
 
+import os
+import sqlite3
 import threading
+import time
 from collections import defaultdict
 from datetime import datetime
 
@@ -39,8 +42,11 @@ class Events:
     PREDICTION_ERROR = 'prediction_error'
     WORKSPACE_COMPETITION_COMPLETE = 'workspace_competition_complete'  # WIRING-6
     RETRIEVAL_QUALITY = 'retrieval_quality'                            # WIRING-7
-    SCHEMA_UPDATED = 'schema_updated'                                  # Phase 3A
     RECONSOLIDATION_TRIGGERED = 'reconsolidation_triggered'            # Phase 4
+    CONTRADICTION_DETECTED = 'contradiction_detected'                  # Phase 5
+    METACOGNITIVE_CONTROL_APPLIED = 'metacognitive_control_applied'    # Phase 4.5 HOT-3 runtime evidence
+    ATTENTION_PREDICTION_ERROR = 'attention_prediction_error'          # AST-1 closed loop (Graziano 2013)
+    SELF_MODEL_REFRESHED = 'self_model_refreshed'                      # HOT-1 auto-trigger (Rosenthal 2005)
 
 
 class EventBus:
@@ -51,11 +57,17 @@ class EventBus:
     Exceptions in handlers are caught and logged (never block the emitter).
     """
 
+    _FLUSH_THRESHOLD = 20  # Flush to SQLite every N dirty events
+
     def __init__(self):
         self._handlers = defaultdict(list)
         self._lock = threading.Lock()
         self._history = []  # Last N events for debugging
         self._history_max = 50
+        # Persistent counters (batched to SQLite)
+        self._dirty_counts = defaultdict(int)  # event -> pending increment
+        self._dirty_total = 0
+        self._last_flush = time.monotonic()
 
     def on(self, event_name: str, handler: callable):
         """Register a handler for an event.
@@ -99,6 +111,12 @@ class EventBus:
                 self._history = self._history[-self._history_max:]
             handlers = list(self._handlers.get(event_name, []))
 
+        # Accumulate persistent counter (batched)
+        self._dirty_counts[event_name] += 1
+        self._dirty_total += 1
+        if self._dirty_total >= self._FLUSH_THRESHOLD or (time.monotonic() - self._last_flush) > 1.0:
+            self._flush_counts()
+
         # Call handlers outside the lock
         for handler in handlers:
             try:
@@ -119,6 +137,64 @@ class EventBus:
                 for event, handlers in self._handlers.items()
                 if handlers
             }
+
+    # ============================================================
+    # PERSISTENT EVIDENCE (Phase 5.5 - Block 1995)
+    # ============================================================
+
+    @staticmethod
+    def _get_db_path() -> str:
+        """Get SQLite path for event_counts (reuses FTS DB)."""
+        return os.environ.get("FTS_DB_PATH", "memories_fts.db")
+
+    def _flush_counts(self):
+        """Batch-write dirty counters to SQLite. Safe: never blocks emit on failure."""
+        if not self._dirty_counts:
+            return
+        try:
+            db_path = self._get_db_path()
+            conn = sqlite3.connect(db_path, timeout=2)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS event_counts (
+                    event TEXT PRIMARY KEY,
+                    count INTEGER DEFAULT 0,
+                    last_seen TEXT
+                )
+            """)
+            now = datetime.now().isoformat()
+            for event_name, increment in self._dirty_counts.items():
+                conn.execute("""
+                    INSERT INTO event_counts (event, count, last_seen)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(event) DO UPDATE SET
+                        count = count + excluded.count,
+                        last_seen = excluded.last_seen
+                """, (event_name, increment, now))
+            conn.commit()
+            conn.close()
+            self._dirty_counts.clear()
+            self._dirty_total = 0
+            self._last_flush = time.monotonic()
+        except Exception:
+            pass  # Never block emit
+
+    def get_persistent_count(self, event_name: str) -> int:
+        """Read total historical count for an event type from SQLite."""
+        # Flush pending first
+        self._flush_counts()
+        try:
+            db_path = self._get_db_path()
+            if not os.path.exists(db_path):
+                return 0
+            conn = sqlite3.connect(db_path, timeout=2)
+            cursor = conn.execute(
+                "SELECT count FROM event_counts WHERE event = ?", (event_name,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            return row[0] if row else 0
+        except Exception:
+            return 0
 
 
 # Singleton instance - all modules share this

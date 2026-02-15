@@ -20,7 +20,8 @@ def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: s
         import json
         from pathlib import Path
 
-        DATASET_PATH = Path("/Users/harecjimenez/codi-memory/training_data/codi_dataset.json")
+        from modules.config import BASE_DIR
+        DATASET_PATH = Path(BASE_DIR) / "training_data" / "codi_dataset.json"
 
         # Cargar dataset existente
         if DATASET_PATH.exists():

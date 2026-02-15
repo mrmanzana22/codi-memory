@@ -151,7 +151,7 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
             conn = sqlite3.connect(fts_db_path)
             conn.execute("SELECT 1 FROM failed_searches LIMIT 1")
             cursor = conn.execute(
-                "SELECT COUNT(*) FROM failed_searches WHERE query LIKE ? ORDER BY created_at DESC LIMIT 50",
+                "SELECT COUNT(*) FROM (SELECT 1 FROM failed_searches WHERE query LIKE ? ORDER BY created_at DESC LIMIT 50)",
                 (f"%{query[:30]}%",)
             )
             failed_count = cursor.fetchone()[0]
@@ -164,10 +164,19 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
             pass
 
     # 2. Check working memory for topic presence
+    # Auto-create wm_conn from fts_db_path if not provided
     wm_hit = False
-    if wm_conn:
+    _wm_local = wm_conn
+    _close_wm = False
+    if not _wm_local and fts_db_path and os.path.exists(fts_db_path):
         try:
-            cursor = wm_conn.execute(
+            _wm_local = sqlite3.connect(fts_db_path)
+            _close_wm = True
+        except Exception:
+            pass
+    if _wm_local:
+        try:
+            cursor = _wm_local.execute(
                 "SELECT COUNT(*) FROM working_memory WHERE content LIKE ?",
                 (f"%{query[:30]}%",)
             )
@@ -178,6 +187,12 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
                 basis_parts.append(f"in_wm(+0.15)")
         except Exception:
             pass
+        finally:
+            if _close_wm and _wm_local:
+                try:
+                    _wm_local.close()
+                except Exception:
+                    pass
 
     # 3. Check retrieval buffer for similar past queries
     buffer_hits = sum(

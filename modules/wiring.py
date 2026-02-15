@@ -38,8 +38,14 @@ _last_interaction_time = None
 _interaction_count = 0
 _session_interaction_count = 0  # Resets on long gaps
 
-# Importance string -> float map (matches memory_core.py)
-IMPORTANCE_MAP = {'critical': 1.0, 'high': 0.8, 'medium': 0.5, 'low': 0.2}
+# HOT-1: Periodic self-model refresh (Rosenthal 2005)
+_self_model_tick = 0
+_last_self_model_refresh = 0.0  # time.monotonic() for cooldown
+_SELF_MODEL_INTERVAL = 50       # trigger every N interactions
+_SELF_MODEL_COOLDOWN = 120      # minimum seconds between refreshes
+
+# Importance string -> float map (from config - single source of truth)
+from modules.config import IMPORTANCE_WEIGHTS as IMPORTANCE_MAP, WM_IMPORTANCE_THRESHOLD
 
 
 # ============================================================
@@ -64,7 +70,7 @@ def _on_memory_stored(event_name: str, data: dict):
         category = data.get("category", "general")
 
         # Only push high-importance memories to WM (avoid flooding)
-        if importance >= 0.7 and content:
+        if importance >= WM_IMPORTANCE_THRESHOLD and content:
             from modules.working_memory import push_to_working_memory
             push_to_working_memory(
                 content=content[:300],
@@ -91,13 +97,14 @@ def _on_memory_retrieved(event_name: str, data: dict):
     try:
         retrieved_ids = data.get("retrieved_ids", [])
         result_count = data.get("result_count", 0)
-        query_topic = data.get("query_topic", "")
+        query_topic = data.get("query", "")  # memory_core emits 'query', not 'query_topic'
 
         # Only spread on meaningful retrievals (not empty results)
         # Use recurrent_cycle for true re-entrant processing (Lamme 2006)
         if result_count > 0 and retrieved_ids:
             from modules.spreading import recurrent_cycle
-            recurrent_cycle(retrieved_ids[:3], cycles=2, depth=1, factor=0.3)
+            from modules.config import SPREAD_DEFAULT_DEPTH, SPREAD_DEFAULT_FACTOR
+            recurrent_cycle(retrieved_ids[:3], cycles=SPREAD_DEFAULT_DEPTH, depth=1, factor=SPREAD_DEFAULT_FACTOR)
 
         # Update attention schema with retrieval topic (coherence fix)
         if query_topic:
@@ -210,6 +217,9 @@ _attention_schema = {
     "topic_transitions": [],     # Topic A -> Topic B log (last 30)
     "interrupted_topics": [],    # Topics displaced by new focus
     "suppressed_items": [],      # 3B: Last 10 competition losers (Graziano AST)
+    "last_predicted_focus": None,    # AST-1: what we predicted next
+    "last_actual_focus": None,       # AST-1: what actually happened
+    "attention_prediction_error": 0.0,  # AST-1: PE magnitude (0=match, 1=mismatch)
 }
 
 
@@ -217,11 +227,14 @@ def _update_attention_schema(focus: str, driver: str = "unknown", strength: floa
     """Update the attention schema with a new focus.
 
     Tracks topic transitions and interrupted topics.
-    This is NOT full Graziano AST -- it is a minimal self-model
-    of the attention process.
+    AST-1 closed loop: captures prediction BEFORE update, computes PE AFTER.
+    (Graziano 2013 -- attention schema must predict and self-correct.)
     """
     global _attention_schema
     now = now_iso()
+
+    # --- AST-1: Capture prediction BEFORE mutating focus ---
+    pred_topic, pred_prob = predict_next_focus()
 
     old_focus = _attention_schema["current_focus"]
 
@@ -261,6 +274,32 @@ def _update_attention_schema(focus: str, driver: str = "unknown", strength: floa
     _attention_schema["focus_started"] = now
     _attention_schema["driver"] = driver
 
+    # --- AST-1: Compute attention prediction error AFTER update ---
+    # Anti-spam: only emit when prediction is non-empty AND confident enough
+    if pred_topic and pred_prob >= 0.5:
+        error = 0.0 if pred_topic.lower() == focus.lower() else 1.0
+        _attention_schema["last_predicted_focus"] = pred_topic
+        _attention_schema["last_actual_focus"] = focus
+        _attention_schema["attention_prediction_error"] = error
+        event_bus.emit(Events.ATTENTION_PREDICTION_ERROR, {
+            "predicted": pred_topic,
+            "actual": focus,
+            "error": error,
+            "pred_prob": pred_prob,
+        })
+
+        # --- AST-1 adaptation: decay wrong edge on mismatch (Graziano 2013) ---
+        # If predicted B but got C, remove oldest A->B transition so the
+        # bigram predictor self-corrects. A->C is already added above.
+        if error == 1.0 and old_focus:
+            transitions = _attention_schema["topic_transitions"]
+            old_lower = old_focus.lower()
+            pred_lower = pred_topic.lower()
+            for i, t in enumerate(transitions):
+                if t.get("from", "").lower() == old_lower and t.get("to", "").lower() == pred_lower:
+                    transitions.pop(i)
+                    break  # Remove only the oldest occurrence
+
 
 def get_attention_schema() -> dict:
     """Return the current attention schema state (for external queries)."""
@@ -273,6 +312,10 @@ def get_attention_schema() -> dict:
         "interrupted_topics": _attention_schema["interrupted_topics"][-3:],
         "suppressed_items": _attention_schema["suppressed_items"][-5:],
         "history_length": len(_attention_schema["history"]),
+        # AST-1 prediction error fields (backward-compat via .get)
+        "last_predicted_focus": _attention_schema.get("last_predicted_focus"),
+        "last_actual_focus": _attention_schema.get("last_actual_focus"),
+        "attention_prediction_error": _attention_schema.get("attention_prediction_error", 0.0),
     }
 
 
@@ -352,25 +395,21 @@ def _on_prediction_error(event_name: str, data: dict):
     """
     error_magnitude = data.get("error_magnitude", 0.5)
     topic = data.get("topic", "unknown")
-    memory_id = data.get("memory_id", "")
     actual_keywords = data.get("actual_keywords", [])
 
-    # Effect 1: Boost salience of surprising memory (Schultz 1997)
-    if error_magnitude > 0.3:
+    # Effect 1: Push surprise to working memory (Schultz 1997)
+    # Note: preturn_inject doesn't emit memory_id, so we use actual_keywords
+    if error_magnitude > 0.3 and actual_keywords:
         try:
-            if memory_id:
-                from modules.spreading import _spread_activation
-                _spread_activation([memory_id], depth=1, factor=min(0.5, error_magnitude))
-            elif actual_keywords:
-                from modules.working_memory import push_to_working_memory
-                push_to_working_memory(
-                    content=f"[PREDICTION ERROR] Surprise en topic '{topic}': {', '.join(actual_keywords[:5])}",
-                    topic="prediction_surprise",
-                    relevance=min(0.95, 0.6 + error_magnitude),
-                    source="prediction_error",
-                )
+            from modules.working_memory import push_to_working_memory
+            push_to_working_memory(
+                content=f"[PREDICTION ERROR] Surprise en topic '{topic}': {', '.join(actual_keywords[:5])}",
+                topic="prediction_surprise",
+                relevance=min(0.95, 0.6 + error_magnitude),
+                source="prediction_error",
+            )
         except Exception as e:
-            print(f"[wiring] _on_prediction_error spreading error: {e}", file=sys.stderr)
+            print(f"[wiring] _on_prediction_error WM push error: {e}", file=sys.stderr)
 
     # Effect 2: Surprise captures attention (Corbetta & Shulman 2002)
     if error_magnitude > 0.3:
@@ -384,20 +423,9 @@ def _on_prediction_error(event_name: str, data: dict):
             print(f"[wiring] _on_prediction_error attention error: {e}", file=sys.stderr)
 
     # Effect 3: PE-driven reconsolidation (Nader 2000, Lee 2009)
-    # If error involves a specific memory, check for reconsolidation
-    if memory_id and error_magnitude > 0.3:
-        try:
-            from modules.consolidation import check_reconsolidation, mark_as_labile
-            from modules.config import qdrant, COLLECTION_NAME
-            pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[memory_id], with_payload=True)
-            if pts:
-                payload = pts[0].payload or {}
-                trigger_context = f"PE={error_magnitude:.2f} topic={topic}"
-                recon = check_reconsolidation(memory_id, payload, trigger_context)
-                if recon.get("should_reconsolidate"):
-                    mark_as_labile(memory_id, error_magnitude, trigger_context)
-        except Exception as e:
-            print(f"[wiring] _on_prediction_error reconsolidation error: {e}", file=sys.stderr)
+    # DEFERRED: preturn_inject doesn't emit memory_id (PE is topic-level,
+    # not memory-specific). To enable: preturn would need to identify which
+    # stored memory generated the wrong prediction, then emit its ID.
 
 
 # ============================================================
@@ -413,8 +441,24 @@ def process_elapsed_time(elapsed_seconds: float):
 
     Called from preturn_inject.py on every turn.
     """
-    global _interaction_count, _session_interaction_count
+    global _interaction_count, _session_interaction_count, _self_model_tick, _last_self_model_refresh
     _interaction_count += 1
+
+    # --- HOT-1: Periodic self-model refresh (Rosenthal 2005) ---
+    # Runs BEFORE early return so it triggers on every interaction, not just long gaps.
+    _self_model_tick += 1
+    if (_self_model_tick % _SELF_MODEL_INTERVAL == 0
+            and (time.monotonic() - _last_self_model_refresh) >= _SELF_MODEL_COOLDOWN):
+        _last_self_model_refresh = time.monotonic()
+        try:
+            from modules.consciousness import reflect_on_self
+            summary = reflect_on_self()
+            event_bus.emit(Events.SELF_MODEL_REFRESHED, {
+                "tick": _self_model_tick,
+                "summary_len": len(summary) if summary else 0,
+            })
+        except Exception as e:
+            print(f"[wiring] HOT-1 self-model refresh error: {e}", file=sys.stderr)
 
     if elapsed_seconds < 60:
         _session_interaction_count += 1
@@ -582,6 +626,99 @@ def _on_retrieval_quality(event_name: str, data: dict):
 # WIRING REGISTRATION (called once at startup)
 # ============================================================
 
+# ============================================================
+# HANDLER: CONTRADICTION_DETECTED (Phase 5 - Kumaran & Maguire 2007)
+# ============================================================
+
+def _on_contradiction_detected(event_name: str, data: dict):
+    """When contradiction is detected at encoding time.
+
+    CA1 mismatch signal triggers:
+    1. Attention capture (push to WM)
+    2. Reconsolidation window (mark old memory as labile)
+    3. Attention schema update
+    """
+    try:
+        pe = data.get("pe", 0.0)
+        old_memory_id = data.get("conflicting_memory_id", "")
+        old_text = data.get("conflicting_text", "")
+        new_text = data.get("new_content", "")
+        shared_entities = data.get("shared_entities", [])
+
+        from modules.working_memory import push_to_working_memory
+        from modules.config import CONTRADICTION_PE_ALERT
+
+        if pe >= CONTRADICTION_PE_ALERT:
+            # High PE: explicit alert + mark labile
+            alert = (
+                f"[CONTRADICTION PE={pe:.2f}] "
+                f"New: '{new_text[:100]}...' conflicts with "
+                f"existing: '{old_text[:100]}...' "
+                f"(entities: {', '.join(shared_entities[:5])})"
+            )
+            push_to_working_memory(
+                content=alert,
+                topic="contradiction",
+                relevance=min(0.95, 0.6 + pe),
+                source="contradiction_detector",
+            )
+            # Mark old memory as labile
+            if old_memory_id:
+                try:
+                    from modules.consolidation import mark_as_labile
+                    mark_as_labile(
+                        memory_id=old_memory_id,
+                        prediction_error=pe,
+                        trigger_context=f"Inline PE at encoding: {new_text[:200]}"
+                    )
+                except Exception:
+                    pass
+        else:
+            # Moderate PE: silent note
+            push_to_working_memory(
+                content=f"[PE NOTE] Tension detected (PE={pe:.2f}) with memory {old_memory_id[:8]}",
+                topic="metamemory",
+                relevance=0.5,
+                source="contradiction_detector",
+            )
+
+        # Update attention schema
+        _update_attention_schema(
+            focus=f"contradiction:{','.join(shared_entities[:3])}",
+            driver="contradiction_detected",
+            strength=min(1.0, pe),
+        )
+
+    except Exception as e:
+        print(f"[wiring] _on_contradiction_detected error: {e}", file=sys.stderr)
+
+
+def _on_reconsolidation_triggered(event_name: str, data: dict):
+    """When a memory is reconsolidated, update WM and attention (Nader 2000).
+
+    Closes the loop: reconsolidation is not just a DB operation,
+    the system should KNOW it happened and adjust attention.
+    """
+    try:
+        memory_id = data.get("memory_id", "")[:8]
+        old_conf = data.get("old_confidence", 0)
+        new_conf = data.get("new_confidence", 0)
+        from modules.working_memory import push_to_working_memory
+        push_to_working_memory(
+            content=f"[RECONSOLIDATION] Memory {memory_id} re-embedded, confidence {old_conf:.2f}->{new_conf:.2f}",
+            topic="reconsolidation",
+            relevance=0.7,
+            source="reconsolidation_triggered",
+        )
+        _update_attention_schema(
+            focus=f"reconsolidation:{memory_id}",
+            driver="reconsolidation",
+            strength=0.6,
+        )
+    except Exception as e:
+        print(f"[wiring] _on_reconsolidation_triggered error: {e}", file=sys.stderr)
+
+
 def wire_event_bus():
     """Register all event handlers. Called from server.py at startup.
 
@@ -601,6 +738,8 @@ def wire_event_bus():
     event_bus.on(Events.PREDICTION_ERROR, _on_prediction_error)
     event_bus.on(Events.WORKSPACE_COMPETITION_COMPLETE, _on_competition_complete)
     event_bus.on(Events.RETRIEVAL_QUALITY, _on_retrieval_quality)
+    event_bus.on(Events.CONTRADICTION_DETECTED, _on_contradiction_detected)
+    event_bus.on(Events.RECONSOLIDATION_TRIGGERED, _on_reconsolidation_triggered)
 
     _wired = True
     stats = event_bus.get_stats()

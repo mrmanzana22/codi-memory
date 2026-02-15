@@ -41,6 +41,14 @@ def _get_neighbors(point_id: str, payload: dict) -> list:
         neighbors.append(rt)
         seen.add(rt)
 
+    # related_memories (list[str]) -- auto-connected neighbors (Phase 5.5)
+    rm = payload.get('related_memories')
+    if rm and isinstance(rm, list):
+        for rid in rm:
+            if isinstance(rid, str) and rid not in seen:
+                neighbors.append(rid)
+                seen.add(rid)
+
     # consolidated_with (list[str])
     cw = payload.get('consolidated_with')
     if cw and isinstance(cw, list):

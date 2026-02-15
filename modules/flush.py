@@ -1,7 +1,10 @@
 import os
 import json
 from datetime import datetime
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR, now_short, now_iso, now_col
+from modules.config import (
+    memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR,
+    now_short, now_iso, now_col, SESSION_STATE_FILE, _emotional_state,
+)
 from modules.utils import enrich_with_ownership, maybe_backup, export_memories_to_files, append_to_daily_journal
 from modules.memory_smart import add_memory_smart, process_fts_queue
 
@@ -78,6 +81,84 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
         return f"Error guardando checkpoint: {str(e)}"
 
 
+def _save_session_state(resumen: str = "") -> bool:
+    """Persist session state to disk so despertar_codi can restore it.
+
+    Saves: emotional PAD, active project, WM topics, session summary.
+    Returns True on success.
+    """
+    try:
+        # Current emotional state
+        current_pad = _emotional_state.get('current', {})
+
+        # Active project: infer from working memory topics (SQLite-backed)
+        active_project = None
+        wm_topics = []
+        try:
+            from modules.working_memory import _get_conn as _get_wm_conn
+            with _get_wm_conn() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT topic FROM working_memory "
+                    "WHERE active = 1 AND topic IS NOT NULL "
+                    "ORDER BY relevance DESC LIMIT 10"
+                ).fetchall()
+            for row in rows:
+                topic = row["topic"] if isinstance(row, dict) else row[0]
+                if topic and topic not in wm_topics:
+                    wm_topics.append(topic)
+                if not active_project and topic not in ('metamemory', 'contradiction', 'general', ''):
+                    active_project = topic
+        except Exception:
+            pass
+
+        state = {
+            "timestamp": now_iso(),
+            "pad": {
+                "pleasure": current_pad.get('pleasure', 0.0),
+                "arousal": current_pad.get('arousal', 0.0),
+                "dominance": current_pad.get('dominance', 0.0),
+                "trigger": current_pad.get('trigger', ''),
+            },
+            "active_project": active_project,
+            "wm_topics": wm_topics[:10],
+            "session_summary": resumen[:500] if resumen else "",
+        }
+
+        with open(SESSION_STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"[flush] Error saving session state: {e}")
+        return False
+
+
+def load_session_state() -> dict | None:
+    """Load previous session state if it exists and is fresh enough.
+
+    Returns dict with pad, active_project, wm_topics, session_summary
+    or None if no state / expired.
+    """
+    try:
+        from modules.config import SESSION_STATE_MAX_AGE_HOURS
+        if not os.path.exists(SESSION_STATE_FILE):
+            return None
+
+        with open(SESSION_STATE_FILE, 'r') as f:
+            state = json.load(f)
+
+        # Check freshness
+        saved_ts = state.get("timestamp", "")
+        if saved_ts:
+            saved_dt = datetime.fromisoformat(saved_ts)
+            age_hours = (now_col() - saved_dt).total_seconds() / 3600
+            if age_hours > SESSION_STATE_MAX_AGE_HOURS:
+                return None
+
+        return state
+    except Exception:
+        return None
+
+
 def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
                    aprendizajes: str = "") -> str:
     """
@@ -144,7 +225,16 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     except Exception as e:
         resultados.append(f"Backup: ERROR - {e}")
 
-    # 6. Process pending FTS retry queue (P2A)
+    # 6. Save session state for next despertar
+    try:
+        if _save_session_state(resumen):
+            resultados.append("Session state: OK")
+        else:
+            resultados.append("Session state: SKIP")
+    except Exception as e:
+        resultados.append(f"Session state: ERROR - {e}")
+
+    # 7. Process pending FTS retry queue (P2A)
     try:
         fts_result = process_fts_queue(limit=100)
         if fts_result.get("processed", 0) > 0:
