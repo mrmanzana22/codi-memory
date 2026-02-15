@@ -28,7 +28,7 @@
 
 Codi-Memory is an MCP server that provides persistent memory and cognitive capabilities to Claude. It implements a neuroscience-inspired architecture grounded in 13 published papers spanning Global Workspace Theory, Higher-Order Thought theory, Attention Schema Theory, Predictive Processing, and memory reconsolidation research.
 
-The system exposes ~80 MCP tools organized around three macro-operations: `recall()`, `remember()`, and `context_snapshot()`. Internally, these route through 22 specialized modules that simulate episodic/semantic memory separation, metacognitive monitoring, spreading activation, workspace competition, and emotional modulation.
+The system exposes ~104 MCP tools organized around three macro-operations: `recall()`, `remember()`, and `context_snapshot()`. Internally, these route through 22 specialized modules that simulate episodic/semantic memory separation, metacognitive monitoring, spreading activation, workspace competition, and emotional modulation.
 
 ```mermaid
 graph TB
@@ -37,7 +37,7 @@ graph TB
         RC["Remote Clients<br/>(HTTP/SSE transport)"]
     end
 
-    subgraph "server.py - Entry Point (379 lines)"
+    subgraph "server.py - Entry Point (378 lines)"
         MCP["MCP Server<br/>Slim Orchestrator"]
     end
 
@@ -98,7 +98,7 @@ graph TB
     CON --> N8N
 ```
 
-**Entry Point:** `server.py` (379 lines) is a slim orchestrator. It registers all MCP tools, initializes modules via lazy loading, and supports two transports:
+**Entry Point:** `server.py` (378 lines) is a slim orchestrator. It registers all MCP tools, initializes modules via lazy loading, and supports two transports:
 
 | Transport | Use Case | Features |
 |-----------|----------|----------|
@@ -140,7 +140,6 @@ graph LR
     MC --> MS
     MC --> ACT
     MC --> RM
-    MC --> SP
     MC --> CM
     MC --> EV
     MC --> CF
@@ -166,7 +165,6 @@ graph LR
     WR --> SP
     WR --> CM
     WR --> RM
-    WR --> ACT
 ```
 
 ### 2.2 Module Catalog
@@ -195,10 +193,10 @@ graph LR
 
 | Module | Lines | Responsibility |
 |--------|-------|---------------|
-| `events.py` | 201 | EventBus pub/sub, 11 event types, persistent counters in SQLite |
+| `events.py` | 201 | EventBus pub/sub, 13 event types, persistent counters in SQLite |
 | `wiring.py` | 758 | 10 event handlers connecting modules (thalamocortical integration pattern), attention schema, prediction loop |
 | `config.py` | 350 | 45+ parameters, lazy initialization for mem0/Qdrant/Supabase clients, Colombia timezone default |
-| `interface.py` | 333 | 3 macro-tools abstracting ~80 underlying operations |
+| `interface.py` | 333 | 3 macro-tools abstracting ~104 underlying operations |
 | `prospective.py` | 918 | Prospective memory: event-based and time-based intentions, tiered monitoring (active/background/dormant), power-law decay |
 | `utils.py` | 791 | Ownership enrichment (source attribution + confidence), PAD retrieval bias, backup management, session state |
 | `flush.py` | 338 | Checkpoints (per-event snapshots), session flush (end-of-session persist), Markdown export |
@@ -405,7 +403,7 @@ The event system implements a lightweight pub/sub bus (Global Workspace Theory b
 
 ```mermaid
 graph LR
-    subgraph "Event Types (11)"
+    subgraph "Event Types (13)"
         MS_E[MEMORY_STORED]
         MR_E[MEMORY_RETRIEVED]
         EC_E[EMOTION_CHANGED]
@@ -417,6 +415,8 @@ graph LR
         RT_E[RECONSOLIDATION_TRIGGERED]
         CD_E[CONTRADICTION_DETECTED]
         MC_E[METACOGNITIVE_CONTROL_APPLIED]
+        AP_E[ATTENTION_PREDICTION_ERROR]
+        SR_E[SELF_MODEL_REFRESHED]
     end
 
     subgraph "Handlers (wiring.py, 10 handlers)"
@@ -455,7 +455,7 @@ graph LR
 
 ### 5.1 Thalamocortical Integration Pattern
 
-The `wiring.py` module acts as a thalamic relay: it receives raw events and routes them to the appropriate cortical module. This mirrors the thalamocortical loop where the thalamus relays and gates information flow between brain regions. No module directly calls another module's event handlers; all cross-module communication is mediated through `wiring.py`.
+The `wiring.py` module acts as an event routing layer inspired by thalamocortical relay patterns: it receives raw events and routes them to the appropriate processing module. No module directly calls another module's event handlers; all cross-module communication is mediated through `wiring.py`.
 
 ### 5.2 Persistent Counters
 
@@ -506,7 +506,7 @@ Phase 5: Reconsolidation Check
 
 The system implements Butlin et al. 2023's framework for assessing indicators of consciousness in AI systems. 14 indicators are evaluated across 5 theoretical families.
 
-**Current Score: 11.2 / 14**
+**Current Score: 11.2 / 14** (with accumulated runtime evidence in persistent counters). Fresh install / cold start: expected ~4-5 / 14 until the system accumulates event history and RCJ/reconsolidation records.
 
 ### 7.1 Scoring Scale (Block 1995)
 
@@ -514,8 +514,9 @@ The system implements Butlin et al. 2023's framework for assessing indicators of
 |-------|-------|----------|
 | 0.0 | ABSENT | No implementation |
 | 0.3 | DORMANT | Code exists but no runtime evidence |
-| 0.7 | NASCENT | Partial runtime evidence |
-| 1.0 | FULL | Persistent event counts proving active use |
+| 0.5 | PARTIAL | Runs sometimes, weak/spotty evidence or not behaviorally tied |
+| 0.7 | NASCENT | Clear runtime evidence but insufficient volume/stability |
+| 1.0 | FULL | Persistent evidence proving active use + behavioral linkage |
 
 FULL requires runtime evidence stored in persistent counters, not merely the existence of code. This prevents score inflation from dead code paths.
 
@@ -523,11 +524,11 @@ FULL requires runtime evidence stored in persistent counters, not merely the exi
 
 | Theory | Indicators | What They Measure |
 |--------|-----------|-------------------|
-| GWT (Baars/Dehaene) | 3 | Broadcast, competition, ignition |
-| HOT (Rosenthal) | 3 | FOK, RCJ, metacognitive control |
-| AST (Graziano) | 2 | Attention model, prediction |
-| RPT (Lamme) | 3 | Recurrent processing, cross-module events, recurrent cycles |
-| PP (Clark/Friston) | 3 | Prediction, error detection, update |
+| GWT (Baars/Dehaene) | 4 | Competition, ignition/gating, broadcast, workspace capacity/limits |
+| HOT / Metamemory (Nelson & Narens; + Rosenthal for HOT framing) | 4 | Monitoring (FOK/RCJ), control, self-model/reflective processes |
+| AST (Graziano) | 1 | Attention schema (model of attention + prediction loop) |
+| RPT (Lamme) | 2 | Recurrent processing loops + cross-module integration |
+| PP (Clark/Friston) | 3 | Prediction, prediction error, model updating/reconsolidation link |
 
 ---
 
@@ -706,7 +707,7 @@ For 10x growth in memory corpus:
 
 ```
 codi-memory/
-  server.py                          (379 lines)  Entry point
+  server.py                          (378 lines)  Entry point
   modules/
     memory_core.py                   (996 lines)  CRUD + hybrid search
     memory_smart.py                  (809 lines)  Smart add + contradiction
