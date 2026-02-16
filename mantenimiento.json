@@ -9,8 +9,8 @@
       "nombre": "Consolidar y organizar memorias",
       "descripcion": "Ejecutar mantenimiento_memorias() - consolida, aplica decay, revisa duplicados",
       "frecuencia_dias": 2,
-      "ultimo_completado": "2026-02-01T14:56:39.099470",
-      "proximo": "2026-02-03T14:56:39.099470",
+      "ultimo_completado": "2026-02-15T08:08:19.372492-05:00",
+      "proximo": "2026-02-17T08:08:19.372492-05:00",
       "activo": true
     },
     {
@@ -27,8 +27,8 @@
       "nombre": "Backup de memorias",
       "descripcion": "Verificar que memories_backup.json este actualizado",
       "frecuencia_dias": 3,
-      "ultimo_completado": "2026-02-01T14:57:00.422179",
-      "proximo": "2026-02-04T14:57:00.422179",
+      "ultimo_completado": "2026-02-15T08:08:20.436211-05:00",
+      "proximo": "2026-02-18T08:08:20.436211-05:00",
       "activo": true
     },
     {
@@ -45,8 +45,8 @@
       "nombre": "Consolidacion profunda (dream)",
       "descripcion": "Ejecutar dream_consolidation() - integracion profunda tipo sueno REM",
       "frecuencia_dias": 5,
-      "ultimo_completado": "2026-02-01T14:57:13.374522",
-      "proximo": "2026-02-06T14:57:13.374522",
+      "ultimo_completado": "2026-02-15T08:08:32.911478-05:00",
+      "proximo": "2026-02-20T08:08:32.911478-05:00",
       "activo": true
     }
   ]

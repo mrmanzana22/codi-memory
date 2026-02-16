@@ -86,7 +86,8 @@ def register_tools(mcp):
                 }, ensure_ascii=False, indent=2)
 
             # Ordenar por prioridad (proyecto_nuevo primero si existe)
-            priority_order = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']
+            from modules.config import TRIGGER_PRIORITY_ORDER
+            priority_order = TRIGGER_PRIORITY_ORDER
             activated.sort(key=lambda x: priority_order.index(x['trigger']) if x['trigger'] in priority_order else 99)
 
             return json.dumps({

@@ -23,55 +23,11 @@ _TABLES_INITIALIZED = False
 
 
 def _init_tables(conn: sqlite3.Connection):
-    """Create working memory tables and indices if they don't exist."""
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS working_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content TEXT NOT NULL,
-            topic TEXT DEFAULT 'general',
-            relevance REAL DEFAULT 0.5,
-            added_at TEXT NOT NULL,
-            occurred_at TEXT,
-            source TEXT DEFAULT 'interaction',
-            related_memory_id TEXT,
-            chain_id TEXT,
-            active INTEGER DEFAULT 1,
-            last_accessed_at TEXT,
-            access_count INTEGER DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_wm_active_relevance
-            ON working_memory(active, relevance DESC);
-        CREATE INDEX IF NOT EXISTS idx_wm_chain_active_time
-            ON working_memory(chain_id, active, occurred_at);
-        CREATE INDEX IF NOT EXISTS idx_wm_topic_active_time
-            ON working_memory(topic, active, occurred_at);
-        CREATE INDEX IF NOT EXISTS idx_wm_added_at
-            ON working_memory(added_at);
-
-        CREATE TABLE IF NOT EXISTS narrative_traces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            trace_name TEXT NOT NULL UNIQUE,
-            chain_ids TEXT NOT NULL,
-            theme TEXT,
-            created_at TEXT NOT NULL,
-            last_updated TEXT NOT NULL,
-            active INTEGER DEFAULT 1
-        );
-        CREATE INDEX IF NOT EXISTS idx_traces_active_updated
-            ON narrative_traces(active, last_updated);
-
-        CREATE TABLE IF NOT EXISTS trace_chains (
-            trace_id INTEGER NOT NULL,
-            chain_id TEXT NOT NULL,
-            FOREIGN KEY (trace_id) REFERENCES narrative_traces(id)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_trace_chain
-            ON trace_chains(trace_id, chain_id);
-        CREATE INDEX IF NOT EXISTS idx_trace_chains_chain
-            ON trace_chains(chain_id);
-        CREATE INDEX IF NOT EXISTS idx_trace_chains_trace
-            ON trace_chains(trace_id);
-    """)
+    """Validate working memory tables exist (created by migrations)."""
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, [
+        "working_memory", "narrative_traces", "trace_chains",
+    ])
 
 
 @contextmanager

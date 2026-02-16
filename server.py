@@ -22,7 +22,20 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
-# Import MCP server and shared config from modules
+
+# ============================================================
+# SCHEMA MIGRATIONS (D4) - must run BEFORE any module import
+# ============================================================
+from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH
+from modules.migrations import apply_migrations
+
+_server_dir = os.path.dirname(os.path.abspath(__file__))
+apply_migrations(FTS_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations"))
+apply_migrations(PROSPECTIVE_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations_prospective"))
+
+# ============================================================
+# NOW import modules (tables already exist from migrations)
+# ============================================================
 from modules.config import mcp, memory, qdrant, USER_ID, COLLECTION_NAME, now_iso
 from modules import metrics
 
@@ -39,6 +52,11 @@ from modules import working_memory
 from modules import interface
 from modules import spreading
 from modules import consolidation
+from modules import prospective
+from modules import wiring
+from modules import assessment
+from modules import session_bridge
+from modules import sleep_loop
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -49,6 +67,7 @@ metrics.instrument_mcp(mcp)
 # REGISTER ALL TOOLS
 # ============================================================
 
+metrics.register_metrics_tools(mcp)
 triggers.register_tools(mcp)
 books.register_tools(mcp)
 memory_core.register_tools(mcp)
@@ -61,8 +80,17 @@ working_memory.register_tools(mcp)
 interface.register_tools(mcp)
 spreading.register_tools(mcp)
 consolidation.register_consolidation_tools(mcp)
+prospective.register_prospective_tools(mcp)
+assessment.register_assessment_tools(mcp)
+session_bridge.register_tools(mcp)
+sleep_loop.register_tools(mcp)
 
-print(f"[codi-memory] All modules loaded. Tools registered.")
+# ============================================================
+# WIRE EVENT BUS (Thalamocortical Integration)
+# ============================================================
+wiring.wire_event_bus()
+
+print(f"[codi-memory] All modules loaded. Tools registered. Event bus wired.")
 
 
 # ============================================================

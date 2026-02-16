@@ -43,9 +43,10 @@ from modules.config import (
     RECONSOLIDATION_PE_THRESHOLD,
     RECONSOLIDATION_STRENGTH_FLOOR,
     RECONSOLIDATION_STRENGTH_CEILING,
-    RECONSOLIDATION_MAX_BLEND,
 )
-from modules.utils import compute_activation, now_iso
+# Note: RECONSOLIDATION_MAX_BLEND removed -- full replace per Nader 2000 (blend_weight=0.0 always)
+from modules.utils import now_iso
+from modules.activation import compute_unified_activation
 
 # OpenAI client (lazy, uses OPENAI_API_KEY from env)
 _oai_client = None
@@ -86,71 +87,19 @@ def _consolidation_conn():
 
 
 def init_consolidation_db():
-    """Initialize consolidation-related tables in memories_fts.db."""
-    conn = _consolidation_conn()
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS consolidation_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id TEXT NOT NULL UNIQUE,
-            scope TEXT NOT NULL,
-            lookback_hours INTEGER,
-            episodes_scanned INTEGER DEFAULT 0,
-            clusters_found INTEGER DEFAULT 0,
-            facts_extracted INTEGER DEFAULT 0,
-            facts_created INTEGER DEFAULT 0,
-            facts_updated INTEGER DEFAULT 0,
-            contradictions_found INTEGER DEFAULT 0,
-            episodes_pruned INTEGER DEFAULT 0,
-            duration_ms INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS reconsolidation_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            memory_id TEXT NOT NULL,
-            memory_type TEXT DEFAULT 'episodic',
-            action TEXT NOT NULL,
-            prediction_error REAL,
-            memory_strength REAL,
-            old_content TEXT,
-            new_content TEXT,
-            blend_weight REAL,
-            trigger_context TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_recon_log_memory
-        ON reconsolidation_log(memory_id)
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_recon_log_time
-        ON reconsolidation_log(created_at)
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS labile_memories (
-            memory_id TEXT PRIMARY KEY,
-            marked_at TEXT NOT NULL,
-            window_expires TEXT NOT NULL,
-            prediction_error REAL,
-            trigger_context TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-    print("[consolidation] Tables initialized OK")
+    """Validate consolidation-related tables exist in memories_fts.db."""
+    from modules.migrations import ensure_schema_ready_db
+    ensure_schema_ready_db(FTS_DB_PATH, [
+        "consolidation_log", "reconsolidation_log", "labile_memories",
+    ])
+    print("[consolidation] Tables validated OK")
 
 
-# Initialize on import
+# Validate on import
 try:
     init_consolidation_db()
 except Exception as e:
-    print(f"[consolidation] WARNING: Could not init tables: {e}")
+    print(f"[consolidation] WARNING: Could not validate tables: {e}")
 
 
 # ============================================================
@@ -222,6 +171,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     result["duration_ms"] = duration_ms
     _log_consolidation_run(result)
 
+    # Emit CONSOLIDATION_COMPLETE so wiring handlers can react (Baars 1988 broadcast)
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.CONSOLIDATION_COMPLETE, result)
+    except Exception:
+        pass
+
     report = (
         f"[consolidation:{batch_id}] {scope} complete\n"
         f"  Episodes scanned: {result['episodes_scanned']}\n"
@@ -246,7 +202,7 @@ def _phase_selection(lookback_hours: int) -> list:
         List of dicts: [{id, data, payload, score}]
     """
     cutoff = datetime.now() - timedelta(hours=lookback_hours)
-    importance_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2}
+    from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
     # Exclude already-consolidated episodes
     scroll_filter = Filter(must_not=[
@@ -781,30 +737,134 @@ CORRECTION_PATTERNS = [
 ]
 
 
+NEGATION_MARKERS = [
+    "no ", "ya no", "no es", "nunca", "ni ", "tampoco",
+    "not ", "never", "don't", "doesn't", "isn't", "won't",
+    "sin ", "ninguno", "nada",
+]
+
+
+def _extract_key_entities(text: str) -> set:
+    """Extract key entities (nouns/proper names) from text.
+
+    Lightweight heuristic: words > 4 chars, excluding stopwords and
+    common verbs/adjectives that inflate overlap without being entities.
+    Based on: Kumaran & Maguire 2007 entity-overlap for mismatch detection.
+    """
+    stopwords = {
+        # ES: pronouns, prepositions, conjunctions
+        "para", "como", "este", "esta", "estos", "estas", "pero", "porque",
+        "cuando", "donde", "tiene", "hacer", "puede", "desde", "hasta",
+        "siendo", "sobre", "entre", "antes", "despues", "mejor", "mayor",
+        # EN: pronouns, prepositions, conjunctions
+        "that", "this", "with", "from", "have", "been", "they", "their",
+        "which", "about", "would", "there", "what", "more", "some",
+        "also", "other", "just", "should", "could", "after", "before",
+        "every", "these", "those", "being", "still", "while", "where",
+        # ES: frequent verbs (inflated overlap without semantic value)
+        "tiene", "hacer", "puede", "estar", "haber", "tener", "poder",
+        "quiero", "quiere", "usamos", "usando", "vamos", "crear", "creo",
+        "implementar", "actualizar", "funciona", "necesita", "deberia",
+        # EN: frequent verbs
+        "using", "works", "would", "should", "could", "needs", "wants",
+        "create", "update", "implement", "function", "working", "getting",
+        # Tech noise (too common to be meaningful entities)
+        "error", "datos", "linea", "archivo", "system", "module",
+    }
+    words = text.replace(",", " ").replace(".", " ").replace(":", " ").replace("(", " ").replace(")", " ").split()
+    entities = set()
+    for w in words:
+        clean = w.strip().lower()
+        if len(clean) > 4 and clean not in stopwords:
+            # Skip words ending in very common suffixes (verbs/adverbs)
+            if clean.endswith(("mente", "ción", "ando", "endo", "aron", "ieron")):
+                continue
+            entities.add(clean)
+    return entities
+
+
 def detect_contradiction(memory_text: str, context: str) -> dict:
     """Detect contradiction between a memory and current context.
 
-    Lightweight method (no LLM):
-    1. Look for explicit correction patterns
-    2. Score prediction error based on signal count
+    Kumaran & Maguire 2006/2007: CA1 hippocampal comparator uses
+    multiple channels for match-mismatch detection, not just one signal.
+
+    3 channels:
+      Canal 1 - Keywords (0.5 raw): Explicit correction patterns
+      Canal 2 - Topic confirmation (amplifier): cosine_sim * entity_overlap
+                Amplifies C1+C3 when same topic confirmed (0.4 to 1.0x)
+      Canal 3 - Negation detector (0.5 raw): Same entities + logical inversion
 
     Returns:
-        {prediction_error: float, detail: str|None}
+        {prediction_error: float, detail: str|None, channels: dict}
     """
-    if not context:
-        return {"prediction_error": 0.0, "detail": None}
+    if not context or not memory_text:
+        return {"prediction_error": 0.0, "detail": None, "channels": {}}
 
     context_lower = context.lower()
+    memory_lower = memory_text.lower()
+
+    # Canal 1: Keywords (existing CORRECTION_PATTERNS)
     signals = [p for p in CORRECTION_PATTERNS if p in context_lower]
+    canal1_score = min(1.0, len(signals) * 0.25) if signals else 0.0
 
-    if not signals:
-        return {"prediction_error": 0.0, "detail": None}
+    # Canal 2: Topic confirmation (Kumaran 2006 match detection)
+    # High cosine similarity + entity overlap = same topic confirmed.
+    # This AMPLIFIES Canal 1 and Canal 3: contradictions only meaningful
+    # if texts discuss the same subject. (NOT distance -- contradictions
+    # like "Docker is good" vs "Docker is bad" have HIGH similarity.)
+    mem_entities = _extract_key_entities(memory_text)
+    ctx_entities = _extract_key_entities(context)
+    shared_entities = mem_entities & ctx_entities
+    entity_overlap = len(shared_entities) / max(1, min(len(mem_entities), len(ctx_entities)))
 
-    pe = min(1.0, len(signals) * 0.2 + 0.1)
-    return {
-        "prediction_error": pe,
-        "detail": f"Correction signals: {signals}"
+    cosine_sim = 0.0
+    if shared_entities and len(shared_entities) >= 1:
+        try:
+            mem_vec = _embed_text(memory_text[:500])
+            ctx_vec = _embed_text(context[:500])
+            cosine_sim = _cosine_similarity(mem_vec, ctx_vec)
+        except Exception:
+            cosine_sim = 0.5  # fallback: assume moderate similarity
+
+    # Topic confirmation score: high sim + shared entities = same topic
+    canal2_score = cosine_sim * entity_overlap if shared_entities else 0.0
+
+    # Canal 3: Negation detection
+    canal3_score = 0.0
+    if shared_entities:
+        mem_negations = sum(1 for n in NEGATION_MARKERS if n in memory_lower)
+        ctx_negations = sum(1 for n in NEGATION_MARKERS if n in context_lower)
+        # One has negation, other doesn't = logical inversion
+        if (mem_negations > 0) != (ctx_negations > 0):
+            canal3_score = min(1.0, entity_overlap * 1.5)
+
+    # Weighted sum: C2 (topic confirmation) amplifies C1+C3
+    # Without C1 or C3, same-topic alone is NOT contradiction
+    # With topic confirmed (C2~1), C1+C3 fire at full weight
+    # Without topic confirmed (C2~0), C1+C3 still fire at 40% (keywords alone still valid)
+    raw_pe = canal1_score * 0.5 + canal3_score * 0.5
+    pe = raw_pe * (0.4 + 0.6 * canal2_score)
+
+    channels = {
+        "keywords": canal1_score,
+        "topic_confirmation": canal2_score,
+        "negation": canal3_score,
+        "shared_entities": list(shared_entities)[:10],
     }
+
+    detail = None
+    if pe > 0.0:
+        parts = []
+        if canal1_score > 0:
+            parts.append(f"keywords={signals}")
+        if canal2_score > 0:
+            parts.append(f"topic_sim={cosine_sim:.2f},overlap={entity_overlap:.2f}")
+        if canal3_score > 0:
+            parts.append(f"negation_inversion")
+        detail = f"PE channels: {', '.join(parts)}"
+
+    return {"prediction_error": pe, "detail": detail, "channels": channels}
 
 
 def check_reconsolidation(memory_id: str, memory_payload: dict,
@@ -815,9 +875,16 @@ def check_reconsolidation(memory_id: str, memory_payload: dict,
         {should_reconsolidate: bool, prediction_error: float,
          memory_strength: float, reason: str}
     """
-    # Compute memory strength
-    activation = compute_activation(memory_payload, noise=False)
-    strength = activation
+    # Compute memory strength via unified scorer
+    result = compute_unified_activation(
+        created_at=memory_payload.get('created_at', ''),
+        last_accessed=memory_payload.get('attention_last_accessed', ''),
+        access_count=memory_payload.get('attention_access_count', 0),
+        access_timestamps=memory_payload.get('access_timestamps'),
+        importance=memory_payload.get('narrative_importance', 'medium'),
+        noise=False,
+    )
+    strength = result.total
 
     # Boundary conditions
     if strength < RECONSOLIDATION_STRENGTH_FLOOR:
@@ -882,21 +949,163 @@ def clear_expired_labile():
         pass
 
 
-def correct_memory(memory_id: str, correction: str) -> str:
-    """Correct a specific memory via explicit user request.
+def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
+    """Update a memory based on new evidence (reconsolidation).
 
-    MCP tool for user-driven corrections.
+    Nader 2000: The original trace is DESTROYED and re-synthesized.
+    Sevenster 2013: Prediction error is a prerequisite for reconsolidation.
+
+    Pipeline:
+      1. Resolve full ID
+      2. Retrieve old payload from Qdrant
+      3. Labile gate: verify memory is labile OR has PE (force bypasses)
+      4. Log old content to reconsolidation_log
+      5. Adjust confidence (decrement by 0.1 for contradiction)
+      6. Build new content, generate new embedding
+      7. Upsert full PointStruct (vector + payload) -- re-embed, not post-it
+      8. Update FTS5 index
+      9. Emit RECONSOLIDATION_TRIGGERED event
 
     Args:
         memory_id: ID (or prefix) of the memory to correct
         correction: The correct/updated information
+        force: If True, bypass labile gate (for human-initiated corrections)
+
+    Returns:
+        Summary of reconsolidation action
     """
-    # TODO: Sub-phase 1.3 - Full reconsolidation implementation
-    # 1. Resolve memory_id to full ID
-    # 2. Log old content
-    # 3. Update memory with blended content
-    # 4. Log to reconsolidation_log
-    return f"[reconsolidation] correct_memory stub - will be implemented in sub-phase 1.3"
+    from modules.utils import resolve_memory_id as _resolve
+
+    # 1. Resolve full ID
+    full_id = _resolve(memory_id)
+    if not full_id:
+        return f"[reconsolidation] Could not resolve memory ID: {memory_id}"
+
+    # 2. Retrieve old payload
+    try:
+        pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+        if not pts:
+            return f"[reconsolidation] Memory {full_id[:8]} not found in Qdrant"
+        old_payload = pts[0].payload or {}
+    except Exception as e:
+        return f"[reconsolidation] Qdrant retrieve error: {e}"
+
+    old_content = old_payload.get("data", "") or old_payload.get("memory", "")
+    old_confidence = float(old_payload.get("confidence", old_payload.get("narrative_importance_score", 0.5)))
+
+    # 3. Labile gate (Sevenster 2013): PE is prerequisite, not just reactivation
+    actual_pe = 0.0
+    if not force:
+        is_labile = False
+        try:
+            conn = _consolidation_conn()
+            row = conn.execute(
+                "SELECT 1 FROM labile_memories WHERE memory_id = ? AND window_expires > ?",
+                (full_id, datetime.now().isoformat())
+            ).fetchone()
+            conn.close()
+            is_labile = row is not None
+        except Exception:
+            pass
+
+        # Always compute PE for the log, even when labile
+        pe_result = {"should_reconsolidate": False, "prediction_error": 0.0}
+        try:
+            pe_result = check_reconsolidation(
+                full_id, old_payload, correction
+            )
+            actual_pe = pe_result.get("prediction_error", 0.0)
+        except Exception:
+            actual_pe = 0.0
+
+        if not is_labile:
+            if not pe_result.get("should_reconsolidate", False):
+                return (
+                    f"[reconsolidation] Memory {full_id[:8]} rejected: "
+                    f"not labile and PE={actual_pe:.2f} "
+                    f"below threshold. Use force=True for manual override."
+                )
+
+    # 4. Build new content: REPLACE old trace, don't concatenate (Nader 2000)
+    # Old content is preserved in reconsolidation_log for audit trail
+    new_content = correction
+    try:
+        conn = _consolidation_conn()
+        conn.execute("""
+            INSERT INTO reconsolidation_log
+            (memory_id, memory_type, action, prediction_error, memory_strength,
+             old_content, new_content, blend_weight, trigger_context, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
+              old_content[:500], new_content[:500], 0.0,  # 0.0: full replace (Nader 2000), not blend
+              correction[:200], now_iso()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[consolidation] WARNING: Could not log reconsolidation: {e}")
+
+    # 5. Adjust confidence proportional to PE (Exton-McGuinness 2015)
+    # Higher PE = larger confidence decrement (0.05 base + 0.15 * PE)
+    confidence_delta = 0.05 + 0.15 * actual_pe
+    new_confidence = max(0.0, old_confidence - confidence_delta)
+
+    # 6. Re-embed: generate new vector for corrected content (Nader 2000)
+    try:
+        new_vector = _embed_text(new_content)
+    except Exception as e:
+        return f"[reconsolidation] Embedding error: {e}"
+
+    # 7. Upsert full PointStruct -- destroy and re-synthesize the trace
+    try:
+        updated_payload = dict(old_payload)
+        updated_payload.update({
+            "data": new_content,
+            "confidence": new_confidence,
+            "reconsolidated_at": now_iso(),
+            "reconsolidation_count": int(old_payload.get("reconsolidation_count", 0)) + 1,
+        })
+        qdrant.upsert(
+            collection_name=COLLECTION_NAME,
+            points=[PointStruct(
+                id=full_id,
+                vector=new_vector,
+                payload=updated_payload,
+            )],
+        )
+    except Exception as e:
+        return f"[reconsolidation] Qdrant upsert error: {e}"
+
+    # 8. Update FTS5 index
+    try:
+        from modules.memory_smart import delete_memory_fts, index_memory_fts
+        delete_memory_fts(full_id)
+        index_memory_fts(
+            full_id, new_content,
+            category=old_payload.get("category", "general"),
+            source=old_payload.get("source", "experienced"),
+            importance=old_payload.get("narrative_importance", "medium"),
+        )
+    except Exception as e:
+        print(f"[consolidation] WARNING: FTS update failed: {e}")
+
+    # 9. Emit event
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.RECONSOLIDATION_TRIGGERED, {
+            "memory_id": full_id,
+            "action": "correct_memory",
+            "old_confidence": old_confidence,
+            "new_confidence": new_confidence,
+            "re_embedded": True,
+        })
+    except Exception:
+        pass
+
+    return (
+        f"[reconsolidation] Memory {full_id[:8]} corrected. "
+        f"Confidence: {old_confidence:.2f} -> {new_confidence:.2f}. "
+        f"Vector re-embedded and FTS updated."
+    )
 
 
 # ============================================================
@@ -1058,47 +1267,6 @@ def count_unconsolidated_episodic(lookback_hours: int = 24) -> int:
         offset = next_offset
 
     return count
-
-
-# ============================================================
-# DIFFERENTIAL DECAY
-# ============================================================
-
-def compute_effective_decay(payload: dict, memory_type: str = "episodic") -> float:
-    """Compute the effective decay parameter for a memory.
-
-    Uses differential decay: episodic decays faster than semantic.
-    Modulated by importance and emotional arousal.
-    """
-    from modules.config import (
-        EPISODIC_DECAY_BASE, EPISODIC_DECAY_CRITICAL, EPISODIC_DECAY_HIGH,
-        EPISODIC_DECAY_EMOTIONAL, SEMANTIC_DECAY_BASE, SEMANTIC_DECAY_CRITICAL,
-        SEMANTIC_EVIDENCE_BOOST,
-    )
-
-    if memory_type == "semantic":
-        d = SEMANTIC_DECAY_BASE
-        importance = payload.get("narrative_importance", "medium")
-        if importance == "critical":
-            d = SEMANTIC_DECAY_CRITICAL
-        evidence = int(payload.get("evidence_count", 1) or 1)
-        d = max(0.01, d - SEMANTIC_EVIDENCE_BOOST * evidence)
-        return d
-
-    # Episodic
-    d = EPISODIC_DECAY_BASE
-    importance = payload.get("narrative_importance", "medium")
-    if importance == "critical":
-        d = EPISODIC_DECAY_CRITICAL
-    elif importance == "high":
-        d = EPISODIC_DECAY_HIGH
-
-    # Emotional protection (high arousal memories decay slower)
-    arousal = float(payload.get("pad_arousal", 0.0) or 0.0)
-    if abs(arousal) > 0.5:
-        d = EPISODIC_DECAY_EMOTIONAL
-
-    return d
 
 
 # ============================================================

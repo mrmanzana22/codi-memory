@@ -41,6 +41,14 @@ def _get_neighbors(point_id: str, payload: dict) -> list:
         neighbors.append(rt)
         seen.add(rt)
 
+    # related_memories (list[str]) -- auto-connected neighbors (Phase 5.5)
+    rm = payload.get('related_memories')
+    if rm and isinstance(rm, list):
+        for rid in rm:
+            if isinstance(rid, str) and rid not in seen:
+                neighbors.append(rid)
+                seen.add(rid)
+
     # consolidated_with (list[str])
     cw = payload.get('consolidated_with')
     if cw and isinstance(cw, list):
@@ -190,6 +198,64 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
         'max_depth_reached': max_depth_reached,
         'total_nodes_visited': len(expanded),
         'updates': updates
+    }
+
+
+# ============================================================
+# RECURRENT PROCESSING (Lamme 2006)
+# ============================================================
+
+def recurrent_cycle(seed_ids: list, cycles: int = 2, depth: int = 1,
+                    factor: float = 0.6) -> dict:
+    """True recurrent processing: output of one spreading cycle feeds next.
+
+    Lamme 2006: Re-entrant processing creates stable representations
+    through iterative feedback between processing stages. Unlike single-pass
+    BFS (feedforward sweep), this feeds activated nodes back as seeds.
+
+    Args:
+        seed_ids: Starting point IDs (full UUIDs)
+        cycles: Number of recurrent iterations (2-5, default 2)
+        depth: BFS depth per cycle (default 1)
+        factor: Decay factor per hop (default 0.6)
+
+    Returns:
+        {cycles_run, total_affected, stable (bool), updates_per_cycle}
+    """
+    cycles = max(1, min(5, int(cycles)))
+    updates_per_cycle = []
+    current_seeds = list(seed_ids)
+    prev_top_nodes = set()
+    stable = False
+
+    for i in range(cycles):
+        if not current_seeds:
+            break
+
+        result = _spread_activation(current_seeds, depth=depth, factor=factor)
+        cycle_updates = result.get("updates", {})
+        updates_per_cycle.append(len(cycle_updates))
+
+        # Get top activated nodes from this cycle to use as next seeds
+        if cycle_updates:
+            sorted_nodes = sorted(cycle_updates.items(), key=lambda x: -x[1])
+            top_nodes = set(nid for nid, _ in sorted_nodes[:3])
+
+            # Check stability: same top nodes as previous cycle
+            if top_nodes and top_nodes == prev_top_nodes:
+                stable = True
+
+            prev_top_nodes = top_nodes
+            current_seeds = list(top_nodes)
+        else:
+            break
+
+    total_affected = sum(updates_per_cycle)
+    return {
+        "cycles_run": len(updates_per_cycle),
+        "total_affected": total_affected,
+        "stable": stable,
+        "updates_per_cycle": updates_per_cycle,
     }
 
 

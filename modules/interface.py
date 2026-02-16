@@ -12,6 +12,7 @@ from modules.memory_smart import add_memory_smart
 from modules.working_memory import push_to_working_memory, get_working_memory
 from modules.consciousness import get_workspace_state, despertar_codi, search_by_emotion
 from modules.maintenance import _ver_recordatorios_externos
+from modules.tracing import new_trace_id, get_trace_id
 
 
 # ============================================================
@@ -27,6 +28,9 @@ VALID_SNAPSHOT_LEVELS = {"light", "full"}
 def _json_response(pretty: str, **extra: Any) -> str:
     payload: Dict[str, Any] = {"pretty": pretty}
     payload.update(extra)
+    tid = get_trace_id()
+    if tid:
+        payload["trace_id"] = tid
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -65,6 +69,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
     Returns:
         JSON string con 'pretty' + 'results' estructurados
     """
+    new_trace_id()
     mode = (mode or "auto").strip().lower()
     if mode not in VALID_RECALL_MODES:
         return _json_response(
@@ -217,6 +222,7 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
     Returns:
         JSON string con resultados de working + long-term
     """
+    new_trace_id()
     imp = (importance or "auto").strip().lower()
     if imp not in VALID_IMPORTANCE:
         imp = "auto"
@@ -281,6 +287,7 @@ def context_snapshot(level: str = "light") -> str:
 
     Returns JSON string con pretty + componentes.
     """
+    new_trace_id()
     lvl = (level or "light").strip().lower()
     if lvl not in VALID_SNAPSHOT_LEVELS:
         lvl = "light"

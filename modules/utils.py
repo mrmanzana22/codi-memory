@@ -158,12 +158,7 @@ def calculate_confidence_score(memories: list) -> dict:
         'inferred': 0.4
     }
 
-    importance_weights = {
-        'critical': 1.0,
-        'high': 0.8,
-        'medium': 0.5,
-        'low': 0.3
-    }
+    from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
     total_weight = 0
     source_counts = {'experienced': 0, 'told': 0, 'learned': 0, 'inferred': 0}
@@ -249,9 +244,38 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             if emotional_valence == 'neutral':
                 emotional_valence = emotional_valence_auto
         except Exception:
-            pass
+            arousal = 0.0
+            pleasure = 0.0
 
         created_now = now_iso()
+
+        # 3C: PAD state at encoding (Godden & Baddeley 1975)
+        try:
+            pad_at_encoding = {
+                "P": round(pleasure, 3),
+                "A": round(arousal, 3),
+                "D": round(current.get('dominance', 0.0), 3),
+            }
+        except Exception:
+            pad_at_encoding = {"P": 0.0, "A": 0.0, "D": 0.0}
+
+        # 3D: Temporal context (Friedman 1993)
+        try:
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(created_now.replace('Z', '+00:00')) if 'Z' in created_now else _dt.fromisoformat(created_now)
+            hour = dt.hour
+            if 5 <= hour < 12:
+                time_of_day = "morning"
+            elif 12 <= hour < 17:
+                time_of_day = "afternoon"
+            elif 17 <= hour < 21:
+                time_of_day = "evening"
+            else:
+                time_of_day = "night"
+            day_type = "weekend" if dt.weekday() >= 5 else "weekday"
+            temporal_context = {"time_of_day": time_of_day, "day_type": day_type}
+        except Exception:
+            temporal_context = {"time_of_day": "unknown", "day_type": "unknown"}
 
         ownership_metadata = {
             'category': category,
@@ -269,7 +293,9 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'temporal_session_id': get_session_id(),
             'created_at': created_now,
             'self_reference': self_ref,
-            '_v': 3.0  # Phase 0: ACT-R + PAD active
+            'pad_at_encoding': pad_at_encoding,       # 3C: State-dependent retrieval
+            'temporal_context': temporal_context,      # 3D: Temporal metadata
+            '_v': 4.0  # Phase 3: SDR + temporal context
         }
 
         qdrant.set_payload(
@@ -677,9 +703,10 @@ def compute_activation(
     noise: bool = True
 ) -> float:
     """
-    Compute full ACT-R activation for a memory.
+    Compute full activation for a memory via unified scorer (WIRING-5).
 
-    A_i = B_i + W * S_context + epsilon
+    Backward-compatible wrapper: delegates to modules.activation.compute_unified_activation.
+    All existing callers continue to work unchanged.
 
     Args:
         payload: Qdrant point payload with memory metadata
@@ -687,41 +714,28 @@ def compute_activation(
         noise: Whether to add stochastic noise
 
     Returns:
-        Activation value (float). Typical range: -5 to +3.
-        Normalized to 0-1 for fusion scoring.
+        Activation value normalized to 0-1.
     """
-    # Extract metadata from payload
+    from modules.activation import compute_unified_activation
+
     created_at = payload.get('created_at', '')
     last_accessed = payload.get('attention_last_accessed', '')
     access_count = payload.get('attention_access_count', 0)
     access_timestamps = payload.get('access_timestamps', None)
-
-    # 1. Base-level activation
-    base_level = compute_base_level_activation(
-        created_at_str=created_at,
-        last_accessed_str=last_accessed,
-        access_count=access_count,
-        access_timestamps=access_timestamps
-    )
-
-    # 2. Spreading activation from context
-    # Use existing attention_salience as a proxy if no explicit context_salience
     current_salience = float(payload.get('attention_salience', 0.5))
-    spread_component = ACTR_SPREAD_WEIGHT * max(context_salience, current_salience)
+    importance = payload.get('narrative_importance', 'medium')
 
-    # 3. Noise (for non-deterministic retrieval)
-    epsilon = random.gauss(0, ACTR_NOISE_SIGMA) if noise else 0.0
-
-    # Raw activation
-    raw_activation = base_level + spread_component + epsilon
-
-    # Normalize to 0-1 using calibrated sigmoid
-    # With d=0.4 and unit=hours, raw A_i range is ~-3.5 to +2.0
-    # Calibrated to map: 30d/0acc->0.10, 1d/0acc->0.28, 1d/7acc->0.84
-    shifted = (raw_activation - ACTR_SIGMOID_CENTER) * ACTR_SIGMOID_SCALE
-    normalized = 1.0 / (1.0 + math.exp(-shifted))
-
-    return normalized
+    result = compute_unified_activation(
+        memory_id=str(payload.get('id', '')),
+        created_at=created_at,
+        last_accessed=last_accessed,
+        access_count=access_count,
+        access_timestamps=access_timestamps,
+        spreading_boost=max(context_salience, current_salience),
+        importance=importance,
+        noise=noise,
+    )
+    return result.total
 
 
 def compute_pad_retrieval_bias(
