@@ -43,6 +43,16 @@ from modules import prospective
 from modules import wiring
 
 # ============================================================
+# SCHEMA MIGRATIONS (D4) - must run BEFORE anything uses tables
+# ============================================================
+from modules.migrations import apply_migrations
+from modules.config import FTS_DB_PATH
+from modules.prospective import PROSPECTIVE_DB_PATH
+
+apply_migrations(FTS_DB_PATH, migrations_dir="migrations")
+apply_migrations(PROSPECTIVE_DB_PATH, migrations_dir="migrations_prospective")
+
+# ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
 # ============================================================
 metrics.instrument_mcp(mcp)
