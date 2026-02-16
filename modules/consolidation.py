@@ -87,71 +87,19 @@ def _consolidation_conn():
 
 
 def init_consolidation_db():
-    """Initialize consolidation-related tables in memories_fts.db."""
-    conn = _consolidation_conn()
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS consolidation_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            batch_id TEXT NOT NULL UNIQUE,
-            scope TEXT NOT NULL,
-            lookback_hours INTEGER,
-            episodes_scanned INTEGER DEFAULT 0,
-            clusters_found INTEGER DEFAULT 0,
-            facts_extracted INTEGER DEFAULT 0,
-            facts_created INTEGER DEFAULT 0,
-            facts_updated INTEGER DEFAULT 0,
-            contradictions_found INTEGER DEFAULT 0,
-            episodes_pruned INTEGER DEFAULT 0,
-            duration_ms INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS reconsolidation_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            memory_id TEXT NOT NULL,
-            memory_type TEXT DEFAULT 'episodic',
-            action TEXT NOT NULL,
-            prediction_error REAL,
-            memory_strength REAL,
-            old_content TEXT,
-            new_content TEXT,
-            blend_weight REAL,
-            trigger_context TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_recon_log_memory
-        ON reconsolidation_log(memory_id)
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_recon_log_time
-        ON reconsolidation_log(created_at)
-    """)
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS labile_memories (
-            memory_id TEXT PRIMARY KEY,
-            marked_at TEXT NOT NULL,
-            window_expires TEXT NOT NULL,
-            prediction_error REAL,
-            trigger_context TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-    print("[consolidation] Tables initialized OK")
+    """Validate consolidation-related tables exist in memories_fts.db."""
+    from modules.migrations import ensure_schema_ready_db
+    ensure_schema_ready_db(FTS_DB_PATH, [
+        "consolidation_log", "reconsolidation_log", "labile_memories",
+    ])
+    print("[consolidation] Tables validated OK")
 
 
-# Initialize on import
+# Validate on import
 try:
     init_consolidation_db()
 except Exception as e:
-    print(f"[consolidation] WARNING: Could not init tables: {e}")
+    print(f"[consolidation] WARNING: Could not validate tables: {e}")
 
 
 # ============================================================

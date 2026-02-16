@@ -48,7 +48,8 @@ class TestEmptyDbBaseline:
         result = apply_migrations(db_path, migrations_dir=FTS_MIGRATIONS_DIR)
 
         assert "001" in result["applied"]
-        assert result["current_version"] == "001"
+        assert "002" in result["applied"]
+        assert result["current_version"] == "002"
 
         conn = sqlite3.connect(db_path)
         tables = {r[0] for r in conn.execute(
@@ -64,6 +65,7 @@ class TestEmptyDbBaseline:
             "narrative_traces", "trace_chains",
             "failed_searches", "fok_calibration_log",
             "event_counts", "prediction_state", "prediction_results",
+            "session_checkpoints",
         }
         # memories_fts is a virtual table, check separately
         vtables = {r[0] for r in sqlite3.connect(db_path).execute(
@@ -266,3 +268,89 @@ class TestConcurrency:
 
         assert "parallel_test" in tables
         assert get_current_version(db_path) == "001"
+
+
+# ============================================================
+# D4 SCHEMA ENFORCEMENT TESTS
+# ============================================================
+
+from modules.migrations import ensure_schema_ready, ensure_schema_ready_db
+
+
+class TestEnsureSchemaReady:
+    """ensure_schema_ready validates tables or raises RuntimeError."""
+
+    def test_missing_table_raises_runtime_error(self, tmp_path):
+        """ensure_schema_ready raises RuntimeError when table missing."""
+        db_path = str(tmp_path / "empty.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE dummy (id INTEGER)")
+        conn.commit()
+
+        with pytest.raises(RuntimeError, match="working_memory"):
+            ensure_schema_ready(conn, ["working_memory"])
+        conn.close()
+
+    def test_existing_table_passes(self, tmp_path):
+        """ensure_schema_ready passes when table exists."""
+        db_path = str(tmp_path / "has_tables.db")
+        apply_migrations(db_path, migrations_dir=FTS_MIGRATIONS_DIR)
+
+        conn = sqlite3.connect(db_path)
+        # Should NOT raise
+        ensure_schema_ready(conn, [
+            "memories_text", "fts_retry_queue", "tool_calls",
+            "consolidation_log", "reconsolidation_log", "labile_memories",
+            "schemas", "working_memory", "narrative_traces", "trace_chains",
+            "failed_searches", "fok_calibration_log", "event_counts",
+            "prediction_state", "prediction_results", "session_checkpoints",
+        ])
+        conn.close()
+
+    def test_ensure_schema_ready_db_convenience(self, tmp_path):
+        """ensure_schema_ready_db opens conn, validates, closes."""
+        db_path = str(tmp_path / "conv.db")
+        apply_migrations(db_path, migrations_dir=FTS_MIGRATIONS_DIR)
+
+        # Should NOT raise
+        ensure_schema_ready_db(db_path, ["memories_text", "tool_calls"])
+
+    def test_ensure_schema_ready_db_missing_raises(self, tmp_path):
+        """ensure_schema_ready_db raises RuntimeError for missing table."""
+        db_path = str(tmp_path / "empty2.db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE dummy (id INTEGER)")
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(RuntimeError, match="nonexistent_table"):
+            ensure_schema_ready_db(db_path, ["nonexistent_table"])
+
+
+class TestNoCreateTableOutsideMigrations:
+    """Static analysis: no CREATE TABLE in modules/*.py except migrations.py."""
+
+    def test_no_create_table_outside_migrations(self):
+        """No module should contain CREATE TABLE -- only migrations.py allowed."""
+        import re
+        pattern = re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE | re.MULTILINE)
+        WHITELIST = {"migrations.py"}
+
+        violations = []
+        modules_dir = os.path.join(PROJECT_ROOT, "modules")
+        for dirpath, _dirnames, filenames in os.walk(modules_dir):
+            for fname in filenames:
+                if not fname.endswith(".py") or fname in WHITELIST:
+                    continue
+                fpath = os.path.join(dirpath, fname)
+                with open(fpath) as f:
+                    content = f.read()
+                for match in pattern.finditer(content):
+                    line_num = content[:match.start()].count("\n") + 1
+                    line_text = content.splitlines()[line_num - 1].strip()
+                    violations.append(f"{fname}:{line_num}: {line_text}")
+
+        assert not violations, (
+            f"CREATE TABLE found outside migrations:\n" +
+            "\n".join(violations)
+        )

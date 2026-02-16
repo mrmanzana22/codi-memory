@@ -147,9 +147,18 @@ class TestCongruenceBonus:
 # ============================================================
 
 class TestSQLitePersistence:
+    def _setup_db(self):
+        """Create temp DB with migrations applied."""
+        f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        db_path = f.name
+        f.close()
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
+        return db_path
+
     def test_save_and_load(self):
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = self._setup_db()
         try:
             conn = sqlite3.connect(db_path)
             init_schemas_table(conn)
@@ -173,8 +182,7 @@ class TestSQLitePersistence:
             os.unlink(db_path)
 
     def test_save_increments_count(self):
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = self._setup_db()
         try:
             conn = sqlite3.connect(db_path)
             init_schemas_table(conn)
@@ -192,8 +200,7 @@ class TestSQLitePersistence:
             os.unlink(db_path)
 
     def test_load_all(self):
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = self._setup_db()
         try:
             conn = sqlite3.connect(db_path)
             init_schemas_table(conn)

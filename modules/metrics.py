@@ -31,24 +31,8 @@ def metrics_conn():
 
 
 def _ensure_tool_calls_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tool_calls (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          tool_name TEXT NOT NULL,
-          started_at TEXT NOT NULL,
-          duration_ms INTEGER NOT NULL,
-          success INTEGER NOT NULL,
-          error_type TEXT,
-          args_size INTEGER DEFAULT 0,
-          result_size INTEGER DEFAULT 0,
-          session_id TEXT,
-          tag TEXT
-        );
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_time ON tool_calls(started_at);")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name, started_at);")
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, ["tool_calls"])
 
 
 def _safe_len_bytes(obj: Any) -> int:

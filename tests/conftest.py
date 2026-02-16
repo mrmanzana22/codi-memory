@@ -7,18 +7,36 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 import pytest
 from modules.events import event_bus
 
 
 @pytest.fixture(autouse=True)
 def _isolate_sqlite(tmp_path, monkeypatch):
-    """Force all SQLite writes (FTS, event_counts) to a temp directory.
+    """Force all SQLite writes (FTS, event_counts, prospective) to a temp directory.
 
-    Prevents tests from writing to the real memories_fts.db in the repo root.
+    Prevents tests from writing to the real DBs in the repo root.
     Scoped per-test via monkeypatch (auto-restored after each test).
+    Runs migrations on isolated DBs so all tables exist.
     """
-    monkeypatch.setenv("FTS_DB_PATH", str(tmp_path / "memories_fts.db"))
+    db_path = str(tmp_path / "memories_fts.db")
+    prosp_path = str(tmp_path / "prospective.db")
+
+    # Env vars
+    monkeypatch.setenv("FTS_DB_PATH", db_path)
+    monkeypatch.setenv("PROSPECTIVE_DB_PATH", prosp_path)
+
+    # Module-level config patches
+    monkeypatch.setattr("modules.config.FTS_DB_PATH", db_path, raising=False)
+    monkeypatch.setattr("modules.config.PROSPECTIVE_DB_PATH", prosp_path, raising=False)
+
+    # Run migrations on isolated DBs
+    from modules.migrations import apply_migrations
+    apply_migrations(db_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations"))
+    apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
+
     yield
 
 

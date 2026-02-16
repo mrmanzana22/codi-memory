@@ -33,75 +33,14 @@ from modules.events import event_bus, Events
 # ============================================================
 
 def init_fts_db():
-    """Inicializa la base de datos SQLite con FTS5 para busqueda por keywords."""
-    conn = _fts_conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS memories_text (
-            memory_id TEXT PRIMARY KEY,
-            content TEXT NOT NULL,
-            category TEXT DEFAULT 'general',
-            source TEXT DEFAULT 'experienced',
-            importance TEXT DEFAULT 'medium',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-        USING fts5(
-            content,
-            memory_id UNINDEXED,
-            category UNINDEXED,
-            source UNINDEXED,
-            content=memories_text,
-            content_rowid=rowid
-        )
-    """)
-    # Triggers para mantener FTS sincronizado
-    conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_text_ai AFTER INSERT ON memories_text BEGIN
-            INSERT INTO memories_fts(rowid, content, memory_id, category, source)
-            VALUES (new.rowid, new.content, new.memory_id, new.category, new.source);
-        END
-    """)
-    conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_text_ad AFTER DELETE ON memories_text BEGIN
-            INSERT INTO memories_fts(memories_fts, rowid, content, memory_id, category, source)
-            VALUES('delete', old.rowid, old.content, old.memory_id, old.category, old.source);
-        END
-    """)
-    conn.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_text_au AFTER UPDATE ON memories_text BEGIN
-            INSERT INTO memories_fts(memories_fts, rowid, content, memory_id, category, source)
-            VALUES('delete', old.rowid, old.content, old.memory_id, old.category, old.source);
-            INSERT INTO memories_fts(rowid, content, memory_id, category, source)
-            VALUES (new.rowid, new.content, new.memory_id, new.category, new.source);
-        END
-    """)
-    # Retry queue for FTS consistency (P2A)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS fts_retry_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            memory_id TEXT NOT NULL,
-            op TEXT NOT NULL,
-            payload_json TEXT,
-            status TEXT DEFAULT 'pending',
-            attempts INTEGER DEFAULT 0,
-            last_error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_fts_retry_mem_op
-        ON fts_retry_queue(memory_id, op)
-    """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_fts_retry_status
-        ON fts_retry_queue(status, updated_at)
-    """)
-    conn.commit()
-    conn.close()
-    print("[codi-memory] FTS5 index initialized")
+    """Validate FTS-related tables exist (created by migrations).
+
+    Only validates regular tables (memories_text, fts_retry_queue).
+    FTS5 virtual table (memories_fts) and triggers are trusted from baseline migration.
+    """
+    from modules.migrations import ensure_schema_ready_db
+    ensure_schema_ready_db(FTS_DB_PATH, ["memories_text", "fts_retry_queue"])
+    print("[codi-memory] FTS5 tables validated")
 
 
 def _index_memory_fts_raw(memory_id: str, content: str, category: str = "general",

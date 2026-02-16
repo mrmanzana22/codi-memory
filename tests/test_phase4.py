@@ -335,8 +335,11 @@ class TestRCJCalibration:
 
     @pytest.fixture
     def temp_db(self, tmp_path):
-        """Create a temporary SQLite database."""
+        """Create a temporary SQLite database with migrations applied."""
         db_path = str(tmp_path / "test_fts.db")
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
         return db_path
 
     def test_record_rcj_stores(self, temp_db):
@@ -1528,6 +1531,9 @@ class TestPersistentEvidence:
         """Emitted events should be counted in SQLite."""
         from modules.events import EventBus, Events
         db_path = str(tmp_path / "test_events.db")
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
 
         bus = EventBus()
         with patch.object(EventBus, '_get_db_path', return_value=db_path):
@@ -1543,6 +1549,9 @@ class TestPersistentEvidence:
         """A new EventBus instance should read counts from previous sessions."""
         from modules.events import EventBus, Events
         db_path = str(tmp_path / "test_events.db")
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
 
         # Session 1: emit events
         bus1 = EventBus()
@@ -1563,6 +1572,9 @@ class TestPersistentEvidence:
         import re
         from modules.events import event_bus, EventBus, Events
         db_path = str(tmp_path / "test_scoring.db")
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
 
         # Pre-populate persistent counts
         with patch.object(EventBus, '_get_db_path', return_value=db_path):

@@ -50,6 +50,9 @@ class Events:
     ATTENTION_PREDICTION_ERROR = 'attention_prediction_error'          # AST-1 closed loop (Graziano 2013)
     SELF_MODEL_REFRESHED = 'self_model_refreshed'                      # HOT-1 auto-trigger (Rosenthal 2005)
     PERF_BUDGET_VIOLATION = 'perf_budget_violation'                     # Performance contract violation
+    SESSION_CLOSE = 'session_close'                                       # Session bridge: checkpoint saved
+    SESSION_OPEN = 'session_open'                                         # Session bridge: bridge loaded at wake
+    SLEEP_LOOP_COMPLETE = 'sleep_loop_complete'                             # Sleep loop: background maintenance done
 
 
 class EventBus:
@@ -155,6 +158,8 @@ class EventBus:
         """Get SQLite path for event_counts (reuses FTS DB)."""
         return os.environ.get("FTS_DB_PATH", "memories_fts.db")
 
+    _event_tables_validated = False
+
     def _flush_counts(self):
         """Batch-write dirty counters to SQLite. Safe: never blocks emit on failure."""
         if not self._dirty_counts:
@@ -162,27 +167,25 @@ class EventBus:
         try:
             db_path = self._get_db_path()
             conn = sqlite3.connect(db_path, timeout=2)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS event_counts (
-                    event TEXT PRIMARY KEY,
-                    count INTEGER DEFAULT 0,
-                    last_seen TEXT
-                )
-            """)
-            now = datetime.now().isoformat()
-            for event_name, increment in self._dirty_counts.items():
-                conn.execute("""
-                    INSERT INTO event_counts (event, count, last_seen)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(event) DO UPDATE SET
-                        count = count + excluded.count,
-                        last_seen = excluded.last_seen
-                """, (event_name, increment, now))
-            conn.commit()
-            conn.close()
-            self._dirty_counts.clear()
-            self._dirty_total = 0
-            self._last_flush = time.monotonic()
+            try:
+                if not EventBus._event_tables_validated:
+                    conn.execute("SELECT 1 FROM event_counts LIMIT 0")
+                    EventBus._event_tables_validated = True
+                now = datetime.now().isoformat()
+                for event_name, increment in self._dirty_counts.items():
+                    conn.execute("""
+                        INSERT INTO event_counts (event, count, last_seen)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(event) DO UPDATE SET
+                            count = count + excluded.count,
+                            last_seen = excluded.last_seen
+                    """, (event_name, increment, now))
+                conn.commit()
+                self._dirty_counts.clear()
+                self._dirty_total = 0
+                self._last_flush = time.monotonic()
+            finally:
+                conn.close()
         except Exception:
             pass  # Never block emit
 

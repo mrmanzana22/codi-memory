@@ -282,18 +282,9 @@ def metacognitive_control(query: str, fts_db_path: str = None, wm_conn=None) -> 
 # ============================================================
 
 def init_failed_searches_table(conn) -> None:
-    """Create failed_searches table if not exists."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS failed_searches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query TEXT NOT NULL,
-            result_count INTEGER DEFAULT 0,
-            top_activation REAL DEFAULT 0.0,
-            topic TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
+    """Validate failed_searches table exists (created by migrations)."""
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, ["failed_searches"])
 
 
 def log_failed_search(conn, query: str, result_count: int, top_activation: float, topic: str = None) -> None:
@@ -340,19 +331,9 @@ def get_top_failed_topics(conn, limit: int = 5) -> list:
 # ============================================================
 
 def _init_fok_calibration_table(conn) -> None:
-    """Create fok_calibration_log table if not exists."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS fok_calibration_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query TEXT,
-            fok_predicted REAL,
-            actual_coverage TEXT,
-            actual_count INTEGER,
-            actual_top_activation REAL,
-            created_at TEXT
-        )
-    """)
-    conn.commit()
+    """Validate fok_calibration_log table exists (created by migrations)."""
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, ["fok_calibration_log"])
 
 
 def record_rcj(query: str, fok_predicted: float, actual_coverage: str,

@@ -186,3 +186,24 @@ def apply_migrations(db_path: str, migrations_dir: str = "migrations") -> dict:
         return result
     finally:
         conn.close()
+
+
+def ensure_schema_ready(conn: sqlite3.Connection, required_tables: list[str], db_label: str = "FTS") -> None:
+    """Validate required tables exist (fail-fast). Raises RuntimeError if not."""
+    for table in required_tables:
+        try:
+            conn.execute(f"SELECT 1 FROM [{table}] LIMIT 0")
+        except sqlite3.OperationalError:
+            raise RuntimeError(
+                f"Table '{table}' not found in {db_label} DB. "
+                f"Run apply_migrations() first."
+            )
+
+
+def ensure_schema_ready_db(db_path: str, required_tables: list[str], db_label: str = "FTS", timeout: float = 2.0) -> None:
+    """Convenience: open conn, validate, close. For modules that don't keep a conn."""
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    try:
+        ensure_schema_ready(conn, required_tables, db_label)
+    finally:
+        conn.close()

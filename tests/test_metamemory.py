@@ -144,6 +144,9 @@ class TestFeelingOfKnowing:
         _retrieval_buffer.clear()
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
         try:
             conn = sqlite3.connect(db_path)
             init_failed_searches_table(conn)
@@ -198,9 +201,18 @@ class TestFeelingOfKnowing:
 # ============================================================
 
 class TestFailedSearchLogging:
+    def _setup_db(self):
+        """Create temp DB with migrations applied."""
+        f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        db_path = f.name
+        f.close()
+        from modules.migrations import apply_migrations
+        apply_migrations(db_path, migrations_dir=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
+        return db_path
+
     def test_log_and_retrieve(self):
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = self._setup_db()
         try:
             conn = sqlite3.connect(db_path)
             init_failed_searches_table(conn)
@@ -219,8 +231,7 @@ class TestFailedSearchLogging:
 
     def test_fifo_cleanup(self):
         """Should keep max 500 rows."""
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
+        db_path = self._setup_db()
         try:
             conn = sqlite3.connect(db_path)
             init_failed_searches_table(conn)

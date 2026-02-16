@@ -25,6 +25,10 @@ import pytest
 def isolated_db(tmp_path, monkeypatch):
     """Use a temporary DB for each test."""
     test_db = str(tmp_path / "test_prospective.db")
+    # Run prospective migrations on the temp DB
+    from modules.migrations import apply_migrations
+    apply_migrations(test_db, migrations_dir=os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations_prospective"))
     monkeypatch.setattr("modules.prospective.PROSPECTIVE_DB_PATH", test_db)
     # Reset the global connection
     import modules.prospective as pm

@@ -61,20 +61,9 @@ class SchemaTemplate:
 # ============================================================
 
 def init_schemas_table(conn: sqlite3.Connection) -> None:
-    """Create schemas table if not exists."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS schemas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT,
-            topic TEXT NOT NULL,
-            slots_json TEXT NOT NULL,
-            instance_count INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL,
-            last_matched TEXT
-        )
-    """)
-    conn.commit()
+    """Validate schemas table exists (created by migrations)."""
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, ["schemas"])
 
 
 def save_schema(conn: sqlite3.Connection, schema: SchemaTemplate) -> int:

@@ -30,14 +30,13 @@ import random
 import math
 from datetime import datetime, timedelta
 
-from modules.config import FTS_DB_PATH, now_iso, now_col
+from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, now_iso, now_col
 
 # ============================================================
 # CONSTANTS
 # ============================================================
 
-# SQLite DB (shared with FTS for locality)
-PROSPECTIVE_DB_PATH = os.path.join(os.path.dirname(FTS_DB_PATH), "prospective.db")
+# PROSPECTIVE_DB_PATH imported from modules.config
 
 # Monitoring budget (ms) - must stay within pre-turn hook's 500ms
 PM_CHECK_BUDGET_MS = 50
@@ -88,62 +87,10 @@ def _get_conn() -> sqlite3.Connection:
 
 
 def _init_tables(conn: sqlite3.Connection):
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS intentions (
-            id TEXT PRIMARY KEY,
-            action TEXT NOT NULL,
-            action_type TEXT DEFAULT 'remind',
-            trigger_type TEXT NOT NULL,
-            trigger_spec TEXT NOT NULL,
-            cue_focality TEXT DEFAULT 'focal',
-            priority TEXT DEFAULT 'medium',
-            status TEXT DEFAULT 'pending',
-            activation REAL DEFAULT 0.7,
-            created_at TEXT NOT NULL,
-            triggered_at TEXT,
-            completed_at TEXT,
-            expiry TEXT,
-            snooze_until TEXT,
-            context_at_creation TEXT,
-            creator TEXT DEFAULT 'codi',
-            recurrence TEXT,
-            recurrence_spec TEXT,
-            check_count INTEGER DEFAULT 0,
-            partial_match_count INTEGER DEFAULT 0,
-            last_checked_at TEXT,
-            last_maintained_at TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_intentions_status
-            ON intentions(status);
-        CREATE INDEX IF NOT EXISTS idx_intentions_activation
-            ON intentions(activation DESC);
-        CREATE INDEX IF NOT EXISTS idx_intentions_expiry
-            ON intentions(expiry);
-
-        CREATE TABLE IF NOT EXISTS intention_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            intention_id TEXT NOT NULL,
-            event TEXT NOT NULL,
-            detail TEXT,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_intention_log_intention
-            ON intention_log(intention_id);
-    """)
-    conn.commit()
-
-    # Migration: add last_maintained_at if missing
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(intentions)").fetchall()]
-        if "last_maintained_at" not in cols:
-            conn.execute("ALTER TABLE intentions ADD COLUMN last_maintained_at TEXT")
-            conn.commit()
-    except Exception:
-        pass
-
-    print("[prospective] Tables initialized OK")
+    """Validate prospective memory tables exist (created by migrations)."""
+    from modules.migrations import ensure_schema_ready
+    ensure_schema_ready(conn, ["intentions", "intention_log"], db_label="prospective")
+    print("[prospective] Tables validated OK")
 
 
 # ============================================================

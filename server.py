@@ -22,7 +22,20 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
-# Import MCP server and shared config from modules
+
+# ============================================================
+# SCHEMA MIGRATIONS (D4) - must run BEFORE any module import
+# ============================================================
+from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH
+from modules.migrations import apply_migrations
+
+_server_dir = os.path.dirname(os.path.abspath(__file__))
+apply_migrations(FTS_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations"))
+apply_migrations(PROSPECTIVE_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations_prospective"))
+
+# ============================================================
+# NOW import modules (tables already exist from migrations)
+# ============================================================
 from modules.config import mcp, memory, qdrant, USER_ID, COLLECTION_NAME, now_iso
 from modules import metrics
 
@@ -42,16 +55,8 @@ from modules import consolidation
 from modules import prospective
 from modules import wiring
 from modules import assessment
-
-# ============================================================
-# SCHEMA MIGRATIONS (D4) - must run BEFORE anything uses tables
-# ============================================================
-from modules.migrations import apply_migrations
-from modules.config import FTS_DB_PATH
-from modules.prospective import PROSPECTIVE_DB_PATH
-
-apply_migrations(FTS_DB_PATH, migrations_dir="migrations")
-apply_migrations(PROSPECTIVE_DB_PATH, migrations_dir="migrations_prospective")
+from modules import session_bridge
+from modules import sleep_loop
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -77,6 +82,8 @@ spreading.register_tools(mcp)
 consolidation.register_consolidation_tools(mcp)
 prospective.register_prospective_tools(mcp)
 assessment.register_assessment_tools(mcp)
+session_bridge.register_tools(mcp)
+sleep_loop.register_tools(mcp)
 
 # ============================================================
 # WIRE EVENT BUS (Thalamocortical Integration)

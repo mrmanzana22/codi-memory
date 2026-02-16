@@ -51,6 +51,7 @@ BACKUP_DIR = BASE_DIR
 BACKUP_FILE = os.path.join(BACKUP_DIR, "memories_backup.json")
 TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
 FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
+PROSPECTIVE_DB_PATH = os.path.join(os.path.dirname(FTS_DB_PATH), "prospective.db")
 MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
 JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
 CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
