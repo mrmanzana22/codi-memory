@@ -162,6 +162,24 @@ TOPIC_KEYWORDS = {
 
 TRIGGER_PRIORITY_ORDER = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']
 
+# ============================================================
+# PERFORMANCE CONTRACTS - p95/p99 latency budgets (ms)
+# ============================================================
+PERF_CONTRACTS = {
+    "macro": {"p95": 2000, "p99": 5000, "tools": ["recall", "remember", "context_snapshot"]},
+    "search": {"p95": 1500, "p99": 3000, "tools": ["search_memory", "search_by_theme", "search_by_ownership", "search_by_emotion"]},
+    "write": {"p95": 1500, "p99": 3000, "tools": ["add_memory", "add_memory_smart"]},
+    "fast": {"p95": 200, "p99": 500, "tools": ["get_emotional_state", "get_working_memory", "get_workspace_state", "listar_triggers", "audit_tools"]},
+    "consolidation": {"p95": 5000, "p99": 10000, "tools": ["run_consolidation", "dream_consolidation", "consolidate_recent"]},
+    "default": {"p95": 1000, "p99": 3000, "tools": []},
+}
+
+# Build reverse lookup: tool_name -> contract category
+PERF_TOOL_CONTRACT = {}
+for _cat, _spec in PERF_CONTRACTS.items():
+    for _tool in _spec["tools"]:
+        PERF_TOOL_CONTRACT[_tool] = _cat
+
 CURIOSITY_TEMPLATES = {
     'trading': "No hemos revisado el trading en {dias} dias. Como van las senales?",
     'fullempaques': "FULLEMPAQUES lleva {dias} dias sin tocar. El cliente reporto algun problema?",

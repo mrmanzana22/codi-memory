@@ -413,6 +413,16 @@ def assess_butlin_indicators() -> str:
 
     Each indicator scored 0.0 (absent), 0.5 (partial), or 1.0 (full).
     Returns formatted markdown with scores, evidence, and total.
+
+    D3: Now delegates to modules.assessment (external evaluator).
+    """
+    from modules.assessment import get_assessment, format_assessment
+    return format_assessment(get_assessment())
+
+
+def _legacy_assess_butlin() -> str:
+    """LEGACY: Original inline scoring logic. Kept temporarily for paridad testing.
+    Will be removed after 1-2 cycles of verified parity with assessment.py.
     """
     indicators = []
 

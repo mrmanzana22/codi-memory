@@ -49,6 +49,7 @@ class Events:
     METACOGNITIVE_CONTROL_APPLIED = 'metacognitive_control_applied'    # Phase 4.5 HOT-3 runtime evidence
     ATTENTION_PREDICTION_ERROR = 'attention_prediction_error'          # AST-1 closed loop (Graziano 2013)
     SELF_MODEL_REFRESHED = 'self_model_refreshed'                      # HOT-1 auto-trigger (Rosenthal 2005)
+    PERF_BUDGET_VIOLATION = 'perf_budget_violation'                     # Performance contract violation
 
 
 class EventBus:

@@ -41,6 +41,7 @@ from modules import spreading
 from modules import consolidation
 from modules import prospective
 from modules import wiring
+from modules import assessment
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -51,6 +52,7 @@ metrics.instrument_mcp(mcp)
 # REGISTER ALL TOOLS
 # ============================================================
 
+metrics.register_metrics_tools(mcp)
 triggers.register_tools(mcp)
 books.register_tools(mcp)
 memory_core.register_tools(mcp)
@@ -64,6 +66,7 @@ interface.register_tools(mcp)
 spreading.register_tools(mcp)
 consolidation.register_consolidation_tools(mcp)
 prospective.register_prospective_tools(mcp)
+assessment.register_assessment_tools(mcp)
 
 # ============================================================
 # WIRE EVENT BUS (Thalamocortical Integration)

@@ -102,6 +102,62 @@ def log_tool_call(
         conn.commit()
 
 
+# ============================================================
+# PERFORMANCE CONTRACTS - Budget lookup & violation detection
+# ============================================================
+
+def get_tool_contract(tool_name: str) -> dict:
+    """Return the performance contract (p95/p99 budgets) for a tool."""
+    from modules.config import PERF_CONTRACTS, PERF_TOOL_CONTRACT
+    cat = PERF_TOOL_CONTRACT.get(tool_name, "default")
+    return PERF_CONTRACTS[cat]
+
+
+def compute_percentiles(tool_name: str, days: int = 7) -> dict:
+    """Compute p50/p95/p99 latency percentiles from SQLite tool_calls."""
+    cutoff = _cutoff_iso(days)
+    with metrics_conn() as conn:
+        _ensure_tool_calls_schema(conn)
+        rows = conn.execute(
+            "SELECT duration_ms FROM tool_calls WHERE tool_name = ? AND started_at >= ? ORDER BY duration_ms",
+            (tool_name, cutoff),
+        ).fetchall()
+    if not rows:
+        return {"count": 0, "p50": 0, "p95": 0, "p99": 0, "max": 0}
+    durations = [r[0] for r in rows]
+    n = len(durations)
+    return {
+        "count": n,
+        "p50": durations[int(n * 0.50)] if n > 0 else 0,
+        "p95": durations[min(int(n * 0.95), n - 1)],
+        "p99": durations[min(int(n * 0.99), n - 1)],
+        "max": durations[-1],
+    }
+
+
+def check_budget_violation(tool_name: str, duration_ms: int) -> Optional[dict]:
+    """Check if a tool call exceeded its latency budget. Returns violation info or None."""
+    contract = get_tool_contract(tool_name)
+    if duration_ms > contract["p99"]:
+        return {"level": "p99", "budget_ms": contract["p99"], "actual_ms": duration_ms}
+    if duration_ms > contract["p95"]:
+        return {"level": "p95", "budget_ms": contract["p95"], "actual_ms": duration_ms}
+    return None
+
+
+def _emit_violation(tool_name: str, dur_ms: int, violation: dict) -> None:
+    """Emit a PERF_BUDGET_VIOLATION event. Fails silently."""
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.PERF_BUDGET_VIOLATION, {
+            "tool_name": tool_name,
+            "duration_ms": dur_ms,
+            **violation,
+        })
+    except Exception:
+        pass
+
+
 MACRO_TAGS = {
     "recall": "macro:recall",
     "remember": "macro:remember",
@@ -148,6 +204,9 @@ def instrument_mcp(mcp: Any) -> None:
                             session_id=get_trace_id() or None,
                             tag=tag,
                         )
+                        violation = check_budget_violation(tool_name, dur_ms)
+                        if violation:
+                            _emit_violation(tool_name, dur_ms, violation)
                         return result
                     except Exception as e:
                         dur_ms = int((time.perf_counter() - t0) * 1000)
@@ -186,6 +245,9 @@ def instrument_mcp(mcp: Any) -> None:
                         session_id=get_trace_id() or None,
                         tag=tag,
                     )
+                    violation = check_budget_violation(tool_name, dur_ms)
+                    if violation:
+                        _emit_violation(tool_name, dur_ms, violation)
                     return result
                 except Exception as e:
                     dur_ms = int((time.perf_counter() - t0) * 1000)
@@ -273,3 +335,50 @@ def tool_usage_summary(days: int = 7) -> Dict[str, Any]:
         "macro_share": (macro / total) if total else 0.0,
         "tools": tools,
     }
+
+
+# ============================================================
+# PERF REPORT MCP TOOL
+# ============================================================
+
+def perf_report(days: int = 7) -> str:
+    """Performance report: p50/p95/p99 per tool vs budget contracts."""
+    summary = tool_usage_summary(days=days)
+    lines = [f"# Performance Report ({days}d)\n"]
+
+    violations = []
+    for tool_info in summary["tools"]:
+        name = tool_info["tool"]
+        pcts = compute_percentiles(name, days=days)
+        contract = get_tool_contract(name)
+        status = "OK"
+        if pcts["p95"] > contract["p95"]:
+            status = "VIOLATION p95"
+            violations.append(name)
+        elif pcts["p99"] > contract["p99"]:
+            status = "VIOLATION p99"
+            violations.append(name)
+        lines.append(
+            f"| {name} | {pcts['count']} calls | "
+            f"p50={pcts['p50']}ms p95={pcts['p95']}ms p99={pcts['p99']}ms | "
+            f"budget p95<{contract['p95']}ms p99<{contract['p99']}ms | {status} |"
+        )
+
+    lines.insert(1, f"Violations: {len(violations)}/{len(summary['tools'])} tools\n")
+    return "\n".join(lines)
+
+
+def register_metrics_tools(mcp_server: Any) -> None:
+    """Register performance-related MCP tools."""
+
+    @mcp_server.tool()
+    def perf_report_tool(days: int = 7) -> str:
+        """Performance report: p50/p95/p99 per tool vs budget contracts.
+        Shows which tools are within or violating their latency budgets."""
+        return perf_report(days=days)
+
+    @mcp_server.tool()
+    def tool_usage_summary_tool(days: int = 7) -> str:
+        """Tool usage summary: call counts, success/fail rates, avg latency."""
+        import json
+        return json.dumps(tool_usage_summary(days=days), indent=2)
