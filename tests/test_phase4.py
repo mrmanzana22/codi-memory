@@ -1218,16 +1218,21 @@ class TestSessionStatePersistence:
         with patch('modules.flush.load_session_state', return_value=mock_session), \
              patch('modules.consciousness.qdrant') as mock_qdrant, \
              patch('modules.consciousness.memory') as mock_mem, \
-             patch('modules.consciousness._verificar_salud_memoria_interna', return_value={"ok": True}):
+             patch('modules.consciousness._verificar_salud_memoria_interna', return_value={"ok": True}), \
+             patch('modules.lifecycle.qdrant') as mock_qdrant_lc, \
+             patch('modules.lifecycle.memory') as mock_mem_lc, \
+             patch('modules.lifecycle._verificar_salud_memoria_interna', return_value={"ok": True}):
 
             mock_qdrant.scroll.return_value = ([], None)
+            mock_qdrant_lc.scroll.return_value = ([], None)
             mock_mem.search.return_value = {"results": []}
+            mock_mem_lc.search.return_value = {"results": []}
 
             from modules.consciousness import despertar_codi
             result = despertar_codi()
 
             # Check that memory.search was called with "trading" not "fullempaques"
-            search_calls = mock_mem.search.call_args_list
+            search_calls = mock_mem_lc.search.call_args_list
             project_call = [c for c in search_calls if "proyecto" in str(c)]
             assert len(project_call) >= 1
             assert "trading" in str(project_call[0])
@@ -1636,3 +1641,38 @@ class TestGWTAutomatic:
         assert "run_workspace_competition" in src, "GWT competition not found in search_memory"
         assert "CompetitionCandidate" in src, "CompetitionCandidate not used in search_memory"
         assert "winner_ids" in src, "Winner filtering not found in search_memory"
+
+
+# ============================================================
+# D5 Facade Contract Test
+# ============================================================
+
+class TestD5FacadeContract:
+    """Ensure consciousness facade re-exports all required names (D5 split)."""
+
+    def test_facade_back_compat_names(self):
+        """Back-compat re-exports must survive future refactors."""
+        import modules.consciousness as cs
+        for name in ("qdrant", "memory", "_classify_emotion", "_get_emotion_text"):
+            assert hasattr(cs, name), f"consciousness facade missing back-compat name: {name}"
+
+    def test_facade_identity_refs(self):
+        """Shared mutable state must be same object in facade and sub-module."""
+        from modules.consciousness import _predictive_state
+        from modules.prediction import _predictive_state as ps
+        assert _predictive_state is ps, "_predictive_state ref broken"
+
+        from modules.consciousness import _global_workspace
+        from modules.workspace import _global_workspace as gw
+        assert _global_workspace is gw, "_global_workspace ref broken"
+
+        from modules.consciousness import _tool_metrics
+        from modules.learning import _tool_metrics as tm
+        assert _tool_metrics is tm, "_tool_metrics ref broken"
+
+    def test_facade_lazy_lifecycle(self):
+        """Lifecycle functions must be accessible via facade __getattr__."""
+        import modules.consciousness as cs
+        for name in ("despertar_codi", "verificar_salud_memoria",
+                      "ciclo_vida", "consolidate_recent", "dream_consolidation"):
+            assert hasattr(cs, name), f"lifecycle lazy name missing: {name}"
