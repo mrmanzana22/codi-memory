@@ -30,7 +30,7 @@ _REMEMBER_MODE_FILE = os.path.join(_PROJECT_ROOT, ".remember_mode")
 
 # Sync-compare thread limits (module-level for monkeypatching in tests)
 _SYNC_COMPARE_SEMAPHORE = threading.BoundedSemaphore(3)
-_SYNC_COMPARE_TIMEOUT = 60  # seconds
+_SYNC_COMPARE_TIMEOUT = 90  # seconds
 
 def _get_write_mode() -> str:
     mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
