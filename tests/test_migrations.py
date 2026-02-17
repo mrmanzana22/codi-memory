@@ -51,7 +51,10 @@ class TestEmptyDbBaseline:
         assert "002" in result["applied"]
         assert "003" in result["applied"]
         assert "004" in result["applied"]
-        assert result["current_version"] == "004"
+        assert "005" in result["applied"]
+        assert "006" in result["applied"]
+        assert "007" in result["applied"]
+        assert result["current_version"] == "010"
 
         conn = sqlite3.connect(db_path)
         tables = {r[0] for r in conn.execute(
@@ -69,6 +72,8 @@ class TestEmptyDbBaseline:
             "event_counts", "prediction_state", "prediction_results",
             "session_checkpoints",
             "write_queue", "write_queue_log",
+            "security_audit_log",
+            "dual_compare_log",
         }
         # memories_fts is a virtual table, check separately
         vtables = {r[0] for r in sqlite3.connect(db_path).execute(

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 from typing import Any, Dict, List, Optional
 
 from modules.memory_core import (
@@ -23,7 +24,13 @@ from modules.tracing import new_trace_id, get_trace_id
 
 # Write mode: sync (default) | shadow (sync + enqueue) | async (enqueue only)
 # Reads from: 1) env var CODI_WRITE_MODE, 2) file .write_mode in project root
-_WRITE_MODE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".write_mode")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_WRITE_MODE_FILE = os.path.join(_PROJECT_ROOT, ".write_mode")
+_REMEMBER_MODE_FILE = os.path.join(_PROJECT_ROOT, ".remember_mode")
+
+# Sync-compare thread limits (module-level for monkeypatching in tests)
+_SYNC_COMPARE_SEMAPHORE = threading.BoundedSemaphore(3)
+_SYNC_COMPARE_TIMEOUT = 60  # seconds
 
 def _get_write_mode() -> str:
     mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
@@ -34,6 +41,30 @@ def _get_write_mode() -> str:
             return f.read().strip().lower() or "sync"
     except FileNotFoundError:
         return "sync"
+
+
+VALID_WRITE_MODES = {"sync", "async", "shadow", "dual_ack"}
+
+
+def _get_remember_mode() -> str:
+    """Get write mode for remember(), with per-tool override.
+
+    Resolution order:
+      1. CODI_REMEMBER_MODE env var (if set and valid)
+      2. .remember_mode file in project root (if exists)
+      3. _get_write_mode() (global fallback)
+    """
+    mode = os.environ.get("CODI_REMEMBER_MODE", "").strip().lower()
+    if mode and mode in VALID_WRITE_MODES:
+        return mode
+    try:
+        with open(_REMEMBER_MODE_FILE) as f:
+            fmode = f.read().strip().lower()
+            if fmode and fmode in VALID_WRITE_MODES:
+                return fmode
+    except FileNotFoundError:
+        pass
+    return _get_write_mode()
 
 VALID_IMPORTANCE = {"critical", "high", "medium", "low", "auto"}
 VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline"}
@@ -263,7 +294,7 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
         if source in ("reflection", "prediction", "consolidation"):
             ms_source = "inferred"
 
-        write_mode = _get_write_mode()
+        write_mode = _get_remember_mode()
 
         if write_mode == "async":
             # Async: enqueue only, return immediate ACK
@@ -276,24 +307,148 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                 dedupe_key=dedupe_key,
                 session_id=get_trace_id(),
             )
-            lt_res = json.dumps({"action": "queued", "job_id": enqueue_result["job_id"],
-                                  "dedupe_hit": enqueue_result["dedupe_hit"],
-                                  "message": "Enqueued for background processing"}, ensure_ascii=False)
+            preview = content[:120] + "..." if len(content) > 120 else content
+            lt_res = json.dumps({
+                "action": "queued",
+                "mode": write_mode,
+                "job_id": enqueue_result["job_id"],
+                "kind": "remember",
+                "preview": preview,
+                "tags": [topic, imp],
+                "eta_seconds": 30,
+                "dedupe_hit": enqueue_result["dedupe_hit"],
+                "check": f"write_status('{enqueue_result['job_id']}')",
+                "cancel": f"cancel_write('{enqueue_result['job_id']}')",
+            }, ensure_ascii=False)
+        elif write_mode == "dual_ack":
+            # Dual-ACK: async fires first (immediate ACK), background sync compares
+            from modules.write_queue import enqueue_write_job, compute_dedupe_key
+            from modules.dual_compare import (
+                record_async_intent, record_sync_result,
+                compute_request_fingerprint, update_sync_compare_status,
+            )
+
+            trace_id = get_trace_id()
+            dedupe_key = compute_dedupe_key("remember", content)
+            fingerprint = compute_request_fingerprint("remember", content, trace_id)
+
+            # 1. Enqueue async write job
+            enqueue_result = enqueue_write_job(
+                kind="remember",
+                payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                priority=3 if imp in ("critical", "high") else 5,
+                dedupe_key=dedupe_key,
+                session_id=trace_id,
+            )
+            job_id = enqueue_result["job_id"]
+
+            # 2. Record async intent in dual_compare_log
+            record_async_intent(
+                fingerprint=fingerprint,
+                trace_id=trace_id,
+                kind="remember",
+                async_job_id=job_id,
+                write_mode="dual_ack",
+            )
+
+            # 3. Build immediate ACK (same shape as async)
+            preview = content[:120] + "..." if len(content) > 120 else content
+            lt_res = json.dumps({
+                "action": "queued",
+                "mode": "dual_ack",
+                "job_id": job_id,
+                "kind": "remember",
+                "preview": preview,
+                "tags": [topic, imp],
+                "eta_seconds": 30,
+                "dedupe_hit": enqueue_result["dedupe_hit"],
+                "check": f"write_status('{job_id}')",
+                "cancel": f"cancel_write('{job_id}')",
+            }, ensure_ascii=False)
+
+            # 4. Launch background sync compare with semaphore + timeout
+            def _bg_sync_compare():
+                import modules.interface as _iface
+                sem = _iface._SYNC_COMPARE_SEMAPHORE
+                timeout_val = _iface._SYNC_COMPARE_TIMEOUT
+                acquired = sem.acquire(blocking=False)
+                if not acquired:
+                    update_sync_compare_status(
+                        job_id, "skipped_capacity",
+                        error="semaphore full",
+                    )
+                    return
+                try:
+                    result_box = {}
+
+                    def _inner():
+                        try:
+                            result_box["output"] = add_memory_smart(
+                                content=content, category=topic,
+                                source=ms_source, importance=imp,
+                            )
+                        except Exception as exc:
+                            result_box["error"] = str(exc)
+
+                    inner_thread = threading.Thread(target=_inner, daemon=True)
+                    inner_thread.start()
+                    inner_thread.join(timeout=timeout_val)
+
+                    if inner_thread.is_alive():
+                        update_sync_compare_status(
+                            job_id, "timeout",
+                            error=f"timeout after {timeout_val}s",
+                        )
+                        return
+
+                    if "error" in result_box:
+                        update_sync_compare_status(
+                            job_id, "error",
+                            error=result_box["error"],
+                        )
+                        return
+
+                    record_sync_result(
+                        fingerprint=fingerprint,
+                        trace_id=trace_id,
+                        kind="remember",
+                        raw_output=result_box.get("output"),
+                        async_job_id=job_id,
+                        async_status=enqueue_result["status"],
+                    )
+                    update_sync_compare_status(job_id, "ok")
+                finally:
+                    sem.release()
+
+            bg_thread = threading.Thread(target=_bg_sync_compare, daemon=True)
+            bg_thread.start()
+
         elif write_mode == "shadow":
-            # Shadow: sync first, then also enqueue (for validation)
+            # Shadow: sync first, then enqueue + record dual compare
             lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
             try:
                 from modules.write_queue import enqueue_write_job, compute_dedupe_key
+                from modules.dual_compare import record_sync_result, compute_request_fingerprint
+                trace_id = get_trace_id()
                 dedupe_key = compute_dedupe_key("remember", content)
-                enqueue_write_job(
+                fingerprint = compute_request_fingerprint("remember", content, trace_id)
+                enqueue_result = enqueue_write_job(
                     kind="remember",
                     payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
                     dedupe_key=dedupe_key,
-                    session_id=get_trace_id(),
+                    session_id=trace_id,
+                )
+                record_sync_result(
+                    fingerprint=fingerprint,
+                    trace_id=trace_id,
+                    kind="remember",
+                    raw_output=lt_res,
+                    async_job_id=enqueue_result["job_id"],
+                    async_status=enqueue_result["status"],
                 )
             except Exception as e:
                 import sys
-                print(f"[SHADOW] enqueue failed: {type(e).__name__}: {e}", file=sys.stderr)
+                print(f"[SHADOW] dual enqueue failed: {type(e).__name__}: {e}", file=sys.stderr)
         else:
             # Sync (default): current behavior
             lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
