@@ -1,0 +1,18 @@
+title = "Codi Memory - Gitleaks Config"
+
+[allowlist]
+  description = "Known false positives"
+
+  # Test fixtures with dummy keys
+  paths = [
+    '''tests/.*''',
+    '''docs/security/.*''',
+  ]
+
+  regexTarget = "line"
+  regexes = [
+    # Dummy/test API keys used in fixtures
+    '''sk-test-[a-zA-Z0-9]+''',
+    # Example tokens in documentation
+    '''confirm_token='[a-f0-9]{16}' ''',
+  ]

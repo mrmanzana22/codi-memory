@@ -17,6 +17,10 @@ from modules.activation import compute_unified_activation
 from modules.memory_smart import index_memory_fts, delete_memory_fts, search_fts, bm25_rank_to_score
 from modules.consolidation import search_semantic
 from modules.events import event_bus, Events
+from modules.destructive_guard import (
+    is_guard_enabled, is_legacy_enabled, compute_fingerprint,
+    request_confirmation, validate_and_consume,
+)
 from modules.retrieval_metadata import (
     wrap_retrieval_result, init_failed_searches_table, log_failed_search,
     metacognitive_control,
@@ -59,10 +63,59 @@ def restore_memories() -> str:
         return f"Error restaurando: {str(e)}"
 
 
+def _add_memory_sync(content: str, category: str, source: str, importance: str) -> str:
+    """Synchronous add_memory implementation (original pipeline)."""
+    result = memory.add(
+        messages=[{"role": "user", "content": content}],
+        user_id=USER_ID,
+        metadata={"category": category}
+    )
+
+    if result and result.get("results"):
+        for r in result["results"]:
+            mem_id = r.get("id")
+            if mem_id:
+                enrich_with_ownership(
+                    memory_id=mem_id,
+                    category=category,
+                    content=content,
+                    source=source,
+                    importance=importance
+                )
+
+    mem_id_fts = None
+    try:
+        if result and result.get("results"):
+            for r in result["results"]:
+                mem_id_fts = r.get("id")
+                if mem_id_fts:
+                    index_memory_fts(mem_id_fts, content, category, source, importance)
+    except Exception as fts_err:
+        print(f"[codi-memory] FTS index error in add_memory: {fts_err}")
+
+    try:
+        event_bus.emit(Events.MEMORY_STORED, {
+            'memory_id': mem_id_fts,
+            'content': content[:200],
+            'category': category,
+            'source': source,
+            'importance': importance,
+        })
+    except Exception:
+        pass
+
+    return f"Memoria guardada con ownership: {result}"
+
+
 def add_memory(content: str, category: str = "general",
                source: str = "experienced", importance: str = "medium") -> str:
     """
     Guarda un nuevo recuerdo con ownership tagging.
+
+    Supports 3 write modes via CODI_WRITE_MODE env var:
+      - sync (default): synchronous pipeline
+      - shadow: sync + enqueue for validation
+      - async: enqueue + immediate ACK
 
     Args:
         content: El contenido a recordar
@@ -73,52 +126,41 @@ def add_memory(content: str, category: str = "general",
     Returns:
         Confirmacion del recuerdo guardado
     """
+    from modules.interface import _get_write_mode
+    write_mode = _get_write_mode()
+
     try:
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": category}
-        )
+        if write_mode == "async":
+            from modules.write_queue import enqueue_write_job, compute_dedupe_key
+            dedupe_key = compute_dedupe_key("add_memory", content)
+            enqueue_result = enqueue_write_job(
+                kind="add_memory",
+                payload={"content": content, "category": category, "source": source, "importance": importance},
+                priority=3 if importance in ("critical", "high") else 5,
+                dedupe_key=dedupe_key,
+            )
+            return json.dumps({
+                "action": "queued", "job_id": enqueue_result["job_id"],
+                "dedupe_hit": enqueue_result["dedupe_hit"],
+                "message": "Memoria enqueued para procesamiento en background"
+            }, ensure_ascii=False)
 
-        # Obtener ID de la memoria creada y enriquecer con ownership
-        if result and result.get("results"):
-            for r in result["results"]:
-                mem_id = r.get("id")
-                if mem_id:
-                    enrich_with_ownership(
-                        memory_id=mem_id,
-                        category=category,
-                        content=content,
-                        source=source,
-                        importance=importance
-                    )
+        # Sync execution
+        result_str = _add_memory_sync(content, category, source, importance)
 
-        # P1: backup removed from hot path (runs on flush/checkpoint/noche)
+        if write_mode == "shadow":
+            try:
+                from modules.write_queue import enqueue_write_job, compute_dedupe_key
+                dedupe_key = compute_dedupe_key("add_memory", content)
+                enqueue_write_job(
+                    kind="add_memory",
+                    payload={"content": content, "category": category, "source": source, "importance": importance},
+                    dedupe_key=dedupe_key,
+                )
+            except Exception:
+                pass
 
-        # Indexar en FTS5 para busqueda hibrida
-        mem_id_fts = None
-        try:
-            if result and result.get("results"):
-                for r in result["results"]:
-                    mem_id_fts = r.get("id")
-                    if mem_id_fts:
-                        index_memory_fts(mem_id_fts, content, category, source, importance)
-        except Exception as fts_err:
-            print(f"[codi-memory] FTS index error in add_memory: {fts_err}")
-
-        # Emit MEMORY_STORED event
-        try:
-            event_bus.emit(Events.MEMORY_STORED, {
-                'memory_id': mem_id_fts,
-                'content': content[:200],
-                'category': category,
-                'source': source,
-                'importance': importance,
-            })
-        except Exception:
-            pass
-
-        return f"Memoria guardada con ownership: {result}"
+        return result_str
     except Exception as e:
         return f"Error al guardar memoria: {str(e)}"
 
@@ -739,8 +781,26 @@ def get_all_memories(limit: int = 500) -> str:
         return f"Error: {str(e)}"
 
 
-def delete_memory(memory_id: str) -> str:
-    """Elimina un recuerdo especifico por su ID."""
+def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = "") -> str:
+    """Elimina un recuerdo especifico por su ID. Requiere confirm_token (two-step)."""
+    tool = "delete_memory"
+    fp = compute_fingerprint(tool, memory_id=memory_id)
+
+    if is_guard_enabled():
+        if dry_run:
+            return f"[DRY RUN] delete_memory eliminaria memoria id={memory_id}."
+
+        if not confirm_token:
+            token = request_confirmation(tool, fp)
+            return (
+                f"GUARD: Esto eliminara memoria id={memory_id}.\n"
+                f"Para confirmar, llama de nuevo con confirm_token='{token}'"
+            )
+
+        err = validate_and_consume(confirm_token, tool, fp)
+        if err:
+            return f"GUARD BLOCKED: {err}"
+
     try:
         memory.delete(memory_id=memory_id)
         delete_memory_fts(memory_id)
@@ -749,8 +809,12 @@ def delete_memory(memory_id: str) -> str:
         return f"Error al eliminar: {str(e)}"
 
 
-def delete_by_content(search_query: str, confirm: bool = False) -> str:
-    """Busca memorias por contenido y las elimina."""
+def delete_by_content(search_query: str, dry_run: bool = False,
+                      confirm_token: str = "", confirm: bool = False) -> str:
+    """Busca memorias por contenido y las elimina. Requiere confirm_token (two-step)."""
+    tool = "delete_by_content"
+    fp = compute_fingerprint(tool, search_query=search_query)
+
     try:
         results = memory.search(query=search_query, user_id=USER_ID, limit=10)
         if not results or not results.get("results"):
@@ -758,14 +822,41 @@ def delete_by_content(search_query: str, confirm: bool = False) -> str:
 
         memories_found = results["results"]
 
-        if not confirm:
-            lines = ["Memorias que se eliminarian (usa confirm=True para eliminar):"]
+        # Preview (dry_run or first call without token)
+        def _preview() -> str:
+            lines = [f"[PREVIEW] {len(memories_found)} memorias coinciden con '{search_query}':"]
             for i, mem in enumerate(memories_found, 1):
                 mem_id = mem.get("id", "unknown")
                 text = mem.get("memory", "")[:80]
                 score = mem.get("score", 0)
                 lines.append(f"{i}. [score:{score:.2f}] [id:{mem_id[:8]}] {text}...")
             return "\n".join(lines)
+
+        if is_guard_enabled():
+            if dry_run:
+                return _preview()
+
+            # Legacy bridge: confirm=True only if CODI_DESTRUCTIVE_LEGACY=on
+            if confirm and not confirm_token:
+                if is_legacy_enabled():
+                    pass  # fall through to execute
+                else:
+                    return (
+                        "GUARD: confirm=True ya no es suficiente. "
+                        "Llama sin confirm para obtener un confirm_token."
+                    )
+            elif not confirm_token:
+                preview = _preview()
+                token = request_confirmation(tool, fp)
+                return f"{preview}\n\nPara confirmar, llama con confirm_token='{token}'"
+            else:
+                err = validate_and_consume(confirm_token, tool, fp)
+                if err:
+                    return f"GUARD BLOCKED: {err}"
+        else:
+            # Guard off: original behavior
+            if not confirm and not confirm_token:
+                return _preview()
 
         deleted = 0
         for mem in memories_found:
@@ -783,11 +874,39 @@ def delete_by_content(search_query: str, confirm: bool = False) -> str:
         return f"Error: {str(e)}"
 
 
-def clear_all_memories(confirm_code: str = "") -> str:
-    """PELIGRO: Elimina TODOS los recuerdos."""
+def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
+                       confirm_code: str = "") -> str:
+    """PELIGRO: Elimina TODOS los recuerdos. Requiere confirm_token (two-step)."""
+    tool = "clear_all_memories"
+    fp = compute_fingerprint(tool)
+
+    if is_guard_enabled():
+        # Legacy bridge: confirm_code only if CODI_DESTRUCTIVE_LEGACY=on
+        if confirm_code == "DELETE_ALL_MEMORIES" and not confirm_token:
+            if is_legacy_enabled():
+                pass  # fall through to execute
+            else:
+                return (
+                    "GUARD: confirm_code ya no es suficiente. "
+                    "Llama sin parametros para obtener un confirm_token."
+                )
+
+        if dry_run:
+            return "[DRY RUN] clear_all_memories eliminaria TODAS las memorias del usuario."
+
+        if not confirm_token and confirm_code != "DELETE_ALL_MEMORIES":
+            token = request_confirmation(tool, fp)
+            return (
+                "GUARD: Esto eliminara TODAS las memorias.\n"
+                f"Para confirmar, llama con confirm_token='{token}'"
+            )
+
+        if confirm_token:
+            err = validate_and_consume(confirm_token, tool, fp)
+            if err:
+                return f"GUARD BLOCKED: {err}"
+
     try:
-        if confirm_code != "DELETE_ALL_MEMORIES":
-            return "Bloqueado. Para borrar todo usa confirm_code='DELETE_ALL_MEMORIES'."
         memory.delete_all(user_id=USER_ID)
         return "Todos los recuerdos han sido eliminados."
     except Exception as e:

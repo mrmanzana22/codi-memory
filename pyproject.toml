@@ -1,0 +1,11 @@
+[tool.bandit]
+# Exclude test files and virtual environments
+exclude_dirs = ["tests", "venv", "claude-code-server"]
+
+# Skip low-confidence findings and known safe patterns
+skips = [
+    "B101",  # assert used (fine in non-web code)
+    "B311",  # random not for crypto (uuid4 is fine)
+    "B603",  # subprocess without shell=True (safe)
+    "B607",  # partial executable path (safe in controlled env)
+]

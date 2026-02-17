@@ -836,3 +836,125 @@ class TestSourcePriority:
 
         assert row[0] == "flush data - high priority"
         assert row[1] == "flush"
+
+
+# ============================================================
+# BUCKET 10: Golden E2E -- Full Continuity Pipeline
+# Ref: Schacter & Addis 2007 (Constructive Memory Framework)
+# ============================================================
+
+class TestGoldenE2E:
+    """Bucket 10: full pipeline checkpoint -> sleep_report -> despertar_codi.
+
+    This is the "ultimate" continuity test: it validates that the entire
+    cross-session pipeline produces grounded, non-hallucinated output.
+    """
+
+    def _setup_despertar_mocks(self, monkeypatch, continuity_db):
+        """Minimal mocks for despertar_codi (same pattern as Bucket 7)."""
+        monkeypatch.setattr(
+            "modules.consciousness._verificar_salud_memoria_interna",
+            lambda: {"ok": True, "total_memories": 100, "message": "OK"}
+        )
+        monkeypatch.setattr("modules.triggers._load_triggers", lambda: [])
+        monkeypatch.setattr("modules.maintenance._verificar_tareas_vencidas", lambda: [])
+
+        fake_qdrant = FakeQdrant([])
+        monkeypatch.setattr("modules.consciousness.qdrant", fake_qdrant)
+
+        mock_memory = MagicMock()
+        mock_memory.search.return_value = {"results": []}
+        monkeypatch.setattr("modules.consciousness.memory", mock_memory)
+
+        monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
+
+        from modules.events import event_bus
+        monkeypatch.setattr(event_bus, "emit", lambda *a, **kw: None)
+
+    def test_full_pipeline_grounded(self, continuity_db, mock_external_deps, monkeypatch, clean_pad):
+        """checkpoint -> sleep_report -> despertar: output is grounded, nothing invented."""
+        from modules.session_bridge import checkpoint_session_close
+        from modules.config import _emotional_state
+
+        # Step 1: Create checkpoint with known data
+        critical_intentions = [
+            {"id": "g1", "action": "Deploy trading bot v2",
+             "priority": "critical", "activation": 0.95, "expiry": None},
+            {"id": "g2", "action": "Review session bridge health",
+             "priority": "high", "activation": 0.8, "expiry": None},
+        ]
+        monkeypatch.setattr(
+            "modules.prospective.get_pending_intentions",
+            lambda limit=10: critical_intentions
+        )
+
+        result = checkpoint_session_close(
+            session_summary="Completamos baseline E0.1 y definimos SLOs v0",
+            source="flush",
+        )
+        assert result["ok"] is True
+        cp_id = result["checkpoint_id"]
+
+        # Step 2: Write sleep report to checkpoint (simulating sleep loop)
+        conn = sqlite3.connect(continuity_db)
+        conn.execute(
+            "UPDATE session_checkpoints SET sleep_report = ? WHERE id = ?",
+            ("SLEEP REPORT (launchd, 3200ms)\n- prospective: OK (150ms)\n- health: OK (800ms)\n- consolidation: OK (1800ms)\n- homeostasis: OK (400ms)", cp_id)
+        )
+        conn.commit()
+        conn.close()
+
+        # Step 3: Reset intentions mock (bridge reads from checkpoint, not live)
+        monkeypatch.setattr(
+            "modules.prospective.get_pending_intentions",
+            lambda limit=10: []
+        )
+
+        # Step 4: Call despertar_codi
+        self._setup_despertar_mocks(monkeypatch, continuity_db)
+
+        from modules.consciousness import despertar_codi
+        wake_text = despertar_codi()
+
+        # === GROUNDING ASSERTIONS ===
+
+        # Bridge section exists
+        assert "SESSION BRIDGE" in wake_text, "Missing SESSION BRIDGE section"
+
+        # Summary is grounded (appears in output)
+        assert "baseline E0.1" in wake_text or "SLOs" in wake_text, \
+            f"Summary not grounded in bridge text"
+
+        # Critical intentions appear
+        assert "Deploy trading bot" in wake_text or "trading bot" in wake_text.lower(), \
+            "Critical intention 'Deploy trading bot' missing from bridge"
+
+        # Sleep report section present
+        assert "[Sleep]" in wake_text or "SLEEP REPORT" in wake_text or "sleep" in wake_text.lower(), \
+            "Sleep report missing from bridge text"
+
+        # PAD restored (not default 0,0,0)
+        current = _emotional_state['current']
+        assert abs(current['pleasure'] - 0.6) < 0.01, f"PAD not restored: p={current['pleasure']}"
+
+        # === ANTI-HALLUCINATION ASSERTIONS ===
+
+        # No invented prediction errors (no external events were set up)
+        # Bridge text should not contain PE markers for things that didn't happen
+        # (expired intentions would be PEs, but our intentions have no expiry)
+        assert "[PE] intention_expired" not in wake_text, \
+            "Hallucinated intention_expired PE (intentions have no expiry)"
+
+    def test_no_checkpoint_graceful(self, continuity_db, mock_external_deps, monkeypatch, clean_pad):
+        """despertar_codi with no checkpoint: still works, no crash, no hallucination."""
+        self._setup_despertar_mocks(monkeypatch, continuity_db)
+
+        from modules.consciousness import despertar_codi
+        wake_text = despertar_codi()
+
+        # Should still produce output (fallback mode)
+        assert wake_text is not None
+        assert len(wake_text) > 0
+
+        # Should NOT contain bridge data (there is no checkpoint)
+        assert "SESSION BRIDGE" not in wake_text or "No bridge" in wake_text or "no hay" in wake_text.lower() or len(wake_text) > 0

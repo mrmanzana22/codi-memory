@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,20 @@ from modules.tracing import new_trace_id, get_trace_id
 # INTERFACE LAYER (Fase 2.5) - 3 macro-tools
 # recall / remember / context_snapshot
 # ============================================================
+
+# Write mode: sync (default) | shadow (sync + enqueue) | async (enqueue only)
+# Reads from: 1) env var CODI_WRITE_MODE, 2) file .write_mode in project root
+_WRITE_MODE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".write_mode")
+
+def _get_write_mode() -> str:
+    mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
+    if mode:
+        return mode
+    try:
+        with open(_WRITE_MODE_FILE) as f:
+            return f.read().strip().lower() or "sync"
+    except FileNotFoundError:
+        return "sync"
 
 VALID_IMPORTANCE = {"critical", "high", "medium", "low", "auto"}
 VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline"}
@@ -247,8 +262,41 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
         ms_source = "experienced"
         if source in ("reflection", "prediction", "consolidation"):
             ms_source = "inferred"
-        # memory_smart expects: critical/high/medium/low
-        lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+
+        write_mode = _get_write_mode()
+
+        if write_mode == "async":
+            # Async: enqueue only, return immediate ACK
+            from modules.write_queue import enqueue_write_job, compute_dedupe_key
+            dedupe_key = compute_dedupe_key("remember", content)
+            enqueue_result = enqueue_write_job(
+                kind="remember",
+                payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                priority=3 if imp in ("critical", "high") else 5,
+                dedupe_key=dedupe_key,
+                session_id=get_trace_id(),
+            )
+            lt_res = json.dumps({"action": "queued", "job_id": enqueue_result["job_id"],
+                                  "dedupe_hit": enqueue_result["dedupe_hit"],
+                                  "message": "Enqueued for background processing"}, ensure_ascii=False)
+        elif write_mode == "shadow":
+            # Shadow: sync first, then also enqueue (for validation)
+            lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+            try:
+                from modules.write_queue import enqueue_write_job, compute_dedupe_key
+                dedupe_key = compute_dedupe_key("remember", content)
+                enqueue_write_job(
+                    kind="remember",
+                    payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                    dedupe_key=dedupe_key,
+                    session_id=get_trace_id(),
+                )
+            except Exception as e:
+                import sys
+                print(f"[SHADOW] enqueue failed: {type(e).__name__}: {e}", file=sys.stderr)
+        else:
+            # Sync (default): current behavior
+            lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
 
     pretty_lines = [
         "# REMEMBER",

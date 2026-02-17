@@ -8,20 +8,47 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
-# Data
+# Databases and artifacts
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 data/
 
-# Runtime
+# Runtime config (local only)
 .codi-memory.pid
+.write_mode
+.destructive_guard
 qdrant_data/
 
-# Backups de server.py (ya estan en git history)
-server.py.backup*
-
-# Memories backup (contiene datos sensibles del usuario)
+# Backups (G-02: timestamped backups contain PII)
 memories_backup.json
+memories_backup_*.json
+server.py.backup*
+*.bak
+*.dump
+*.sql.gz
+
+# Logs
+*.log
+logs/
+
+# OS artifacts
+.DS_Store
+**/tmp/
+
+# Session traces / telemetry
+*.jsonl
 
 # Claude Code server (subproyecto separado)
 claude-code-server/

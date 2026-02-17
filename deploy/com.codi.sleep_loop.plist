@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.codi.sleep_loop</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/harecjimenez/codi-memory/venv/bin/python3</string>
+        <string>-m</string>
+        <string>modules.sleep_loop</string>
+        <string>--reason</string>
+        <string>launchd</string>
+        <string>--budget-ms</string>
+        <string>8000</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>WorkingDirectory</key>
+    <string>/Users/harecjimenez/codi-memory</string>
+    <key>StandardOutPath</key>
+    <string>/Users/harecjimenez/codi-memory/data/sleep_loop_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/harecjimenez/codi-memory/data/sleep_loop_stderr.log</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

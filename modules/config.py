@@ -86,6 +86,7 @@ BACKUP_POLICY = os.getenv("BACKUP_POLICY", "on_demand").strip()  # "on_demand" |
 BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))  # 10 min debounce
 BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "20"))  # rotation cap
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
 COLLECTION_NAME = "codi_memories"          # Episodic store (existing)
 SEMANTIC_COLLECTION = "codi_semantic"       # Semantic store (Phase 1)
 
@@ -240,6 +241,7 @@ mem0_config = {
         "config": {
             "collection_name": COLLECTION_NAME,
             "url": QDRANT_URL,
+            **({"api_key": QDRANT_API_KEY} if QDRANT_API_KEY else {}),
         }
     }
 }
@@ -268,8 +270,30 @@ def get_memory():
     return _memory
 
 
+def _sanitize_url(url: str) -> str:
+    """Return scheme://host:port only (strip path, query, creds)."""
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        host = p.hostname or "unknown"
+        port = f":{p.port}" if p.port else ""
+        return f"{p.scheme}://{host}{port}"
+    except Exception:
+        return "<redacted>"
+
+
+def _is_remote_qdrant(url: str) -> bool:
+    """True if URL points to a non-localhost host."""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        return host not in ("localhost", "127.0.0.1", "::1", "")
+    except Exception:
+        return True
+
+
 def get_qdrant():
-    """Lazy init de Qdrant."""
+    """Lazy init de Qdrant with API key auth and remote guardrail."""
     global _qdrant
     if _qdrant is None:
         if not QDRANT_URL:
@@ -277,11 +301,27 @@ def get_qdrant():
                 "QDRANT_URL no esta configurada. "
                 "Configurala en .env (ej: QDRANT_URL=https://<host>:443)."
             )
+
+        # Guardrail: remote Qdrant without API key is dangerous
+        if _is_remote_qdrant(QDRANT_URL) and not QDRANT_API_KEY:
+            allow_insecure = os.getenv("CODI_ALLOW_INSECURE_QDRANT", "").strip()
+            if allow_insecure != "1":
+                raise RuntimeError(
+                    f"Remote Qdrant ({_sanitize_url(QDRANT_URL)}) requires QDRANT_API_KEY. "
+                    "Set CODI_ALLOW_INSECURE_QDRANT=1 to bypass (dev only)."
+                )
+
         try:
-            _qdrant = QdrantClient(url=QDRANT_URL, timeout=30)
-            print("[codi-memory] Qdrant conectado OK")
+            _qdrant = QdrantClient(
+                url=QDRANT_URL,
+                api_key=QDRANT_API_KEY or None,
+                timeout=30,
+            )
+            safe_url = _sanitize_url(QDRANT_URL)
+            auth_status = "with API key" if QDRANT_API_KEY else "WITHOUT auth"
+            print(f"[codi-memory] Qdrant conectado OK ({safe_url}, {auth_status})")
         except Exception as e:
-            print(f"[codi-memory] ERROR conectando Qdrant: {e}")
+            print(f"[codi-memory] ERROR conectando Qdrant: {type(e).__name__}")
             raise
     return _qdrant
 

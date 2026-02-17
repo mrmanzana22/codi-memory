@@ -9,74 +9,109 @@ from modules.utils import enrich_with_ownership, maybe_backup, export_memories_t
 from modules.memory_smart import add_memory_smart, process_fts_queue
 
 
+def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) -> str:
+    """Synchronous checkpoint implementation (original pipeline)."""
+    timestamp = now_short()
+    contenido = f"[{momento.upper()}] {que_paso} | Importancia: {por_que_importa} | Fecha: {timestamp}"
+
+    importance_map = {
+        'momento_personal': 'critical',
+        'decision': 'high',
+        'error_resuelto': 'high',
+        'aprendizaje': 'medium',
+        'tarea_completada': 'medium',
+        'patron': 'medium'
+    }
+
+    valence_map = {
+        'momento_personal': 'positive',
+        'tarea_completada': 'positive',
+        'error_resuelto': 'mixed',
+        'decision': 'neutral',
+        'aprendizaje': 'positive',
+        'patron': 'neutral'
+    }
+
+    result = memory.add(
+        messages=[{"role": "user", "content": contenido}],
+        user_id=USER_ID,
+        metadata={
+            "category": "checkpoint",
+            "tipo_momento": momento,
+            "timestamp": timestamp
+        }
+    )
+
+    if result and result.get("results"):
+        for r in result["results"]:
+            mem_id = r.get("id")
+            if mem_id:
+                enrich_with_ownership(
+                    memory_id=mem_id,
+                    category="checkpoint",
+                    content=contenido,
+                    source="experienced",
+                    importance=importance_map.get(momento, 'medium'),
+                    emotional_weight=0.7,
+                    emotional_valence=valence_map.get(momento, 'neutral')
+                )
+
+    maybe_backup(reason="checkpoint", force=True)
+
+    try:
+        process_fts_queue(limit=50)
+    except Exception:
+        pass
+
+    try:
+        append_to_daily_journal(momento, que_paso, por_que_importa)
+    except Exception:
+        pass
+
+    return f"Checkpoint guardado: {momento} - {que_paso[:50]}..."
+
+
 def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> str:
     """
     Guarda un checkpoint con ownership automatico.
     Los checkpoints siempre son source=experienced, importancia alta.
+
+    Supports 3 write modes via CODI_WRITE_MODE env var:
+      - sync (default): synchronous pipeline
+      - shadow: sync + enqueue for validation
+      - async: enqueue + immediate ACK
     """
+    from modules.interface import _get_write_mode
+    write_mode = _get_write_mode()
+
     try:
-        timestamp = now_short()
-        contenido = f"[{momento.upper()}] {que_paso} | Importancia: {por_que_importa} | Fecha: {timestamp}"
+        if write_mode == "async":
+            from modules.write_queue import enqueue_write_job, compute_dedupe_key
+            dedupe_key = compute_dedupe_key("checkpoint_memoria", f"{momento}|{que_paso}")
+            enqueue_result = enqueue_write_job(
+                kind="checkpoint_memoria",
+                payload={"momento": momento, "que_paso": que_paso, "por_que_importa": por_que_importa},
+                priority=2,  # checkpoints are high priority
+                dedupe_key=dedupe_key,
+            )
+            return f"Checkpoint enqueued (job_id={enqueue_result['job_id'][:8]}...)"
 
-        # Determinar importancia y emocion segun momento
-        importance_map = {
-            'momento_personal': 'critical',
-            'decision': 'high',
-            'error_resuelto': 'high',
-            'aprendizaje': 'medium',
-            'tarea_completada': 'medium',
-            'patron': 'medium'
-        }
+        # Sync execution
+        result_str = _checkpoint_memoria_sync(momento, que_paso, por_que_importa)
 
-        valence_map = {
-            'momento_personal': 'positive',
-            'tarea_completada': 'positive',
-            'error_resuelto': 'mixed',
-            'decision': 'neutral',
-            'aprendizaje': 'positive',
-            'patron': 'neutral'
-        }
+        if write_mode == "shadow":
+            try:
+                from modules.write_queue import enqueue_write_job, compute_dedupe_key
+                dedupe_key = compute_dedupe_key("checkpoint_memoria", f"{momento}|{que_paso}")
+                enqueue_write_job(
+                    kind="checkpoint_memoria",
+                    payload={"momento": momento, "que_paso": que_paso, "por_que_importa": por_que_importa},
+                    dedupe_key=dedupe_key,
+                )
+            except Exception:
+                pass
 
-        result = memory.add(
-            messages=[{"role": "user", "content": contenido}],
-            user_id=USER_ID,
-            metadata={
-                "category": "checkpoint",
-                "tipo_momento": momento,
-                "timestamp": timestamp
-            }
-        )
-
-        # Enriquecer con ownership
-        if result and result.get("results"):
-            for r in result["results"]:
-                mem_id = r.get("id")
-                if mem_id:
-                    enrich_with_ownership(
-                        memory_id=mem_id,
-                        category="checkpoint",
-                        content=contenido,
-                        source="experienced",
-                        importance=importance_map.get(momento, 'medium'),
-                        emotional_weight=0.7,
-                        emotional_valence=valence_map.get(momento, 'neutral')
-                    )
-
-        maybe_backup(reason="checkpoint", force=True)
-
-        # Process pending FTS retry queue (P2A)
-        try:
-            process_fts_queue(limit=50)
-        except Exception:
-            pass
-
-        # Hook: escribir en journal diario
-        try:
-            append_to_daily_journal(momento, que_paso, por_que_importa)
-        except Exception:
-            pass
-
-        return f"Checkpoint guardado: {momento} - {que_paso[:50]}..."
+        return result_str
     except Exception as e:
         return f"Error guardando checkpoint: {str(e)}"
 
@@ -225,14 +260,27 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     except Exception as e:
         resultados.append(f"Backup: ERROR - {e}")
 
-    # 6. Save session state for next despertar
+    # 6. Session Bridge checkpoint
     try:
-        if _save_session_state(resumen):
-            resultados.append("Session state: OK")
+        from modules.session_bridge import checkpoint_session_close
+        bridge_result = checkpoint_session_close(
+            session_summary=resumen,
+            decisions=decisiones,
+            goal_stack=[],
+            source="flush"
+        )
+        if bridge_result.get("ok"):
+            resultados.append(f"Session checkpoint: OK (id={bridge_result.get('checkpoint_id')})")
         else:
-            resultados.append("Session state: SKIP")
+            resultados.append(f"Session checkpoint: DEDUPED (id={bridge_result.get('checkpoint_id')})")
     except Exception as e:
-        resultados.append(f"Session state: ERROR - {e}")
+        resultados.append(f"Session checkpoint: ERROR - {e}")
+
+    # 6b. JSON fallback (backward compat)
+    try:
+        _save_session_state(resumen)
+    except Exception:
+        pass
 
     # 7. Process pending FTS retry queue (P2A)
     try:

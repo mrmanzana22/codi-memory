@@ -3,7 +3,7 @@
 **System:** Neuroscience-Inspired Cognitive Memory for AI Agents
 **Protocol:** MCP (Model Context Protocol) Server
 **Codebase:** ~14,270 lines Python across 22 modules + 4,696 lines of tests (272 tests)
-**Last Updated:** 2026-02-15
+**Last Updated:** 2026-02-16
 
 ---
 
@@ -20,7 +20,10 @@
 9. [Deployment and Security](#9-deployment-and-security)
 10. [Configuration](#10-configuration)
 11. [Testing Strategy](#11-testing-strategy)
-12. [Trade-offs and Known Limitations](#12-trade-offs-and-known-limitations)
+12. [Continuity Pipeline](#12-continuity-pipeline)
+13. [Performance & SLO Model](#13-performance--slo-model)
+14. [Sleep Loop Lifecycle](#14-sleep-loop-lifecycle)
+15. [Trade-offs and Known Limitations](#15-trade-offs-and-known-limitations)
 
 ---
 
@@ -654,9 +657,244 @@ All parameters are module-level constants. No runtime configuration reload mecha
 
 ---
 
-## 12. Trade-offs and Known Limitations
+## 12. Continuity Pipeline
 
-### 12.1 Architectural Trade-offs
+Cross-session continuity is achieved through a 4-stage pipeline: **checkpoint → sleep_report → bridge → despertar_codi**. The system does not persist continuity literally; it reconstructs it from structured snapshots and deterministic prediction errors, inspired by hippocampal replay and autobiographical memory.
+
+```mermaid
+sequenceDiagram
+    participant S as Session (active)
+    participant SB as session_bridge.py
+    participant SL as sleep_loop.py
+    participant DB as SQLite (session_checkpoints)
+    participant D as despertar_codi
+
+    Note over S,SB: Stage 1: Checkpoint (session end)
+    S->>SB: checkpoint_session_close()
+    SB->>SB: Collect from 9 sources
+    SB->>DB: INSERT/UPDATE row
+    SB-->>S: checkpoint_id
+
+    Note over SL,DB: Stage 2: Sleep Report (between sessions)
+    SL->>DB: Find eligible checkpoint (no report, <30min old)
+    SL->>SL: Run 4 ticks (prospective→health→consolidation→homeostasis)
+    SL->>DB: UPDATE sleep_report column
+
+    Note over D,SB: Stage 3: Bridge (next session start)
+    D->>SB: load_session_bridge()
+    SB->>DB: SELECT latest checkpoint
+    SB->>SB: Freshness check (<24h)
+    SB->>SB: Calculate PEs (expired intentions, external events)
+    SB->>SB: Generate narrative bridge (≤500 chars)
+    SB-->>D: bridge_text + PEs + checkpoint data
+
+    Note over D: Stage 4: Wake-up
+    D->>D: Restore PAD, load WM, check intentions
+    D->>D: Inject bridge into boot context
+```
+
+### 12.1 Checkpoint Data (9 Sources)
+
+`checkpoint_session_close()` captures minimal sufficient state from 9 sources in a single SQLite row:
+
+| Source | Data | Purpose |
+|--------|------|---------|
+| Working memory | Top 15 items by relevance | What was active in short-term buffer |
+| PAD emotional state | P/A/D values + trigger | Emotional context at session end |
+| Pending intentions | Up to 10, with priority + activation + expiry | Prospective memory continuity |
+| Goal stack | List of {goal, status, next_step} | Task continuity |
+| Active project | Highest-relevance WM topic | Project context |
+| Attention schema | Current focus + strength | What system was attending to |
+| Prediction state | Last predicted topic + confidence | Predictive processing state |
+| Recent prediction errors | Last 3 PEs | Surprise signals for bridge |
+| Active narrative traces | Trace names + themes | Story-arc continuity |
+| Decisions | Session param + WM decision items | Decision history |
+
+### 12.2 Bridge Reconstruction
+
+`load_session_bridge()` generates a deterministic narrative bridge (no LLM, no invention):
+
+1. **Freshness gate**: Ignore checkpoints older than 24 hours
+2. **PE calculation**: Two deterministic sources:
+   - Expired intentions (expiry timestamp < now)
+   - External events (recordatorios_externos.json newer than checkpoint)
+3. **Narrative assembly**: Summary → project → time elapsed → PEs → sleep report → pending intentions → next step
+4. **Cap at 500 chars** to prevent context bloat
+
+### 12.3 Deduplication & Source Priority
+
+- **Dedupe window**: 120 seconds. No new checkpoint if one exists within this window.
+- **Source priority**: `flush` (score 2) > `hook` (score 1). A flush can upgrade a hook checkpoint within the dedupe window.
+- **Retention**: Only the last 50 checkpoints are kept. Older rows are pruned on each write.
+
+---
+
+## 13. Performance & SLO Model
+
+All MCP tools are automatically instrumented for latency, success/failure, and payload size. The system enforces performance contracts via budgets and emits violation events.
+
+### 13.1 Instrumentation Architecture
+
+```mermaid
+graph TB
+    subgraph "Instrumentation (metrics.py)"
+        IM["instrument_mcp()"]
+        LTC["log_tool_call()"]
+        CBV["check_budget_violation()"]
+        EV["emit PERF_BUDGET_VIOLATION"]
+    end
+
+    subgraph "Storage"
+        TC["tool_calls table (SQLite)"]
+    end
+
+    subgraph "Reporting"
+        CP["compute_percentiles()"]
+        PR["perf_report()"]
+        SC["scripts/analyze_perf_baseline.py"]
+    end
+
+    IM -->|"monkeypatches mcp.tool()"| LTC
+    LTC --> TC
+    LTC --> CBV
+    CBV -->|"p95/p99 exceeded"| EV
+    TC --> CP --> PR
+    TC --> SC
+```
+
+**How it works:** `instrument_mcp(mcp)` monkeypatches `mcp.tool()` so every tool registration wraps the original function with timing logic. This means **all tools are instrumented without modifying any module**. The wrapper:
+
+1. Records `started_at` timestamp
+2. Measures `duration_ms` via `time.perf_counter()`
+3. Captures `args_size` and `result_size` (approximate bytes, no content persisted)
+4. Writes one row to `tool_calls` table per invocation
+5. Checks against budget contract; emits `PERF_BUDGET_VIOLATION` event if exceeded
+
+### 13.2 Performance Contracts
+
+Six budget categories, defined in `config.py:PERF_CONTRACTS`:
+
+| Category | p95 Budget | p99 Budget | Tools |
+|----------|-----------|-----------|-------|
+| macro | 2,000ms | 5,000ms | recall, remember, context_snapshot |
+| search | 1,500ms | 3,000ms | search_memory, search_by_theme, search_by_ownership, search_by_emotion |
+| write | 1,500ms | 3,000ms | add_memory, add_memory_smart |
+| fast | 200ms | 500ms | get_emotional_state, get_working_memory, get_workspace_state, listar_triggers, audit_tools |
+| consolidation | 5,000ms | 10,000ms | run_consolidation, dream_consolidation, consolidate_recent |
+| default | 1,000ms | 3,000ms | everything else |
+
+### 13.3 SLO Layers
+
+The system defines three SLO layers (documented in `docs/SLO.md`):
+
+**Layer 1 (Interactive):** Protects user experience. Violations here mean the system feels "frozen".
+
+| Tool | p50 SLO | p95 SLO | p99 SLO |
+|------|---------|---------|---------|
+| despertar_codi | ≤ 4,000ms | ≤ 8,000ms | ≤ 15,000ms |
+| recall | ≤ 3,000ms | ≤ 7,000ms | ≤ 12,000ms |
+| search_memory | ≤ 2,500ms | ≤ 5,000ms | ≤ 8,000ms |
+| Fast tools (WM, triggers) | ≤ 50ms | ≤ 200ms | ≤ 500ms |
+
+**Layer 2 (Write-path):** Current synchronous pipeline (mem0 → OpenAI → Qdrant) cannot meet interactive SLOs. Target architecture: async ACK (respond in <2s, process in background).
+
+**Layer 3 (Sleep Loop):** Budget enforcement per tick. See [Section 14](#14-sleep-loop-lifecycle).
+
+### 13.4 Measurement
+
+- **Automated**: All tool calls logged to `tool_calls` table via `instrument_mcp()` wrapper
+- **Quick check**: `perf_report_tool(days=7)` MCP tool
+- **Full analysis**: `python scripts/analyze_perf_baseline.py --days 30 --json`
+- **Baseline**: `docs/perf/baseline_2026-02-16.md` (413 calls, 8 days of data)
+
+---
+
+## 14. Sleep Loop Lifecycle
+
+The sleep loop (`modules/sleep_loop.py`) is a background process that runs between sessions to perform memory maintenance. It is triggered every 30 minutes via macOS launchd.
+
+### 14.1 Execution Model
+
+```
+launchd (every 30 min)
+  └── python -m modules.sleep_loop --reason=launchd
+       ├── Pre-checks: DB exists? Eligible checkpoint? Lock available?
+       ├── Acquire PID-based lock file (data/sleep_loop.lock)
+       ├── run_sleep_loop(budget_ms=8000)
+       │    ├── Tick 1: prospective (intention maintenance)
+       │    ├── Tick 2: health (FTS queue + health check)
+       │    ├── Tick 3: consolidation (light, no LLM)
+       │    └── Tick 4: homeostasis (salience decay + PAD decay)
+       ├── Write sleep_report to checkpoint row (idempotent)
+       └── Release lock
+```
+
+### 14.2 Tick Ordering Contract
+
+Ticks execute in fixed order: `prospective → health → consolidation → homeostasis`
+
+**Rationale:** Fast ticks first, heavy ticks last. If budget exhaustion occurs, it starves homeostasis (least critical), not prospective (most time-sensitive).
+
+| Tick | Min Budget | What It Does | Neuroscience Basis |
+|------|-----------|-------------|-------------------|
+| prospective | 200ms | `apply_intention_maintenance()` - decay activation, check deadlines | McDaniel & Einstein 2007 |
+| health | 200ms | FTS queue processing (up to 50 items) + `_verificar_salud_memoria_interna()` | System health |
+| consolidation | 1,500ms | `run_consolidation(scope="light")` - clustering only, no LLM calls | Diekelmann & Born 2010 |
+| homeostasis | 200ms | `apply_salience_decay(0.05)` + `apply_emotional_decay()` (PAD → baseline) | Tononi & Cirelli 2003 |
+
+### 14.3 Budget Gating
+
+Each tick is gated by remaining time budget:
+
+```
+for tick in TICK_ORDER:
+    remaining_ms = budget_ms - elapsed_so_far
+    if remaining_ms < TICK_MIN_MS[tick]:
+        → skip tick (log status="skipped", reason="budget_exhausted")
+    else:
+        → execute tick
+        → if elapsed > remaining: log status="over_budget"
+        → else: log status="ok"
+```
+
+### 14.4 Tick-Level Metrics (E2.2)
+
+Each tick writes one row to `tool_calls` with `tool_name=sleep_tick_{name}` and a tag encoding status:
+
+| Tag Pattern | Meaning |
+|------------|---------|
+| `sleep_tick:ok` | Tick completed within budget |
+| `sleep_tick:over_budget` | Tick ran but exceeded remaining allocation |
+| `sleep_tick:skipped:budget_exhausted` | Tick was not attempted due to insufficient budget |
+| `sleep_tick:error:{ExceptionType}` | Tick threw an unhandled exception |
+
+Query: `SELECT * FROM tool_calls WHERE tool_name LIKE 'sleep_tick_%'`
+
+### 14.5 Safety Mechanisms
+
+- **PID lock file**: `data/sleep_loop.lock` prevents concurrent execution. Stale locks (dead PID) are automatically cleaned.
+- **Idempotent writes**: `_write_sleep_report()` only writes if `sleep_report IS NULL OR sleep_report = ''`. Never clobbers an existing report.
+- **Eligible checkpoint gate**: Only runs if the latest checkpoint is < 30 minutes old and has no report.
+- **Budget cap**: Total loop capped at 8,000ms (configurable via `--budget-ms`).
+- **Report cap**: Sleep report text capped at 600 characters.
+
+### 14.6 SLOs
+
+| Metric | Target |
+|--------|--------|
+| Total run time | ≤ 8,000ms |
+| prospective tick p95 | ≤ 1,000ms |
+| health tick p95 | ≤ 2,000ms |
+| consolidation tick p95 | ≤ 4,000ms |
+| homeostasis tick p95 | ≤ 3,000ms |
+| Tick skip rate | < 10% of runs |
+| Run success rate | ≥ 95% |
+
+---
+
+## 15. Trade-offs and Known Limitations
+
+### 15.1 Architectural Trade-offs
 
 | Decision | Benefit | Cost |
 |----------|---------|------|
@@ -669,7 +907,7 @@ All parameters are module-level constants. No runtime configuration reload mecha
 | **JSON files for config state** | Human-readable, easy manual editing | No schema validation on disk, no atomic writes, corruption risk on crash |
 | **Monolithic server.py** | All tools in one process, shared state | Cannot scale individual subsystems independently |
 
-### 12.2 Known Limitations
+### 15.2 Known Limitations
 
 1. **No horizontal scaling.** The system is single-process. Qdrant and Supabase are remote, but SQLite is local and single-writer. Running multiple instances would cause SQLite lock contention and split-brain on local state.
 
@@ -691,7 +929,7 @@ All parameters are module-level constants. No runtime configuration reload mecha
 
 10. **No request tracing.** Individual MCP tool calls are instrumented in `metrics.py`, but there is no distributed trace ID linking a `recall()` call through the full pipeline (metacognition, search, competition, side effects).
 
-### 12.3 Scaling Considerations
+### 15.3 Scaling Considerations
 
 For 10x growth in memory corpus:
 

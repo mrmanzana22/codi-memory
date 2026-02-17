@@ -28,6 +28,9 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     monkeypatch.setenv("FTS_DB_PATH", db_path)
     monkeypatch.setenv("PROSPECTIVE_DB_PATH", prosp_path)
 
+    # Bypass Qdrant auth guardrail in tests (tests mock Qdrant, never connect)
+    monkeypatch.setenv("CODI_ALLOW_INSECURE_QDRANT", "1")
+
     # Module-level config patches
     monkeypatch.setattr("modules.config.FTS_DB_PATH", db_path, raising=False)
     monkeypatch.setattr("modules.config.PROSPECTIVE_DB_PATH", prosp_path, raising=False)

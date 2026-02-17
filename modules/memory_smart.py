@@ -16,6 +16,10 @@ from modules.config import (
     CONTRADICTION_MIN_ENTITIES, CONTRADICTION_COOLDOWN_MINUTES,
     CONTRADICTION_MAX_PER_SESSION,
 )
+from modules.destructive_guard import (
+    is_guard_enabled, compute_fingerprint,
+    request_confirmation, validate_and_consume,
+)
 
 def _fts_conn():
     conn = sqlite3.connect(FTS_DB_PATH)
@@ -683,8 +687,50 @@ def add_memory_smart(content: str, category: str = "general",
         }, ensure_ascii=False)
 
 
-def sync_fts_index() -> str:
-    """Resincroniza el indice FTS5 desde el backup JSON. Usar si el indice se desincroniza."""
+def sync_fts_index(dry_run: bool = False, confirm_token: str = "") -> str:
+    """Resincroniza el indice FTS5 desde el backup JSON. Requiere confirm_token (two-step)."""
+    tool = "sync_fts_index"
+    fp = compute_fingerprint(tool)
+
+    if is_guard_enabled():
+        # Preview: count docs that would be reindexed
+        doc_count = 0
+        try:
+            conn = _fts_conn()
+            row = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()
+            doc_count = row[0] if row else 0
+            conn.close()
+        except Exception:
+            pass
+
+        backup_count = 0
+        try:
+            if os.path.exists(BACKUP_FILE):
+                with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                mems = data if isinstance(data, list) else data.get("memories", [])
+                backup_count = len(mems)
+        except Exception:
+            pass
+
+        if dry_run:
+            return (
+                f"[DRY RUN] sync_fts_index reindexaria {backup_count} memorias "
+                f"desde backup. Index actual tiene {doc_count} docs."
+            )
+
+        if not confirm_token:
+            token = request_confirmation(tool, fp)
+            return (
+                f"GUARD: sync_fts_index reindexaria {backup_count} memorias "
+                f"(index actual: {doc_count} docs). Operacion destructiva de indice.\n"
+                f"Para confirmar, llama con confirm_token='{token}'"
+            )
+
+        err = validate_and_consume(confirm_token, tool, fp)
+        if err:
+            return f"GUARD BLOCKED: {err}"
+
     try:
         init_fts_db()
         result = sync_fts_from_backup()
