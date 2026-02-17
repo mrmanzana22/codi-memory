@@ -28,6 +28,7 @@ data/
 # Runtime config (local only)
 .codi-memory.pid
 .write_mode
+.remember_mode
 .destructive_guard
 qdrant_data/
 

@@ -30,7 +30,10 @@ _REMEMBER_MODE_FILE = os.path.join(_PROJECT_ROOT, ".remember_mode")
 
 # Sync-compare thread limits (module-level for monkeypatching in tests)
 _SYNC_COMPARE_SEMAPHORE = threading.BoundedSemaphore(3)
+_SYNC_COMPARE_SEMAPHORE_CAPACITY = 3
 _SYNC_COMPARE_TIMEOUT = 90  # seconds
+_SYNC_COMPARE_ACTIVE = 0
+_SYNC_COMPARE_LOCK = threading.Lock()
 
 def _get_write_mode() -> str:
     mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
@@ -379,6 +382,8 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                     )
                     return
                 try:
+                    with _iface._SYNC_COMPARE_LOCK:
+                        _iface._SYNC_COMPARE_ACTIVE += 1
                     result_box = {}
 
                     def _inner():
@@ -418,6 +423,8 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                     )
                     update_sync_compare_status(job_id, "ok")
                 finally:
+                    with _iface._SYNC_COMPARE_LOCK:
+                        _iface._SYNC_COMPARE_ACTIVE -= 1
                     sem.release()
 
             bg_thread = threading.Thread(target=_bg_sync_compare, daemon=True)
@@ -536,8 +543,54 @@ def context_snapshot(level: str = "light") -> str:
     )
 
 
+def get_runtime_flags() -> str:
+    """Return current runtime configuration for debugging.
+
+    Shows resolved write/remember modes, flag file paths,
+    and sync-compare thread state.
+    """
+    write_mode = _get_write_mode()
+    remember_mode = _get_remember_mode()
+
+    import modules.interface as _iface
+    with _iface._SYNC_COMPARE_LOCK:
+        active = _iface._SYNC_COMPARE_ACTIVE
+
+    flags = {
+        "write_mode": write_mode,
+        "write_mode_file": _WRITE_MODE_FILE,
+        "write_mode_file_exists": os.path.exists(_WRITE_MODE_FILE),
+        "remember_mode": remember_mode,
+        "remember_mode_file": _REMEMBER_MODE_FILE,
+        "remember_mode_file_exists": os.path.exists(_REMEMBER_MODE_FILE),
+        "sync_compare": {
+            "timeout_seconds": _iface._SYNC_COMPARE_TIMEOUT,
+            "semaphore_capacity": _iface._SYNC_COMPARE_SEMAPHORE_CAPACITY,
+            "active_threads": active,
+        },
+        "env_overrides": {
+            "CODI_WRITE_MODE": os.environ.get("CODI_WRITE_MODE", "(not set)"),
+            "CODI_REMEMBER_MODE": os.environ.get("CODI_REMEMBER_MODE", "(not set)"),
+        },
+    }
+
+    lines = [
+        "# RUNTIME FLAGS",
+        f"- write_mode: **{write_mode}** (file exists: {flags['write_mode_file_exists']})",
+        f"- remember_mode: **{remember_mode}** (file exists: {flags['remember_mode_file_exists']})",
+        f"- sync_compare: timeout={flags['sync_compare']['timeout_seconds']}s, "
+        f"capacity={flags['sync_compare']['semaphore_capacity']}, "
+        f"active={active}",
+        f"- env: CODI_WRITE_MODE={flags['env_overrides']['CODI_WRITE_MODE']}, "
+        f"CODI_REMEMBER_MODE={flags['env_overrides']['CODI_REMEMBER_MODE']}",
+    ]
+
+    return _json_response("\n".join(lines), flags=flags)
+
+
 def register_tools(mcp):
     """Registra las 3 macro-tools de interfaz en el servidor MCP."""
     mcp.tool()(recall)
     mcp.tool()(remember)
     mcp.tool()(context_snapshot)
+    mcp.tool()(get_runtime_flags)
