@@ -301,6 +301,8 @@ def patch_externals(monkeypatch, fake_mem0, fake_qdrant):
         "modules.memory_core",
         "modules.memory_smart",
         "modules.consolidation",
+        "modules.reconsolidation",
+        "modules.semantic_store",
         "modules.maintenance",
         "modules.triggers",
         "modules.books",

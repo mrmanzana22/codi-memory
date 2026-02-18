@@ -49,8 +49,8 @@ class TestContradictionDetection:
         memory_text = "Docker is great for production deployment"
         context = "Docker is not great for production deployment"
 
-        with patch('modules.consolidation._embed_text', return_value=[0.1] * 1536):
-            with patch('modules.consolidation._cosine_similarity', return_value=0.85):
+        with patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536):
+            with patch('modules.reconsolidation._cosine_similarity', return_value=0.85):
                 result = detect_contradiction(memory_text, context)
 
         pe = result["prediction_error"]
@@ -102,9 +102,9 @@ class TestReconsolidation:
 
         new_vector = [0.9] * 1536  # Different from any existing
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=new_vector), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=new_vector), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
 
             mock_qdrant.retrieve.return_value = [mock_point]
@@ -140,9 +140,9 @@ class TestReconsolidation:
             "created_at": "2026-01-01T00:00:00",
         }
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
 
             mock_qdrant.retrieve.return_value = [mock_point]

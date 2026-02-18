@@ -110,10 +110,10 @@ class TestReconsolidation:
         mock_point.payload = mock_payload
 
         embed_output = [0.2] * 1536
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=embed_output) as mock_embed, \
-             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=embed_output) as mock_embed, \
+             patch('modules.reconsolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
              patch('modules.memory_smart.delete_memory_fts', return_value=True), \
              patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
@@ -143,10 +143,10 @@ class TestReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
-             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.7}), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.reconsolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.7}), \
              patch('modules.memory_smart.delete_memory_fts', return_value=True), \
              patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-456"):
@@ -167,10 +167,10 @@ class TestReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536), \
-             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.reconsolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
              patch('modules.memory_smart.delete_memory_fts', return_value=True), \
              patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="uuid-789"):
@@ -228,7 +228,7 @@ class TestReconsolidation:
         """mark_as_labile should insert into labile_memories table."""
         from modules.consolidation import mark_as_labile
 
-        with patch('modules.consolidation._consolidation_conn') as mock_conn_fn:
+        with patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn:
             mock_conn = MagicMock()
             mock_conn_fn.return_value = mock_conn
 
@@ -454,10 +454,10 @@ class TestReembedReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.1] * 1536) as mock_embed, \
-             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536) as mock_embed, \
+             patch('modules.reconsolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.8}), \
              patch('modules.memory_smart.delete_memory_fts', return_value=True), \
              patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-reembed"):
@@ -487,10 +487,10 @@ class TestReembedReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.2] * 1536), \
-             patch('modules.consolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.6}), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.2] * 1536), \
+             patch('modules.reconsolidation.check_reconsolidation', return_value={"should_reconsolidate": True, "prediction_error": 0.6}), \
              patch('modules.memory_smart.delete_memory_fts') as mock_del_fts, \
              patch('modules.memory_smart.index_memory_fts') as mock_idx_fts, \
              patch('modules.utils.resolve_memory_id', return_value="fts-uuid"):
@@ -517,8 +517,8 @@ class TestReembedReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
              patch('modules.utils.resolve_memory_id', return_value="stable-uuid"):
             mock_qdrant.retrieve.return_value = [mock_point]
             # Labile check returns None (not labile)
@@ -542,9 +542,9 @@ class TestReembedReconsolidation:
         mock_point = MagicMock()
         mock_point.payload = mock_payload
 
-        with patch('modules.consolidation.qdrant') as mock_qdrant, \
-             patch('modules.consolidation._consolidation_conn') as mock_conn_fn, \
-             patch('modules.consolidation._embed_text', return_value=[0.3] * 1536), \
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+             patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
+             patch('modules.reconsolidation._embed_text', return_value=[0.3] * 1536), \
              patch('modules.memory_smart.delete_memory_fts', return_value=True), \
              patch('modules.memory_smart.index_memory_fts', return_value=True), \
              patch('modules.utils.resolve_memory_id', return_value="force-uuid"):
@@ -569,7 +569,7 @@ class TestMultiCanalContradiction:
         from modules.consolidation import detect_contradiction
 
         # High cosine sim (same topic) + negation -> amplified PE
-        with patch('modules.consolidation._embed_text') as mock_embed:
+        with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [0.9, 0.1] + [0.0] * 1534,
                 [0.85, 0.15] + [0.0] * 1534,
@@ -580,7 +580,7 @@ class TestMultiCanalContradiction:
             )
 
         # Low cosine sim (different topic) + same correction keyword
-        with patch('modules.consolidation._embed_text') as mock_embed:
+        with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [1.0] + [0.0] * 1535,
                 [0.0] + [1.0] + [0.0] * 1534,
@@ -598,7 +598,7 @@ class TestMultiCanalContradiction:
         """Correction keywords with entity overlap -> higher PE."""
         from modules.consolidation import detect_contradiction
 
-        with patch('modules.consolidation._embed_text') as mock_embed:
+        with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [1.0] + [0.0] * 1535,
                 [0.0] + [1.0] + [0.0] * 1534,
@@ -627,7 +627,7 @@ class TestMultiCanalContradiction:
         """Same entities + negation inversion -> PE from negation channel."""
         from modules.consolidation import detect_contradiction
 
-        with patch('modules.consolidation._embed_text') as mock_embed:
+        with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [0.9, 0.1] + [0.0] * 1534,
                 [0.8, 0.2] + [0.0] * 1534,
