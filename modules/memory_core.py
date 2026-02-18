@@ -515,6 +515,8 @@ def search_memory(query: str, limit: int = 5) -> str:
         # ============================================================
 
         retrieved_ids = [item["id"] for item in merged]
+        from modules.access_tracking import record_access
+        ts = now_iso()
         for item in merged:
             mid = item["id"]
             try:
@@ -526,27 +528,19 @@ def search_memory(query: str, limit: int = 5) -> str:
                     access_ts = list(payload.get('access_timestamps', []) or [])
                     if not isinstance(access_ts, list):
                         access_ts = []
-                    access_ts.append(now_iso())
+                    access_ts.append(ts)
                     access_ts = access_ts[-20:]  # Keep last 20
 
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={
-                            'attention_access_count': access_count + 1,
-                            'attention_last_accessed': now_iso(),
-                            'access_timestamps': access_ts,
-                        },
-                        points=[mid]
-                    )
+                    record_access(COLLECTION_NAME, mid, {
+                        'attention_access_count': access_count + 1,
+                        'attention_last_accessed': ts,
+                        'access_timestamps': access_ts,
+                    })
                 else:
                     # Semantic: update last_observed in codi_semantic
-                    qdrant.set_payload(
-                        collection_name=SEMANTIC_COLLECTION,
-                        payload={
-                            'last_observed': now_iso(),
-                        },
-                        points=[mid]
-                    )
+                    record_access(SEMANTIC_COLLECTION, mid, {
+                        'last_observed': ts,
+                    })
             except Exception:
                 pass
 

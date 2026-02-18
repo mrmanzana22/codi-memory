@@ -180,19 +180,9 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
         if abs(new_sal - old_sal) >= 0.01:
             updates[mid] = new_sal
 
-    # 5. Batch update Qdrant
-    for mid, new_sal in updates.items():
-        try:
-            qdrant.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={
-                    'attention_salience': new_sal,
-                    'attention_last_accessed': now_iso()
-                },
-                points=[mid]
-            )
-        except Exception:
-            pass
+    # 5. Batch update Qdrant (via access_tracking aggregator)
+    from modules.access_tracking import record_spreading
+    record_spreading(COLLECTION_NAME, updates, last_accessed=now_iso())
 
     return {
         'affected': len(updates),
