@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 from datetime import datetime
@@ -5,6 +6,9 @@ from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR,
     now_short, now_iso, now_col, SESSION_STATE_FILE, _emotional_state,
 )
+from modules.secret_redact import redact_secrets
+
+_logger = logging.getLogger(__name__)
 from modules.utils import enrich_with_ownership, maybe_backup, export_memories_to_files, append_to_daily_journal
 from modules.memory_smart import add_memory_smart, process_fts_queue
 
@@ -86,6 +90,7 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
 
     try:
         if write_mode == "async":
+            import json as _json
             from modules.write_queue import enqueue_write_job, compute_dedupe_key
             dedupe_key = compute_dedupe_key("checkpoint_memoria", f"{momento}|{que_paso}")
             enqueue_result = enqueue_write_job(
@@ -94,7 +99,19 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
                 priority=2,  # checkpoints are high priority
                 dedupe_key=dedupe_key,
             )
-            return f"Checkpoint enqueued (job_id={enqueue_result['job_id'][:8]}...)"
+            preview = que_paso[:120] + "..." if len(que_paso) > 120 else que_paso
+            return _json.dumps({
+                "action": "queued",
+                "mode": write_mode,
+                "job_id": enqueue_result["job_id"],
+                "kind": "checkpoint_memoria",
+                "preview": preview,
+                "tags": [momento, "high"],
+                "eta_seconds": 30,
+                "dedupe_hit": enqueue_result["dedupe_hit"],
+                "check": f"write_status('{enqueue_result['job_id']}')",
+                "cancel": f"cancel_write('{enqueue_result['job_id']}')",
+            }, ensure_ascii=False)
 
         # Sync execution
         result_str = _checkpoint_memoria_sync(momento, que_paso, por_que_importa)
@@ -102,11 +119,26 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
         if write_mode == "shadow":
             try:
                 from modules.write_queue import enqueue_write_job, compute_dedupe_key
-                dedupe_key = compute_dedupe_key("checkpoint_memoria", f"{momento}|{que_paso}")
-                enqueue_write_job(
+                from modules.dual_compare import record_sync_result, compute_request_fingerprint
+                from modules.tracing import get_trace_id, new_trace_id
+                trace_id = get_trace_id()
+                if not trace_id:
+                    trace_id = new_trace_id()
+                content_for_fp = f"{momento}|{que_paso}"
+                dedupe_key = compute_dedupe_key("checkpoint_memoria", content_for_fp)
+                fingerprint = compute_request_fingerprint("checkpoint_memoria", content_for_fp, trace_id)
+                enqueue_result = enqueue_write_job(
                     kind="checkpoint_memoria",
                     payload={"momento": momento, "que_paso": que_paso, "por_que_importa": por_que_importa},
                     dedupe_key=dedupe_key,
+                )
+                record_sync_result(
+                    fingerprint=fingerprint,
+                    trace_id=trace_id,
+                    kind="checkpoint_memoria",
+                    raw_output=result_str,
+                    async_job_id=enqueue_result["job_id"],
+                    async_status=enqueue_result["status"],
                 )
             except Exception:
                 pass
@@ -163,7 +195,7 @@ def _save_session_state(resumen: str = "") -> bool:
             json.dump(state, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
-        print(f"[flush] Error saving session state: {e}")
+        _logger.error("Error saving session state: %s", redact_secrets(str(e)))
         return False
 
 

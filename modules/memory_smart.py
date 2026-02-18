@@ -3,11 +3,14 @@ Codi Memory - Smart Memory (FTS5 + Deduplication)
 FTS5 functions and add_memory_smart tool.
 """
 
+import logging
 import os
 import json
 
 
 from datetime import datetime
+
+_logger = logging.getLogger(__name__)
 
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso,
@@ -20,6 +23,7 @@ from modules.destructive_guard import (
     request_confirmation, validate_and_consume,
 )
 from modules.db_pool import get_conn
+from modules.secret_redact import redact_secrets
 
 
 def _fts_conn():
@@ -42,7 +46,7 @@ def init_fts_db():
     """
     from modules.migrations import ensure_schema_ready_db
     ensure_schema_ready_db(FTS_DB_PATH, ["memories_text", "fts_retry_queue"])
-    print("[codi-memory] FTS5 tables validated")
+    _logger.info("FTS5 tables validated")
 
 
 def _index_memory_fts_raw(memory_id: str, content: str, category: str = "general",
@@ -123,7 +127,7 @@ def queue_fts_op(memory_id: str, op: str, payload: dict = None, error: str = Non
         conn.commit()
         return {"ok": True, "memory_id": memory_id, "op": op}
     except Exception as e:
-        print(f"[codi-memory] Error enqueuing FTS op: {e}")
+        _logger.error("Error enqueuing FTS op: %s", redact_secrets(str(e)))
         return {"ok": False, "error": str(e)}
 
 
@@ -268,7 +272,7 @@ def bm25_rank_to_score(rank: float) -> float:
 def sync_fts_from_backup():
     """Sincroniza todas las memorias existentes al indice FTS5."""
     if not os.path.exists(BACKUP_FILE):
-        print("[codi-memory] No backup found for FTS sync")
+        _logger.warning("No backup found for FTS sync")
         return "No backup found"
     try:
         with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
@@ -291,10 +295,10 @@ def sync_fts_from_backup():
             conn.commit()
         except Exception:
             pass
-        print(f"[codi-memory] Synced {count} memories to FTS index")
+        _logger.info("Synced %s memories to FTS index", count)
         return f"Synced {count} memories to FTS index"
     except Exception as e:
-        print(f"[codi-memory] Error syncing FTS: {e}")
+        _logger.error("Error syncing FTS: %s", redact_secrets(str(e)))
         return f"Error syncing FTS: {e}"
 
 

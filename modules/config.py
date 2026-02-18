@@ -3,6 +3,7 @@ Codi Memory - Shared configuration, constants, state, and initialization.
 All modules import shared state from here.
 """
 
+import logging
 import os
 import json
 import math
@@ -11,6 +12,8 @@ import sqlite3
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
+_logger = logging.getLogger(__name__)
 
 # ============================================================
 # TIMEZONE: Colombia (America/Bogota, UTC-5)
@@ -211,7 +214,7 @@ def register_pid():
     try:
         with open(PID_FILE, 'w') as f:
             f.write(str(os.getpid()))
-        print(f"[codi-memory] Instancia iniciada (PID {os.getpid()})")
+        _logger.info("Instancia iniciada (PID %d)", os.getpid())
     except Exception:
         pass
 
@@ -262,10 +265,11 @@ def get_memory():
         try:
             _memory = Memory.from_config(mem0_config)
             _init_error = None
-            print("[codi-memory] mem0 conectado OK")
+            _logger.info("mem0 conectado OK")
         except Exception as e:
             _init_error = str(e)
-            print(f"[codi-memory] ERROR conectando mem0: {e}")
+            from modules.secret_redact import redact_secrets
+            _logger.error("ERROR conectando mem0: %s", redact_secrets(str(e)))
             raise
     return _memory
 
@@ -319,9 +323,9 @@ def get_qdrant():
             )
             safe_url = _sanitize_url(QDRANT_URL)
             auth_status = "with API key" if QDRANT_API_KEY else "WITHOUT auth"
-            print(f"[codi-memory] Qdrant conectado OK ({safe_url}, {auth_status})")
+            _logger.info("Qdrant conectado OK (%s, %s)", safe_url, auth_status)
         except Exception as e:
-            print(f"[codi-memory] ERROR conectando Qdrant: {type(e).__name__}")
+            _logger.error("ERROR conectando Qdrant: %s", type(e).__name__)
             raise
     return _qdrant
 
@@ -342,8 +346,11 @@ memory = _LazyMemory()
 qdrant = _LazyQdrant()
 
 # ============================================================
-# SUPABASE CLIENT
+# SUPABASE CLIENT (guarded — PR3 C-01)
 # ============================================================
+# Supabase is only used by training.py for training_examples.
+# Guard with CODI_SUPABASE_ENABLED to prevent accidental init
+# in environments where the key shouldn't be active.
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY") or ""
@@ -352,13 +359,19 @@ SUPABASE_KEY_2 = os.getenv("SUPABASE_KEY_2") or ""
 if SUPABASE_KEY_1 and SUPABASE_KEY_2:
     SUPABASE_KEY = SUPABASE_KEY_1 + SUPABASE_KEY_2
 
+CODI_SUPABASE_ENABLED = os.getenv("CODI_SUPABASE_ENABLED", "1").strip()
+
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("[codi-memory] Supabase conectado para training examples")
-    except Exception as e:
-        print(f"[codi-memory] Warning: Supabase no disponible: {e}")
+    if CODI_SUPABASE_ENABLED == "1":
+        try:
+            supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            _logger.info("Supabase conectado para training examples")
+        except Exception as e:
+            from modules.secret_redact import redact_secrets as _redact
+            _logger.warning("Supabase no disponible: %s", _redact(str(e)))
+    else:
+        _logger.info("Supabase desactivado (CODI_SUPABASE_ENABLED != 1)")
 
 # ============================================================
 # MCP SERVER

@@ -3,9 +3,12 @@ Codi Memory - Core Memory Operations
 Basic CRUD, search, ownership, and timeline tools.
 """
 
+import logging
 import os
 import json
 from datetime import datetime
+
+_logger = logging.getLogger(__name__)
 
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
@@ -19,7 +22,7 @@ from modules.consolidation import search_semantic
 from modules.events import event_bus, Events
 from modules.destructive_guard import (
     is_guard_enabled, is_legacy_enabled, compute_fingerprint,
-    request_confirmation, validate_and_consume,
+    request_confirmation, validate_and_consume, log_security_event,
 )
 from modules.retrieval_metadata import (
     wrap_retrieval_result, init_failed_searches_table, log_failed_search,
@@ -91,7 +94,7 @@ def _add_memory_sync(content: str, category: str, source: str, importance: str) 
                 if mem_id_fts:
                     index_memory_fts(mem_id_fts, content, category, source, importance)
     except Exception as fts_err:
-        print(f"[codi-memory] FTS index error in add_memory: {fts_err}")
+        _logger.warning("FTS index error in add_memory: %s", fts_err)
 
     try:
         event_bus.emit(Events.MEMORY_STORED, {
@@ -139,10 +142,18 @@ def add_memory(content: str, category: str = "general",
                 priority=3 if importance in ("critical", "high") else 5,
                 dedupe_key=dedupe_key,
             )
+            preview = content[:120] + "..." if len(content) > 120 else content
             return json.dumps({
-                "action": "queued", "job_id": enqueue_result["job_id"],
+                "action": "queued",
+                "mode": write_mode,
+                "job_id": enqueue_result["job_id"],
+                "kind": "add_memory",
+                "preview": preview,
+                "tags": [category, importance],
+                "eta_seconds": 30,
                 "dedupe_hit": enqueue_result["dedupe_hit"],
-                "message": "Memoria enqueued para procesamiento en background"
+                "check": f"write_status('{enqueue_result['job_id']}')",
+                "cancel": f"cancel_write('{enqueue_result['job_id']}')",
             }, ensure_ascii=False)
 
         # Sync execution
@@ -151,11 +162,25 @@ def add_memory(content: str, category: str = "general",
         if write_mode == "shadow":
             try:
                 from modules.write_queue import enqueue_write_job, compute_dedupe_key
+                from modules.dual_compare import record_sync_result, compute_request_fingerprint
+                from modules.tracing import get_trace_id, new_trace_id
+                trace_id = get_trace_id()
+                if not trace_id:
+                    trace_id = new_trace_id()
                 dedupe_key = compute_dedupe_key("add_memory", content)
-                enqueue_write_job(
+                fingerprint = compute_request_fingerprint("add_memory", content, trace_id)
+                enqueue_result = enqueue_write_job(
                     kind="add_memory",
                     payload={"content": content, "category": category, "source": source, "importance": importance},
                     dedupe_key=dedupe_key,
+                )
+                record_sync_result(
+                    fingerprint=fingerprint,
+                    trace_id=trace_id,
+                    kind="add_memory",
+                    raw_output=result_str,
+                    async_job_id=enqueue_result["job_id"],
+                    async_status=enqueue_result["status"],
                 )
             except Exception:
                 pass
@@ -799,13 +824,22 @@ def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = ""
 
         err = validate_and_consume(confirm_token, tool, fp)
         if err:
+            log_security_event("destructive_blocked", tool, outcome="blocked",
+                               payload_fingerprint=fp,
+                               details={"memory_id": memory_id, "reason": err})
             return f"GUARD BLOCKED: {err}"
 
     try:
         memory.delete(memory_id=memory_id)
         delete_memory_fts(memory_id)
+        log_security_event("destructive_exec", tool, outcome="executed",
+                           payload_fingerprint=fp,
+                           details={"memory_id": memory_id})
         return f"Recuerdo {memory_id} eliminado."
     except Exception as e:
+        log_security_event("destructive_exec", tool, outcome="error",
+                           payload_fingerprint=fp,
+                           details={"memory_id": memory_id, "error": str(e)[:200]})
         return f"Error al eliminar: {str(e)}"
 
 
@@ -869,8 +903,15 @@ def delete_by_content(search_query: str, dry_run: bool = False,
                 except Exception:
                     pass
 
+        log_security_event("destructive_exec", tool, outcome="executed",
+                           payload_fingerprint=fp,
+                           details={"search_query": search_query, "deleted": deleted,
+                                    "found": len(memories_found)})
         return f"Eliminadas {deleted} memorias."
     except Exception as e:
+        log_security_event("destructive_exec", tool, outcome="error",
+                           payload_fingerprint=fp,
+                           details={"search_query": search_query, "error": str(e)[:200]})
         return f"Error: {str(e)}"
 
 
@@ -908,8 +949,14 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
 
     try:
         memory.delete_all(user_id=USER_ID)
+        log_security_event("destructive_exec", tool, outcome="executed",
+                           payload_fingerprint=fp,
+                           details={"action": "clear_all"})
         return "Todos los recuerdos han sido eliminados."
     except Exception as e:
+        log_security_event("destructive_exec", tool, outcome="error",
+                           payload_fingerprint=fp,
+                           details={"action": "clear_all", "error": str(e)[:200]})
         return f"Error: {str(e)}"
 
 

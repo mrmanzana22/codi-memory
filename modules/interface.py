@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 import re
 import threading
 from typing import Any, Dict, List, Optional
+
+_logger = logging.getLogger(__name__)
 
 from modules.memory_core import (
     search_memory,
@@ -454,8 +457,8 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                     async_status=enqueue_result["status"],
                 )
             except Exception as e:
-                import sys
-                print(f"[SHADOW] dual enqueue failed: {type(e).__name__}: {e}", file=sys.stderr)
+                from modules.secret_redact import redact_secrets
+                _logger.error("dual enqueue failed: %s: %s", type(e).__name__, redact_secrets(str(e)))
         else:
             # Sync (default): current behavior
             lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)

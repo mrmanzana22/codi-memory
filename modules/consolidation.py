@@ -24,6 +24,7 @@ import math
 import functools
 from datetime import datetime, timedelta
 from collections import defaultdict
+import logging
 
 import openai
 from qdrant_client.models import (
@@ -48,6 +49,9 @@ from modules.config import (
 # Note: RECONSOLIDATION_MAX_BLEND removed -- full replace per Nader 2000 (blend_weight=0.0 always)
 from modules.utils import now_iso
 from modules.activation import compute_unified_activation
+from modules.secret_redact import redact_secrets
+
+_logger = logging.getLogger(__name__)
 
 # OpenAI client (lazy, uses OPENAI_API_KEY from env)
 _oai_client = None
@@ -115,14 +119,14 @@ def init_consolidation_db():
     ensure_schema_ready_db(FTS_DB_PATH, [
         "consolidation_log", "reconsolidation_log", "labile_memories",
     ])
-    print("[consolidation] Tables validated OK")
+    _logger.info("Tables validated OK")
 
 
 # Validate on import
 try:
     init_consolidation_db()
 except Exception as e:
-    print(f"[consolidation] WARNING: Could not validate tables: {e}")
+    _logger.warning("Could not validate tables: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -293,7 +297,7 @@ def _phase_selection(lookback_hours: int) -> list:
     # Sort by score descending and cap
     candidates.sort(key=lambda x: -x["score"])
     selected = candidates[:CONSOLIDATION_MAX_EPISODES_PER_RUN]
-    print(f"[consolidation] Selection: {len(selected)}/{len(candidates)} candidates from {scrolled} scrolled")
+    _logger.info("Selection: %d/%d candidates from %d scrolled", len(selected), len(candidates), scrolled)
     return selected
 
 
@@ -340,7 +344,7 @@ def _phase_clustering(candidates: list) -> list:
             subclusters = _subcluster_by_vector(topic, members)
             clusters.extend(subclusters)
 
-    print(f"[consolidation] Clustering: {len(clusters)} clusters from {len(topic_groups)} topic groups")
+    _logger.info("Clustering: %d clusters from %d topic groups", len(clusters), len(topic_groups))
     return clusters
 
 
@@ -360,7 +364,7 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
         )
         vec_map = {str(p.id): p.vector for p in pts if p.vector}
     except Exception as e:
-        print(f"[consolidation] Subcluster vector fetch failed for '{topic}': {e}")
+        _logger.error("Subcluster vector fetch failed for '%s': %s", topic, redact_secrets(str(e)))
         # Fallback: return as single cluster
         return [{
             "topic": topic,
@@ -409,10 +413,10 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
             unassigned.discard(seed_id)
 
     if subclusters:
-        print(f"[consolidation] Subclustered '{topic}': {len(subclusters)} subclusters from {len(members)} members")
+        _logger.info("Subclustered '%s': %d subclusters from %d members", topic, len(subclusters), len(members))
     else:
         # No subclusters formed, fall back to full group
-        print(f"[consolidation] '{topic}': no subclusters, using full group ({len(members)} members)")
+        _logger.info("'%s': no subclusters, using full group (%d members)", topic, len(members))
         subclusters = [{
             "topic": topic,
             "episode_ids": member_ids,
@@ -560,15 +564,15 @@ def _phase_extraction(clusters: list) -> list:
                 })
                 cluster_accepted += 1
 
-            print(f"[consolidation] Extraction '{topic}': {cluster_accepted} accepted, "
-                  f"{len(extracted) - cluster_accepted} filtered from {len(texts)} episodes")
+            _logger.info("Extraction '%s': %d accepted, %d filtered from %d episodes",
+                         topic, cluster_accepted, len(extracted) - cluster_accepted, len(texts))
 
         except Exception as e:
-            print(f"[consolidation] Extraction error for '{topic}': {e}")
+            _logger.error("Extraction error for '%s': %s", topic, redact_secrets(str(e)))
             continue
 
-    print(f"[consolidation] Extraction total: {len(all_facts)} facts accepted, "
-          f"{skipped_low_quality} filtered for low quality, from {len(clusters)} clusters")
+    _logger.info("Extraction total: %d facts accepted, %d filtered for low quality, from %d clusters",
+                 len(all_facts), skipped_low_quality, len(clusters))
     return all_facts
 
 
@@ -632,7 +636,7 @@ def _phase_integration(facts: list) -> dict:
                     points=[duplicate.id],
                 )
                 updated += 1
-                print(f"[consolidation] Updated existing fact: {fact_text[:60]}...")
+                _logger.info("Updated existing fact: %s...", fact_text[:60])
             else:
                 # Create new semantic point
                 point_id = str(uuid.uuid4())
@@ -664,13 +668,13 @@ def _phase_integration(facts: list) -> dict:
                     )],
                 )
                 created += 1
-                print(f"[consolidation] New semantic fact: {fact_text[:60]}...")
+                _logger.info("New semantic fact: %s...", fact_text[:60])
 
         except Exception as e:
-            print(f"[consolidation] Integration error: {e}")
+            _logger.error("Integration error: %s", redact_secrets(str(e)))
             continue
 
-    print(f"[consolidation] Integration: {created} created, {updated} updated, {contradictions} contradictions")
+    _logger.info("Integration: %d created, %d updated, %d contradictions", created, updated, contradictions)
     return {"created": created, "updated": updated, "contradictions": contradictions}
 
 
@@ -706,7 +710,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
             )
             marked += len(batch)
         except Exception as e:
-            print(f"[consolidation] Pruning batch error: {e}")
+            _logger.error("Pruning batch error: %s", redact_secrets(str(e)))
             # Try one by one
             for eid in batch:
                 try:
@@ -723,7 +727,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
                 except Exception:
                     pass
 
-    print(f"[consolidation] Pruning: {marked} episodes marked as consolidated")
+    _logger.info("Pruning: %d episodes marked as consolidated", marked)
     return {"marked_consolidated": marked, "decayed": decayed}
 
 
@@ -747,7 +751,7 @@ def _log_consolidation_run(result: dict):
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"[consolidation] WARNING: Could not log run: {e}")
+        _logger.warning("Could not log run: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -958,7 +962,7 @@ def mark_as_labile(memory_id: str, prediction_error: float = 0.0,
         conn.close()
         return True
     except Exception as e:
-        print(f"[consolidation] WARNING: Could not mark labile: {e}")
+        _logger.warning("Could not mark labile: %s", redact_secrets(str(e)))
         return False
 
 
@@ -1067,7 +1071,7 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
         conn.commit()
         conn.close()
     except Exception as e:
-        print(f"[consolidation] WARNING: Could not log reconsolidation: {e}")
+        _logger.warning("Could not log reconsolidation: %s", redact_secrets(str(e)))
 
     # 5. Adjust confidence proportional to PE (Exton-McGuinness 2015)
     # Higher PE = larger confidence decrement (0.05 base + 0.15 * PE)
@@ -1111,7 +1115,7 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
             importance=old_payload.get("narrative_importance", "medium"),
         )
     except Exception as e:
-        print(f"[consolidation] WARNING: FTS update failed: {e}")
+        _logger.warning("FTS update failed: %s", redact_secrets(str(e)))
 
     # 9. Emit event
     try:
@@ -1168,7 +1172,7 @@ def search_semantic(query: str, limit: int = 5) -> list:
             })
         return facts
     except Exception as e:
-        print(f"[consolidation] Semantic search error: {e}")
+        _logger.error("Semantic search error: %s", redact_secrets(str(e)))
         return []
 
 

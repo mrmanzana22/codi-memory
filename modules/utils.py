@@ -13,6 +13,7 @@ Pure helpers extracted from server.py:
   - ACT-R activation scoring: compute_base_level_activation, compute_activation
 """
 
+import logging
 import os
 import json
 import sqlite3
@@ -21,6 +22,8 @@ import random
 import threading
 import time
 from datetime import datetime
+
+_logger = logging.getLogger(__name__)
 
 from modules.config import (
     memory,
@@ -42,6 +45,7 @@ from modules.config import (
     BACKUP_MAX_FILES,
     now_col, now_iso, now_short, now_display,
 )
+from modules.secret_redact import redact_secrets
 
 
 # ============================================================
@@ -304,7 +308,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             points=[memory_id]
         )
     except Exception as e:
-        print(f"[Codi Memory] Error enriching memory: {e}")
+        _logger.error("Error enriching memory: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -341,7 +345,7 @@ def save_backup_json(reason: str = "manual") -> bool:
             with open(rotated_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
         except Exception as e:
-            print(f"[Codi Memory] Error escribiendo backup rotado: {e}")
+            _logger.error("Error escribiendo backup rotado: %s", redact_secrets(str(e)))
 
         # Rotate: keep only BACKUP_MAX_FILES most recent
         _rotate_backups()
@@ -351,12 +355,12 @@ def save_backup_json(reason: str = "manual") -> bool:
             if os.getenv('EXPORT_MD_ON_BACKUP', '0') in ('1', 'true', 'yes'):
                 export_memories_to_files()
         except Exception as e:
-            print(f"[Codi Memory] Error exportando markdown: {e}")
+            _logger.error("Error exportando markdown: %s", redact_secrets(str(e)))
 
         return True
 
     except Exception as e:
-        print(f"[Codi Memory] Error guardando backup: {e}")
+        _logger.error("Error guardando backup: %s", redact_secrets(str(e)))
         return False
 
 
@@ -403,7 +407,7 @@ def maybe_backup(reason: str = "", force: bool = False):
         save_backup_json(reason=reason or "debounced")
         _last_backup_time = time.time()
         if reason:
-            print(f"[Codi Memory] Backup completado ({reason})")
+            _logger.info("Backup completado (%s)", reason)
     finally:
         _backup_lock.release()
 

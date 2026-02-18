@@ -20,6 +20,7 @@ Neuroscience basis:
 Created: 2026-02-13 (Phase 2, Sub-phase 2.1)
 """
 
+import logging
 import os
 import re
 import json
@@ -29,6 +30,8 @@ import time
 import random
 import math
 from datetime import datetime, timedelta
+
+_logger = logging.getLogger(__name__)
 
 from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, now_iso, now_col
 
@@ -90,7 +93,7 @@ def _init_tables(conn: sqlite3.Connection):
     """Validate prospective memory tables exist (created by migrations)."""
     from modules.migrations import ensure_schema_ready
     ensure_schema_ready(conn, ["intentions", "intention_log"], db_label="prospective")
-    print("[prospective] Tables validated OK")
+    _logger.info("Tables validated OK")
 
 
 # ============================================================

@@ -24,12 +24,15 @@ Usage:
   event_bus.emit(Events.MEMORY_STORED, {'memory_id': '...', 'content': '...'})
 """
 
+import logging
 import os
 import sqlite3
 import threading
 import time
 from collections import defaultdict
 from datetime import datetime
+
+_logger = logging.getLogger(__name__)
 
 from modules.tracing import get_trace_id
 
@@ -133,7 +136,7 @@ class EventBus:
             try:
                 handler(event_name, data)
             except Exception as e:
-                print(f"[EventBus] Error in handler for {event_name}: {e}")
+                _logger.error("Error in handler for %s: %s", event_name, e)
 
     def get_history(self, limit: int = 20) -> list:
         """Get recent event history for debugging."""

@@ -33,6 +33,7 @@ import threading
 
 from modules.events import event_bus, Events
 from modules.config import now_iso
+from modules.secret_redact import redact_secrets
 
 _logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def _on_memory_stored(event_name: str, data: dict):
                 source="event_bus",
             )
     except Exception as e:
-        print(f"[wiring] _on_memory_stored error: {e}", file=sys.stderr)
+        _logger.error("_on_memory_stored error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -175,7 +176,7 @@ def _on_workspace_broadcast(event_name: str, data: dict):
             strength=0.8,
         )
     except Exception as e:
-        print(f"[wiring] _on_workspace_broadcast error: {e}", file=sys.stderr)
+        _logger.error("_on_workspace_broadcast error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -201,7 +202,7 @@ def _on_emotion_changed(event_name: str, data: dict):
                 strength=min(1.0, abs(arousal)),
             )
     except Exception as e:
-        print(f"[wiring] _on_emotion_changed error: {e}", file=sys.stderr)
+        _logger.error("_on_emotion_changed error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -226,7 +227,7 @@ def _on_consolidation_complete(event_name: str, data: dict):
                 source="consolidation_complete",
             )
     except Exception as e:
-        print(f"[wiring] _on_consolidation_complete error: {e}", file=sys.stderr)
+        _logger.error("_on_consolidation_complete error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -435,7 +436,7 @@ def _on_prediction_error(event_name: str, data: dict):
                 source="prediction_error",
             )
         except Exception as e:
-            print(f"[wiring] _on_prediction_error WM push error: {e}", file=sys.stderr)
+            _logger.error("_on_prediction_error WM push error: %s", redact_secrets(str(e)))
 
     # Effect 2: Surprise captures attention (Corbetta & Shulman 2002)
     if error_magnitude > 0.3:
@@ -446,7 +447,7 @@ def _on_prediction_error(event_name: str, data: dict):
                 strength=min(1.0, error_magnitude),
             )
         except Exception as e:
-            print(f"[wiring] _on_prediction_error attention error: {e}", file=sys.stderr)
+            _logger.error("_on_prediction_error attention error: %s", redact_secrets(str(e)))
 
     # Effect 3: PE-driven reconsolidation (Nader 2000, Lee 2009)
     # DEFERRED: preturn_inject doesn't emit memory_id (PE is topic-level,
@@ -484,7 +485,7 @@ def process_elapsed_time(elapsed_seconds: float):
                 "summary_len": len(summary) if summary else 0,
             })
         except Exception as e:
-            print(f"[wiring] HOT-1 self-model refresh error: {e}", file=sys.stderr)
+            _logger.error("HOT-1 self-model refresh error: %s", redact_secrets(str(e)))
 
     if elapsed_seconds < 60:
         _session_interaction_count += 1
@@ -513,7 +514,7 @@ def process_elapsed_time(elapsed_seconds: float):
                 """, (decay_multiplier,))
                 conn.commit()
         except Exception as e:
-            print(f"[wiring] WM decay error: {e}", file=sys.stderr)
+            _logger.error("WM decay error: %s", redact_secrets(str(e)))
 
     # --- Attention focus decay (Mackworth 1948 vigilance decrement) ---
     if elapsed_hours >= 0.25:  # 15+ minutes
@@ -529,7 +530,7 @@ def process_elapsed_time(elapsed_seconds: float):
             from modules.prospective import apply_intention_maintenance
             apply_intention_maintenance()
         except Exception as e:
-            print(f"[wiring] PM maintenance error: {e}", file=sys.stderr)
+            _logger.error("PM maintenance error: %s", redact_secrets(str(e)))
 
     # --- Emotional decay toward baseline (proportional to gap) ---
     if elapsed_hours >= 1.0:
@@ -540,7 +541,7 @@ def process_elapsed_time(elapsed_seconds: float):
             for _ in range(steps):
                 apply_emotional_decay()
         except Exception as e:
-            print(f"[wiring] Emotional decay error: {e}", file=sys.stderr)
+            _logger.error("Emotional decay error: %s", redact_secrets(str(e)))
 
     # --- Consolidation check if long gap (8+ hours) ---
     if elapsed_hours >= 8.0 and _session_interaction_count <= 1:
@@ -556,7 +557,7 @@ def process_elapsed_time(elapsed_seconds: float):
                     source="temporal_dynamics",
                 )
         except Exception as e:
-            print(f"[wiring] Consolidation check error: {e}", file=sys.stderr)
+            _logger.error("Consolidation check error: %s", redact_secrets(str(e)))
 
 
 def get_last_interaction_time() -> str:
@@ -620,7 +621,7 @@ def _on_competition_complete(event_name: str, data: dict):
             except Exception:
                 pass
     except Exception as e:
-        print(f"[wiring] Competition handler error: {e}", file=sys.stderr)
+        _logger.error("Competition handler error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -645,7 +646,7 @@ def _on_retrieval_quality(event_name: str, data: dict):
                 source="retrieval_quality",
             )
     except Exception as e:
-        print(f"[wiring] Retrieval quality handler error: {e}", file=sys.stderr)
+        _logger.error("Retrieval quality handler error: %s", redact_secrets(str(e)))
 
 
 # ============================================================
@@ -716,7 +717,7 @@ def _on_contradiction_detected(event_name: str, data: dict):
         )
 
     except Exception as e:
-        print(f"[wiring] _on_contradiction_detected error: {e}", file=sys.stderr)
+        _logger.error("_on_contradiction_detected error: %s", redact_secrets(str(e)))
 
 
 def _on_reconsolidation_triggered(event_name: str, data: dict):
@@ -742,7 +743,7 @@ def _on_reconsolidation_triggered(event_name: str, data: dict):
             strength=0.6,
         )
     except Exception as e:
-        print(f"[wiring] _on_reconsolidation_triggered error: {e}", file=sys.stderr)
+        _logger.error("_on_reconsolidation_triggered error: %s", redact_secrets(str(e)))
 
 
 def wire_event_bus():
@@ -773,11 +774,11 @@ def wire_event_bus():
         for evt, handler in _pe_handlers():
             event_bus.on(evt, handler)
     except Exception as e:
-        print(f"[wiring] PE action handlers not loaded: {e}", file=sys.stderr)
+        _logger.warning("PE action handlers not loaded: %s", redact_secrets(str(e)))
 
     _wired = True
     stats = event_bus.get_stats()
-    print(f"[wiring] Event bus wired: {sum(stats.values())} handlers across {len(stats)} events", file=sys.stderr)
+    _logger.info("Event bus wired: %s handlers across %s events", sum(stats.values()), len(stats))
 
 
 def get_wiring_stats() -> dict:

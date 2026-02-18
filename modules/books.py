@@ -10,11 +10,15 @@ Extracted from server.py - contains:
              actualizar_siguiente_paso, buscar_conexiones_entre_libros
 """
 
+import logging
 import os
 import json
 from datetime import datetime
 
+_logger = logging.getLogger(__name__)
+
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, now_col
+from modules.secret_redact import redact_secrets
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -87,7 +91,7 @@ def _cargar_libros_de_qdrant():
         return {"metadata": {"source": "qdrant"}, "libros": libros}
 
     except Exception as e:
-        print(f"[libros] Error cargando de Qdrant: {e}")
+        _logger.error("Error cargando de Qdrant: %s", redact_secrets(str(e)))
         # Fallback a archivo local
         return _cargar_libros_local()
 
@@ -401,7 +405,7 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
                         points=[libro_data['memory_id']]
                     )
                 except Exception as e:
-                    print(f"[libros] Warning: no se pudo actualizar en Qdrant: {e}")
+                    _logger.warning("No se pudo actualizar en Qdrant: %s", redact_secrets(str(e)))
 
             # Actualizar en archivo local
             data['libros'][libro_key]['siguiente_paso'] = siguiente

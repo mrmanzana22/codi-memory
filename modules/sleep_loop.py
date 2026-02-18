@@ -23,12 +23,15 @@ Created: 2026-02-16 (Sleep Loop MVP)
 
 import argparse
 import json
+import logging
 import os
 import signal
 import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta
+
+_logger = logging.getLogger(__name__)
 
 # Allow imports when run as CLI (-m modules.sleep_loop)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -438,22 +441,22 @@ def cli_main():
 
     # Pre-checks
     if not os.path.exists(FTS_DB_PATH):
-        print(f"[sleep_loop] FTS DB not found: {FTS_DB_PATH}")
+        _logger.error("FTS DB not found: %s", FTS_DB_PATH)
         sys.exit(0)
 
     # Check if there's a checkpoint that needs a report
     target_id = _get_target_checkpoint(args.max_age_min)
     if target_id is None:
-        print("[sleep_loop] No eligible checkpoint (all have reports or too old). Skipping.")
+        _logger.info("No eligible checkpoint (all have reports or too old). Skipping.")
         sys.exit(0)
 
     # Acquire lock
     if not _acquire_lock():
-        print("[sleep_loop] Another instance is running. Skipping.")
+        _logger.warning("Another instance is running. Skipping.")
         sys.exit(0)
 
     try:
-        print(f"[sleep_loop] Starting (reason={args.reason}, budget={args.budget_ms}ms, checkpoint={target_id})")
+        _logger.info("Starting (reason=%s, budget=%dms, checkpoint=%s)", args.reason, args.budget_ms, target_id)
 
         result = run_sleep_loop(reason=args.reason, budget_ms=args.budget_ms)
 
@@ -461,12 +464,12 @@ def cli_main():
         if result.get("report"):
             written = _write_sleep_report(target_id, result["report"])
             if written:
-                print(f"[sleep_loop] Report written to checkpoint {target_id}")
+                _logger.info("Report written to checkpoint %s", target_id)
             else:
-                print(f"[sleep_loop] Report NOT written (checkpoint {target_id} already has one)")
+                _logger.info("Report NOT written (checkpoint %s already has one)", target_id)
 
-        print(f"[sleep_loop] Done in {result.get('elapsed_ms', '?')}ms")
-        print(result.get("report", ""))
+        _logger.info("Done in %sms", result.get("elapsed_ms", "?"))
+        _logger.info("Sleep report:\n%s", result.get("report", ""))
 
     finally:
         _release_lock()
