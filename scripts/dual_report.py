@@ -233,7 +233,6 @@ def main(argv=None) -> int:
             "WHERE created_at >= ? "
             "  AND compare_status = 'pending' "
             "  AND write_mode = 'dual_ack' "
-            "  AND sync_compare_status IN ('pending') "
             "ORDER BY age_seconds DESC",
             (since,),
         ).fetchall()
