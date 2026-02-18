@@ -551,6 +551,14 @@ def compute_comparison_for_job(job_id: str, db_path: str = None) -> Optional[dic
             result = compare_results(kind, sync_dict, async_dict,
                                      write_mode=write_mode)
 
+        # PAD micro-update on gate pass
+        if result.get("match"):
+            try:
+                from modules.spotlight import pad_micro_update
+                pad_micro_update("gate_pass")
+            except Exception:
+                pass
+
         # Write comparison result
         conn.execute(
             "UPDATE dual_compare_log SET "

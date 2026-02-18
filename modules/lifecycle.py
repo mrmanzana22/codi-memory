@@ -602,10 +602,12 @@ def despertar_codi() -> str:
         except Exception:
             pass
 
+        _intentions_for_spotlight = []
         # 12. Prospective Memory (Intenciones pendientes)
         try:
             from modules.prospective import get_pending_intentions
             intentions = get_pending_intentions(limit=5)
+            _intentions_for_spotlight = intentions or []
             if intentions:
                 contexto.append(f"\n## INTENCIONES PENDIENTES ({len(intentions)})")
                 for i in intentions:
@@ -619,6 +621,39 @@ def despertar_codi() -> str:
                         kw = spec.get("keywords", [])
                         trigger_info = f"evento: {', '.join(kw[:3])}" if kw else "evento"
                     contexto.append(f"- {marker} {i['action']} ({trigger_info}) [act={i['activation']}]")
+        except Exception:
+            pass
+
+        # 13. Spotlight (GWT Executive Focus)
+        try:
+            from modules.spotlight import (
+                clear_spotlight, build_spotlight, set_spotlight, format_spotlight
+            )
+            clear_spotlight()
+
+            # Build health signals from already-computed data
+            health_signals = {
+                "health_ok": salud["ok"],
+                "health_message": salud.get("message", ""),
+            }
+
+            # Get checkpoint text from bridge or previous session
+            checkpoint_text = ""
+            if bridge and bridge.get("checkpoint"):
+                checkpoint_text = bridge["checkpoint"].get("session_summary", "")
+            elif prev_session:
+                checkpoint_text = prev_session.get("session_summary", "")
+
+            items = build_spotlight(
+                intentions=_intentions_for_spotlight,
+                health_signals=health_signals,
+                checkpoint_text=checkpoint_text,
+            )
+            set_spotlight(items)
+
+            spotlight_text = format_spotlight()
+            if spotlight_text:
+                contexto.append(f"\n{spotlight_text}")
         except Exception:
             pass
 

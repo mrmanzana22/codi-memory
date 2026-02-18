@@ -349,6 +349,14 @@ def process_one_job(lease_seconds: int = DEFAULT_LEASE_SECONDS) -> bool:
         # Dual-compare: record async failure (best-effort)
         _dual_compare_hook(job_id, error=error_msg, failure_reason=failure_reason)
 
+        # PAD micro-update on error+retry (arousal up)
+        if new_status == "queued":
+            try:
+                from modules.spotlight import pad_micro_update
+                pad_micro_update("error_retry")
+            except Exception:
+                pass
+
         _logger.error("%s %s %s [%s]: %s: %s", kind, job_id[:8], new_status, failure_reason, error_class, redact_secrets(error_msg[:80]))
         return True
 

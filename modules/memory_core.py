@@ -683,6 +683,20 @@ def search_memory(query: str, limit: int = 5) -> str:
 
 
 # ============================================================
+# PAD MICRO-UPDATE HELPER
+# ============================================================
+
+def _pad_guard_blocked(err: str) -> str:
+    """Return GUARD BLOCKED message and trigger PAD micro-update (D-=0.1)."""
+    try:
+        from modules.spotlight import pad_micro_update
+        pad_micro_update("repeated_block")
+    except Exception:
+        pass
+    return f"GUARD BLOCKED: {err}"
+
+
+# ============================================================
 # TIMELINE AND CRUD TOOLS
 # ============================================================
 
@@ -822,7 +836,7 @@ def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = ""
             log_security_event("destructive_blocked", tool, outcome="blocked",
                                payload_fingerprint=fp,
                                details={"memory_id": memory_id, "reason": err})
-            return f"GUARD BLOCKED: {err}"
+            return _pad_guard_blocked(err)
 
     try:
         memory.delete(memory_id=memory_id)
@@ -881,7 +895,7 @@ def delete_by_content(search_query: str, dry_run: bool = False,
             else:
                 err = validate_and_consume(confirm_token, tool, fp)
                 if err:
-                    return f"GUARD BLOCKED: {err}"
+                    return _pad_guard_blocked(err)
         else:
             # Guard off: original behavior
             if not confirm and not confirm_token:
@@ -940,7 +954,7 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
         if confirm_token:
             err = validate_and_consume(confirm_token, tool, fp)
             if err:
-                return f"GUARD BLOCKED: {err}"
+                return _pad_guard_blocked(err)
 
     try:
         memory.delete_all(user_id=USER_ID)

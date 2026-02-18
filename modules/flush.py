@@ -116,6 +116,15 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
         # Sync execution
         result_str = _checkpoint_memoria_sync(momento, que_paso, por_que_importa)
 
+        # Spotlight partial update from checkpoint text
+        try:
+            from modules.spotlight import get_spotlight, update_spotlight_from_text, set_spotlight
+            combined_text = f"{momento}: {que_paso}. {por_que_importa}"
+            updated = update_spotlight_from_text(get_spotlight(), combined_text, "checkpoint")
+            set_spotlight(updated)
+        except Exception:
+            pass
+
         if write_mode == "shadow":
             try:
                 from modules.write_queue import enqueue_write_job, compute_dedupe_key

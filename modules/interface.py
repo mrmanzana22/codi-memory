@@ -250,6 +250,16 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
             except Exception:
                 pass
 
+    # Spotlight conditional update on strong recall signal
+    try:
+        from modules.spotlight import should_update_from_recall, get_spotlight, update_spotlight_from_text, set_spotlight
+        if results and should_update_from_recall(results):
+            combined = " | ".join(r.get("text", "")[:100] for r in results[:3])
+            updated = update_spotlight_from_text(get_spotlight(), combined, "recall")
+            set_spotlight(updated)
+    except Exception:
+        pass
+
     return _json_response("\n".join(pretty_lines), results=results, count=len(results))
 
 
