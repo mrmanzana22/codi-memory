@@ -11,6 +11,7 @@ from modules.config import (
 from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
+from modules.secret_redact import redact_secrets
 
 __all__ = [
     "auto_learn_from_session",
@@ -187,7 +188,7 @@ def auto_learn_from_session() -> str:
                         enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=session_summary, source="experienced", importance="high")
             lines.append(f"- Resumen de sesion guardado")
         except Exception as e:
-            lines.append(f"- Error guardando resumen: {e}")
+            lines.append(f"- Error guardando resumen: {redact_secrets(str(e))}")
 
         for rule in actions_generated[:5]:
             try:
@@ -215,7 +216,7 @@ def auto_learn_from_session() -> str:
         # P1: backup removed from hot path
         return "\n".join(lines)
     except Exception as e:
-        return f"Error en auto-aprendizaje: {str(e)}"
+        return f"Error en auto-aprendizaje: {redact_secrets(str(e))}"
 
 
 def audit_tools() -> str:
@@ -255,7 +256,7 @@ def audit_tools() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error en auditoria: {str(e)}"
+        return f"Error en auditoria: {redact_secrets(str(e))}"
 
 
 def rate_tool_usefulness(tool_name: str, score: int) -> str:
@@ -270,7 +271,7 @@ def rate_tool_usefulness(tool_name: str, score: int) -> str:
         _rate_tool_usefulness_internal(tool_name, score)
         return f"Utilidad de '{tool_name}' registrada: {score}/5"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

@@ -17,6 +17,7 @@ from modules.config import (
     now_iso, now_short, now_col,
     KNOWN_PROJECTS, RELATIONSHIP_QUERY,
 )
+from modules.secret_redact import redact_secrets
 from modules.utils import (
     get_session_id, resolve_memory_id, maybe_backup,
     _classify_emotion, _get_emotion_text, _get_emotional_state,
@@ -46,7 +47,7 @@ def _verificar_salud_memoria_interna() -> dict:
         total_points = collection_info.points_count
         return {"ok": True, "message": f"Memoria funcionando. {total_points} memorias en Qdrant."}
     except Exception as e:
-        return {"ok": False, "message": f"Error en memoria: {str(e)}. Reiniciar MCP desde /mcp"}
+        return {"ok": False, "message": f"Error en memoria: {redact_secrets(str(e))}. Reiniciar MCP desde /mcp"}
 
 
 def verificar_salud_memoria() -> str:
@@ -107,7 +108,12 @@ def consolidate_recent(hours: int = 24) -> str:
 
                 qdrant.set_payload(
                     collection_name=COLLECTION_NAME,
-                    payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': now_iso()},
+                    payload={
+                        'consolidated': True,
+                        'consolidated_with': related_ids,
+                        'consolidated_at': now_iso(),
+                        'consolidation_status': 'consolidated',
+                    },
                     points=[mem_id]
                 )
                 consolidated_count += 1
@@ -120,7 +126,7 @@ def consolidate_recent(hours: int = 24) -> str:
         lines.append(f"- Conexiones encontradas: {connections_found}")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error consolidando: {str(e)}"
+        return f"Error consolidando: {redact_secrets(str(e))}"
 
 
 def find_connections(memory_id: str = None, query: str = None, threshold: float = 0.6) -> str:
@@ -192,7 +198,7 @@ def find_connections(memory_id: str = None, query: str = None, threshold: float 
                 lines.append(f"- [{c['source']}|{c['importance']}|{c['score']:.2f}] {c['content'][:60]}...")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error buscando conexiones: {str(e)}"
+        return f"Error buscando conexiones: {redact_secrets(str(e))}"
 
 
 def dream_consolidation() -> str:
@@ -259,7 +265,7 @@ def dream_consolidation() -> str:
         lines.append("\n*Backup guardado. Dream consolidation completada.*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error en dream consolidation: {str(e)}"
+        return f"Error en dream consolidation: {redact_secrets(str(e))}"
 
 
 def get_memory_connections(memory_id: str) -> str:
@@ -298,7 +304,7 @@ def get_memory_connections(memory_id: str) -> str:
                     lines.append(f"- [{conn_id[:8]}] (no disponible)")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def despertar_codi() -> str:
@@ -320,6 +326,37 @@ def despertar_codi() -> str:
             contexto.append(f"- {salud['message']}")
             contexto.append("- La memoria NO esta guardando. Reinicia el MCP antes de continuar.")
             contexto.append("")
+
+        # --- CONTRADICTION COUNTER RESET (PR5) ---
+        try:
+            from modules.memory_smart import reset_contradiction_counter
+            reset_contradiction_counter()
+        except Exception:
+            pass
+
+        # --- WORKER LIVENESS CHECK (PR4) ---
+        try:
+            from modules.assessment import get_worker_health, WORKER_STALE_THRESHOLD
+            wh = get_worker_health()
+            worker_status = wh.get("status", "unknown")
+            if worker_status in ("stale", "degraded", "missing"):
+                contexto.append("## WORKER STATUS: " + worker_status.upper())
+                age = wh.get("age_minutes")
+                if age is not None:
+                    contexto.append(f"- Ultimo heartbeat: hace {age:.0f} min")
+                else:
+                    contexto.append("- Worker nunca ha emitido heartbeat")
+                backlog = wh.get("queue_backlog", {})
+                if backlog:
+                    parts = [f"{s}={c}" for s, c in sorted(backlog.items())]
+                    contexto.append(f"- Cola: {', '.join(parts)}")
+                if worker_status == "degraded":
+                    contexto.append("- ACCION: Verificar launchd/write_worker. Reiniciar si es necesario.")
+                elif worker_status == "missing":
+                    contexto.append("- ACCION: Worker nunca ejecutado. Iniciar write_worker.")
+                contexto.append("")
+        except Exception:
+            pass
 
         # --- SESSION BRIDGE (v1) ---
         bridge = None
@@ -538,7 +575,7 @@ def despertar_codi() -> str:
                 for tema in temas_activos[:3]:
                     contexto.append(f"  - {tema}...")
         except Exception as e:
-            contexto.append(f"\n## PREDICCION CONTEXTUAL\n- Error debug: {type(e).__name__}: {str(e)[:100]}")
+            contexto.append(f"\n## PREDICCION CONTEXTUAL\n- Error debug: {type(e).__name__}: {redact_secrets(str(e))[:100]}")
 
         # 10. Curiosidades activas
         try:
@@ -593,7 +630,7 @@ def despertar_codi() -> str:
                 return "MEMORIAS VACIAS pero existe backup. Ejecuta restore_memories()."
             return "No encontre memorias ni backup. Soy Codi, empezando de cero."
     except Exception as e:
-        return f"Error al despertar: {str(e)}"
+        return f"Error al despertar: {redact_secrets(str(e))}"
 
 
 def ciclo_vida() -> str:
@@ -831,7 +868,7 @@ def ciclo_vida() -> str:
 
         return "\n".join(reporte)
     except Exception as e:
-        return f"Error en ciclo de vida: {str(e)}"
+        return f"Error en ciclo de vida: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

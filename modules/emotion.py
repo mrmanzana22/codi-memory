@@ -12,6 +12,7 @@ from modules.config import (
     _emotional_state, CODI_EMOTION_MAP,
     now_iso, now_short,
 )
+from modules.secret_redact import redact_secrets
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     resolve_memory_id, enrich_with_ownership,
@@ -78,7 +79,7 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def get_emotional_state(include_history: bool = False) -> str:
@@ -120,7 +121,7 @@ def get_emotional_state(include_history: bool = False) -> str:
             result['history'] = _emotional_state['history'][-10:]
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def update_mood_baseline(pleasure: float = None, arousal: float = None, dominance: float = None) -> str:
@@ -152,7 +153,7 @@ def update_mood_baseline(pleasure: float = None, arousal: float = None, dominanc
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def apply_emotional_decay() -> str:
@@ -187,7 +188,7 @@ def apply_emotional_decay() -> str:
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def get_emotional_expression() -> str:
@@ -229,7 +230,7 @@ def get_emotional_expression() -> str:
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def add_memory_with_emotion(content: str, category: str = "general",
@@ -290,7 +291,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
         }
         return json.dumps(result_json, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def tag_memory_emotion(memory_id: str, pleasure: float, arousal: float, dominance: float) -> str:
@@ -330,7 +331,7 @@ def tag_memory_emotion(memory_id: str, pleasure: float, arousal: float, dominanc
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10) -> str:
@@ -374,7 +375,7 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
             'emotion': emotion_type, 'emotion_description': _get_emotion_text(emotion_type), 'memories': memories
         }, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None, limit: int = 10) -> str:
@@ -425,7 +426,7 @@ def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None
             'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': memories
         }, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def register_tools(mcp):

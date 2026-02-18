@@ -112,7 +112,7 @@ def get_semantic_facts(topic: str = "", limit: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"[semantic] Error: {e}"
+        return f"[semantic] Error: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -156,7 +156,7 @@ def get_consolidation_stats() -> str:
             f"Currently labile memories: {labile_count}"
         )
     except Exception as e:
-        return f"Error getting stats: {e}"
+        return f"Error getting stats: {redact_secrets(str(e))}"
 
 
 # ============================================================

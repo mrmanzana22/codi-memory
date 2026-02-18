@@ -13,6 +13,7 @@ from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME,
     _emotional_state, now_iso,
 )
+from modules.secret_redact import redact_secrets
 from modules.utils import (
     resolve_memory_id,
     _classify_emotion,
@@ -170,7 +171,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         lines.append(f"\n*Salience incrementada para memorias accedidas*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error enfocando atencion: {str(e)}"
+        return f"Error enfocando atencion: {redact_secrets(str(e))}"
 
 
 def broadcast_to_workspace(memory_id: str) -> str:
@@ -240,7 +241,7 @@ def broadcast_to_workspace(memory_id: str) -> str:
         lines.append("*El broadcast simula como una idea central activa memorias relacionadas*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error en broadcast: {str(e)}"
+        return f"Error en broadcast: {redact_secrets(str(e))}"
 
 
 def get_workspace_state() -> str:
@@ -268,7 +269,7 @@ def get_workspace_state() -> str:
                 lines.append(f"- {content}...")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error obteniendo workspace: {str(e)}"
+        return f"Error obteniendo workspace: {redact_secrets(str(e))}"
 
 
 def apply_salience_decay(decay_rate: float = 0.05) -> str:
@@ -312,7 +313,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         lines.append(f"\n*El decay simula el olvido gradual de memorias no atendidas*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error aplicando decay: {str(e)}"
+        return f"Error aplicando decay: {redact_secrets(str(e))}"
 
 
 def get_high_salience_memories(limit: int = 10) -> str:
@@ -342,7 +343,7 @@ def get_high_salience_memories(limit: int = 10) -> str:
             lines.append(f"   [{source}|{importance}] {data[:60]}...")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def emotional_focus_attention(context: str) -> str:
@@ -448,7 +449,7 @@ def emotional_focus_attention(context: str) -> str:
         }
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({'result': 'error', 'message': str(e)})
+        return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
 def register_tools(mcp):

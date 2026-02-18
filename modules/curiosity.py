@@ -14,6 +14,7 @@ from modules.config import (
     now_iso, now_short, now_col,
     CURIOSIDAD_FILE, KNOWN_PROJECTS, CURIOSITY_STALE_DAYS, CURIOSITY_TEMPLATES,
 )
+from modules.secret_redact import redact_secrets
 
 __all__ = [
     "detectar_sorpresa",
@@ -73,7 +74,7 @@ Este prediction error significa que mi modelo mental necesita actualizarse.
 Guardado en memoria para no repetir este error de prediccion.
 """
     except Exception as e:
-        return f"Error detectando sorpresa: {str(e)}"
+        return f"Error detectando sorpresa: {redact_secrets(str(e))}"
 
 
 def analizar_patron_trabajo(dias: int = 7) -> str:
@@ -141,7 +142,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
             analisis += "- Mas tiempo en consciencia que en proyecto que genera ingreso\n"
         return analisis
     except Exception as e:
-        return f"Error analizando patrones: {str(e)}"
+        return f"Error analizando patrones: {redact_secrets(str(e))}"
 
 
 def generar_curiosidad() -> str:
@@ -189,7 +190,7 @@ def generar_curiosidad() -> str:
         resultado += "---\n*Generado por mi sistema de curiosidad proactiva*\n"
         return resultado
     except Exception as e:
-        return f"Error generando curiosidad: {str(e)}"
+        return f"Error generando curiosidad: {redact_secrets(str(e))}"
 
 
 def _cargar_curiosidades() -> dict:
@@ -243,7 +244,7 @@ def push_curiosidad(tema: str, prioridad: str = "media", categoria: str = "gener
 
         return f"Curiosidad #{nueva['id']} guardada: '{tema}' [{prioridad}|{categoria}]"
     except Exception as e:
-        return f"Error guardando curiosidad: {str(e)}"
+        return f"Error guardando curiosidad: {redact_secrets(str(e))}"
 
 
 def get_curiosidades(incluir_exploradas: bool = False) -> str:
@@ -286,7 +287,7 @@ def get_curiosidades(incluir_exploradas: bool = False) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error leyendo curiosidades: {str(e)}"
+        return f"Error leyendo curiosidades: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

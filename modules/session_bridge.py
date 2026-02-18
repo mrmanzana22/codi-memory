@@ -26,6 +26,7 @@ from modules.config import (
 )
 from modules.tracing import get_trace_id
 from modules.events import event_bus, Events
+from modules.secret_redact import redact_secrets
 
 # ============================================================
 # CONSTANTS
@@ -348,7 +349,7 @@ def checkpoint_session_close(
             conn.close()
         except Exception:
             pass
-        return {"ok": False, "error": str(e), "checkpoint_id": None}
+        return {"ok": False, "error": redact_secrets(str(e)), "checkpoint_id": None}
 
 
 # ============================================================
@@ -546,4 +547,4 @@ def register_tools(mcp):
             return "\n".join(lines)
 
         except Exception as e:
-            return f"Session Bridge ERROR: {e}"
+            return f"Session Bridge ERROR: {redact_secrets(str(e))}"

@@ -12,6 +12,7 @@ from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME,
     now_iso, now_short,
 )
+from modules.secret_redact import redact_secrets
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     calculate_confidence_score,
@@ -109,7 +110,7 @@ def reflect_on_self() -> str:
 
         return "\n".join(reflection)
     except Exception as e:
-        return f"Error reflexionando: {str(e)}"
+        return f"Error reflexionando: {redact_secrets(str(e))}"
 
 
 def assess_confidence(topic: str) -> str:
@@ -160,7 +161,7 @@ def assess_confidence(topic: str) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error evaluando confianza: {str(e)}"
+        return f"Error evaluando confianza: {redact_secrets(str(e))}"
 
 
 def identify_knowledge_gaps() -> str:
@@ -273,7 +274,7 @@ def identify_knowledge_gaps() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error identificando gaps: {str(e)}"
+        return f"Error identificando gaps: {redact_secrets(str(e))}"
 
 
 def assess_butlin_indicators() -> str:
@@ -694,7 +695,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
         # P1: backup removed from hot path
         return f"Self-model actualizado [{aspect}]: {insight[:50]}..."
     except Exception as e:
-        return f"Error actualizando self-model: {str(e)}"
+        return f"Error actualizando self-model: {redact_secrets(str(e))}"
 
 
 def get_self_model_summary() -> str:
@@ -744,7 +745,7 @@ def get_self_model_summary() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error obteniendo self-model: {str(e)}"
+        return f"Error obteniendo self-model: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

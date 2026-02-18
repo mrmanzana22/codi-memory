@@ -11,6 +11,7 @@ from datetime import datetime
 _logger = logging.getLogger(__name__)
 
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
+from modules.secret_redact import redact_secrets
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import (
     enrich_with_ownership, resolve_memory_id, calculate_confidence_score,
@@ -63,7 +64,7 @@ def restore_memories() -> str:
 
         return f"Restauradas {restored} memorias desde backup"
     except Exception as e:
-        return f"Error restaurando: {str(e)}"
+        return f"Error restaurando: {redact_secrets(str(e))}"
 
 
 def _add_memory_sync(content: str, category: str, source: str, importance: str) -> str:
@@ -187,7 +188,7 @@ def add_memory(content: str, category: str = "general",
 
         return result_str
     except Exception as e:
-        return f"Error al guardar memoria: {str(e)}"
+        return f"Error al guardar memoria: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -684,7 +685,7 @@ def search_memory(query: str, limit: int = 5) -> str:
             header = f"{confidence_flag} {header}"
         return header + "\n" + "\n".join(memories)
     except Exception as e:
-        return f"Error al buscar: {str(e)}"
+        return f"Error al buscar: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -769,7 +770,7 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error al obtener timeline: {str(e)}"
+        return f"Error al obtener timeline: {redact_secrets(str(e))}"
 
 
 def get_all_memories(limit: int = 500) -> str:
@@ -803,7 +804,7 @@ def get_all_memories(limit: int = 500) -> str:
 
         return f"Total en Qdrant: {total} | Mostrando: {len(memories)}\n" + "\n".join(memories)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = "") -> str:
@@ -840,7 +841,7 @@ def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = ""
         log_security_event("destructive_exec", tool, outcome="error",
                            payload_fingerprint=fp,
                            details={"memory_id": memory_id, "error": str(e)[:200]})
-        return f"Error al eliminar: {str(e)}"
+        return f"Error al eliminar: {redact_secrets(str(e))}"
 
 
 def delete_by_content(search_query: str, dry_run: bool = False,
@@ -912,7 +913,7 @@ def delete_by_content(search_query: str, dry_run: bool = False,
         log_security_event("destructive_exec", tool, outcome="error",
                            payload_fingerprint=fp,
                            details={"search_query": search_query, "error": str(e)[:200]})
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
@@ -957,7 +958,7 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
         log_security_event("destructive_exec", tool, outcome="error",
                            payload_fingerprint=fp,
                            details={"action": "clear_all", "error": str(e)[:200]})
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -1021,7 +1022,7 @@ def search_by_ownership(source: str = None, min_confidence: float = 0.0,
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def get_my_experiences(limit: int = 10) -> str:
@@ -1051,7 +1052,7 @@ def get_my_experiences(limit: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def get_critical_memories() -> str:
@@ -1079,7 +1080,7 @@ def get_critical_memories() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def search_by_theme(theme: str, limit: int = 10) -> str:
@@ -1111,7 +1112,7 @@ def search_by_theme(theme: str, limit: int = 10) -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def update_memory_importance(memory_id: str, new_importance: str) -> str:
@@ -1139,7 +1140,7 @@ def update_memory_importance(memory_id: str, new_importance: str) -> str:
 
         return f"Memoria {memory_id} actualizada a importancia: {new_importance}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 # ============================================================

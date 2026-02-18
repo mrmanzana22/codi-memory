@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
+from modules.secret_redact import redact_secrets
 
 # ============================================================
 # MODULE-LEVEL STATE AND HELPERS
@@ -98,7 +99,7 @@ def register_tools(mcp):
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": redact_secrets(str(e))})
 
     @mcp.tool()
     def activar_trigger(trigger_name: str) -> str:
@@ -145,7 +146,7 @@ def register_tools(mcp):
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": redact_secrets(str(e))})
 
     @mcp.tool()
     def listar_triggers() -> str:
@@ -171,7 +172,7 @@ def register_tools(mcp):
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": redact_secrets(str(e))})
 
     @mcp.tool()
     def crear_trigger_dinamico(
@@ -261,7 +262,7 @@ def register_tools(mcp):
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": redact_secrets(str(e))})
 
     @mcp.tool()
     def sugerir_trigger_emocional(contexto: str, razon_emocional: str) -> str:
@@ -333,4 +334,4 @@ def register_tools(mcp):
             }, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": redact_secrets(str(e))})

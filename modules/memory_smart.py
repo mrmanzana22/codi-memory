@@ -128,7 +128,7 @@ def queue_fts_op(memory_id: str, op: str, payload: dict = None, error: str = Non
         return {"ok": True, "memory_id": memory_id, "op": op}
     except Exception as e:
         _logger.error("Error enqueuing FTS op: %s", redact_secrets(str(e)))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": redact_secrets(str(e))}
 
 
 def process_fts_queue(limit: int = 50, max_attempts: int = 10) -> dict:
@@ -202,7 +202,7 @@ def process_fts_queue(limit: int = 50, max_attempts: int = 10) -> dict:
             "remaining_pending": pending,
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": redact_secrets(str(e))}
 
 
 def fts_queue_stats() -> dict:
@@ -227,7 +227,7 @@ def fts_queue_stats() -> dict:
             "oldest_pending": oldest[0] if oldest else None,
         }
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": redact_secrets(str(e))}
 
 
 def search_fts(query: str, limit: int = 20) -> list:
@@ -299,7 +299,7 @@ def sync_fts_from_backup():
         return f"Synced {count} memories to FTS index"
     except Exception as e:
         _logger.error("Error syncing FTS: %s", redact_secrets(str(e)))
-        return f"Error syncing FTS: {e}"
+        return f"Error syncing FTS: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -695,7 +695,7 @@ def add_memory_smart(content: str, category: str = "general",
     except Exception as e:
         return json.dumps({
             "action": "error",
-            "message": f"Error: {str(e)}"
+            "message": f"Error: {redact_secrets(str(e))}"
         }, ensure_ascii=False)
 
 
@@ -747,7 +747,7 @@ def sync_fts_index(dry_run: bool = False, confirm_token: str = "") -> str:
         result = sync_fts_from_backup()
         return result
     except Exception as e:
-        return f"Error sincronizando FTS: {str(e)}"
+        return f"Error sincronizando FTS: {redact_secrets(str(e))}"
 
 
 # ============================================================

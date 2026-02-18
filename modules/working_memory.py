@@ -14,6 +14,7 @@ from modules.config import (
     get_qdrant, COLLECTION_NAME,
 )
 from modules.db_pool import get_conn
+from modules.secret_redact import redact_secrets
 
 # ============================================================
 # DATABASE INIT & CONNECTION
@@ -260,7 +261,7 @@ def get_working_memory() -> str:
             }, ensure_ascii=False)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
 
 def push_to_working_memory(
@@ -321,7 +322,7 @@ def push_to_working_memory(
             }, ensure_ascii=False)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
 
 def update_working_memory(
@@ -381,7 +382,7 @@ def update_working_memory(
             }, ensure_ascii=False)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
 
 def get_narrative_chain(
@@ -475,7 +476,7 @@ def get_narrative_chain(
         }, ensure_ascii=False)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
 
 def link_narrative_trace(
@@ -561,7 +562,7 @@ def link_narrative_trace(
             }, ensure_ascii=False)
 
     except Exception as e:
-        return json.dumps({"error": str(e)}, ensure_ascii=False)
+        return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
 
 # ============================================================

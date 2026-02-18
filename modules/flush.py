@@ -145,7 +145,7 @@ def _checkpoint_memoria(momento: str, que_paso: str, por_que_importa: str) -> st
 
         return result_str
     except Exception as e:
-        return f"Error guardando checkpoint: {str(e)}"
+        return f"Error guardando checkpoint: {redact_secrets(str(e))}"
 
 
 def _save_session_state(resumen: str = "") -> bool:
@@ -244,7 +244,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
         )
         resultados.append("Checkpoint: OK")
     except Exception as e:
-        resultados.append(f"Checkpoint: ERROR - {e}")
+        resultados.append(f"Checkpoint: ERROR - {redact_secrets(str(e))}")
 
     # 2. Guardar decisiones si hay
     if decisiones.strip():
@@ -257,7 +257,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
             )
             resultados.append("Decisiones: OK")
         except Exception as e:
-            resultados.append(f"Decisiones: ERROR - {e}")
+            resultados.append(f"Decisiones: ERROR - {redact_secrets(str(e))}")
 
     # 3. Guardar errores si hay
     if errores.strip():
@@ -270,7 +270,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
             )
             resultados.append("Errores: OK")
         except Exception as e:
-            resultados.append(f"Errores: ERROR - {e}")
+            resultados.append(f"Errores: ERROR - {redact_secrets(str(e))}")
 
     # 4. Guardar aprendizajes si hay
     if aprendizajes.strip():
@@ -283,14 +283,14 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
             )
             resultados.append("Aprendizajes: OK")
         except Exception as e:
-            resultados.append(f"Aprendizajes: ERROR - {e}")
+            resultados.append(f"Aprendizajes: ERROR - {redact_secrets(str(e))}")
 
     # 5. Hacer backup JSON
     try:
         maybe_backup(reason="flush_session", force=True)
         resultados.append("Backup: OK")
     except Exception as e:
-        resultados.append(f"Backup: ERROR - {e}")
+        resultados.append(f"Backup: ERROR - {redact_secrets(str(e))}")
 
     # 6. Session Bridge checkpoint
     try:
@@ -306,7 +306,7 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
         else:
             resultados.append(f"Session checkpoint: DEDUPED (id={bridge_result.get('checkpoint_id')})")
     except Exception as e:
-        resultados.append(f"Session checkpoint: ERROR - {e}")
+        resultados.append(f"Session checkpoint: ERROR - {redact_secrets(str(e))}")
 
     # 6b. JSON fallback (backward compat)
     try:
@@ -363,7 +363,7 @@ def _export_memories_markdown() -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        return f"Error exportando: {str(e)}"
+        return f"Error exportando: {redact_secrets(str(e))}"
 
 
 def _export_to_markdown() -> str:
@@ -381,7 +381,7 @@ def _export_to_markdown() -> str:
 
         return f"Export completado a {MARKDOWN_DIR}\nArchivos: {', '.join(md_files)}\nJournal entries: {len(journal_files)} dias"
     except Exception as e:
-        return f"Error exportando: {str(e)}"
+        return f"Error exportando: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

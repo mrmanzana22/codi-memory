@@ -314,7 +314,7 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
             return f"[reconsolidation] Memory {full_id[:8]} not found in Qdrant"
         old_payload = pts[0].payload or {}
     except Exception as e:
-        return f"[reconsolidation] Qdrant retrieve error: {e}"
+        return f"[reconsolidation] Qdrant retrieve error: {redact_secrets(str(e))}"
 
     old_content = old_payload.get("data", "") or old_payload.get("memory", "")
     old_confidence = float(old_payload.get("confidence", old_payload.get("narrative_importance_score", 0.5)))
@@ -379,7 +379,7 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
     try:
         new_vector = _embed_text(new_content)
     except Exception as e:
-        return f"[reconsolidation] Embedding error: {e}"
+        return f"[reconsolidation] Embedding error: {redact_secrets(str(e))}"
 
     # 7. Upsert full PointStruct -- destroy and re-synthesize the trace
     try:
@@ -399,7 +399,7 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
             )],
         )
     except Exception as e:
-        return f"[reconsolidation] Qdrant upsert error: {e}"
+        return f"[reconsolidation] Qdrant upsert error: {redact_secrets(str(e))}"
 
     # 8. Update FTS5 index
     try:

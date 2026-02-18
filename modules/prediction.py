@@ -10,6 +10,7 @@ from modules.config import (
 from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
+from modules.secret_redact import redact_secrets
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -97,7 +98,7 @@ def predict_context(current_context: str) -> str:
         lines.append(f"\n*Si el resultado real difiere, usar record_surprise() para actualizar el modelo*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error prediciendo: {str(e)}"
+        return f"Error prediciendo: {redact_secrets(str(e))}"
 
 
 def record_surprise(expected: str, actual: str, intensity: str = "medium") -> str:
@@ -143,6 +144,20 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
                         points=[mem_id]
                     )
 
+        # Emit canonical PREDICTION_ERROR event (Bloque 2 pipeline)
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.PREDICTION_ERROR, {
+                "topic": actual[:100],
+                "intensity": intensity,
+                "confidence": surprise_value,
+                "source_tool": "record_surprise",
+                "expected": expected[:100],
+                "actual": actual[:100],
+            })
+        except Exception:
+            pass  # Never block surprise recording
+
         lines = [f"# SORPRESA REGISTRADA\n"]
         lines.append(f"**Intensidad:** {intensity} ({surprise_value})")
         lines.append(f"**Esperaba:** {expected}")
@@ -156,7 +171,7 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
             lines.append(f"Usa: sugerir_trigger_emocional(contexto='{actual[:50]}...', razon_emocional='sorpresa alta')")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error registrando sorpresa: {str(e)}"
+        return f"Error registrando sorpresa: {redact_secrets(str(e))}"
 
 
 def get_prediction_accuracy() -> str:
@@ -212,7 +227,7 @@ def get_prediction_accuracy() -> str:
             lines.append("- El modelo predictivo funciona razonablemente bien")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error analizando precision: {str(e)}"
+        return f"Error analizando precision: {redact_secrets(str(e))}"
 
 
 def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) -> str:
@@ -259,7 +274,7 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
         lines.append(f"\n*El modelo interno ha sido actualizado.*")
         return "\n".join(lines)
     except Exception as e:
-        return f"Error actualizando creencia: {str(e)}"
+        return f"Error actualizando creencia: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

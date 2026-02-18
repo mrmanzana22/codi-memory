@@ -15,6 +15,7 @@ from modules.config import (
     SPREAD_SALIENCE_CAP, SPREAD_SALIENCE_FLOOR,
 )
 from modules.utils import resolve_memory_id
+from modules.secret_redact import redact_secrets
 
 
 # ============================================================
@@ -319,7 +320,7 @@ def register_tools(mcp):
 
             return "\n".join(lines)
         except Exception as e:
-            return f"Error en spreading activation: {str(e)}"
+            return f"Error en spreading activation: {redact_secrets(str(e))}"
 
     @mcp.tool()
     def get_activation_map(topic_or_id: str) -> str:
@@ -401,4 +402,4 @@ def register_tools(mcp):
 
             return "\n".join(lines)
         except Exception as e:
-            return f"Error en activation map: {str(e)}"
+            return f"Error en activation map: {redact_secrets(str(e))}"

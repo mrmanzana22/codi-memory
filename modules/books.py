@@ -162,7 +162,7 @@ def register_tools(mcp):
             return resultado
 
         except Exception as e:
-            return f"Error listando libros: {str(e)}"
+            return f"Error listando libros: {redact_secrets(str(e))}"
 
 
     @mcp.tool()
@@ -204,7 +204,7 @@ def register_tools(mcp):
             return resultado
 
         except Exception as e:
-            return f"Error viendo libro: {str(e)}"
+            return f"Error viendo libro: {redact_secrets(str(e))}"
 
 
     @mcp.tool()
@@ -290,7 +290,7 @@ Guardado en: Qdrant + backup local
 """
 
         except Exception as e:
-            return f"Error agregando capitulo: {str(e)}"
+            return f"Error agregando capitulo: {redact_secrets(str(e))}"
 
 
     @mcp.tool()
@@ -372,7 +372,7 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
 """
 
         except Exception as e:
-            return f"Error creando libro: {str(e)}"
+            return f"Error creando libro: {redact_secrets(str(e))}"
 
 
     @mcp.tool()
@@ -414,7 +414,7 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
             return f"Siguiente paso de {libro.upper()} actualizado: {siguiente}"
 
         except Exception as e:
-            return f"Error: {str(e)}"
+            return f"Error: {redact_secrets(str(e))}"
 
 
     @mcp.tool()
@@ -489,4 +489,4 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
             return resultado
 
         except Exception as e:
-            return f"Error buscando conexiones: {str(e)}"
+            return f"Error buscando conexiones: {redact_secrets(str(e))}"

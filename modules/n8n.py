@@ -7,6 +7,7 @@ import os
 import requests as http_requests
 
 from modules.config import now_iso
+from modules.secret_redact import redact_secrets
 
 __all__ = [
     "trigger_n8n",
@@ -55,7 +56,7 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
     except http_requests.exceptions.Timeout:
         return f"Timeout esperando respuesta de n8n (webhook: {webhook_path})"
     except Exception as e:
-        return f"Error disparando n8n: {str(e)}"
+        return f"Error disparando n8n: {redact_secrets(str(e))}"
 
 
 def listar_webhooks_conocidos() -> str:

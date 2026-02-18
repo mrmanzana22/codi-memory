@@ -127,3 +127,38 @@ class TestMetricsRedactionWrapper:
 
         result = registered_fn()
         assert result == "All good, 5 memories found"
+
+
+class TestToolReturnRedaction:
+    """Test that the str(e) -> redact_secrets(str(e)) pattern works in tool returns."""
+
+    def test_tool_return_error_redacted(self):
+        """Simulate the pattern used across all tool except blocks."""
+        secret = "sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234"
+        try:
+            raise RuntimeError(f"Connection failed: {secret}")
+        except Exception as e:
+            out = {"ok": False, "error": redact_secrets(str(e))}
+        assert "sk-proj-" not in out["error"]
+        assert "[REDACTED:openai_key]" in out["error"]
+
+    def test_fstring_pattern_redacted(self):
+        """Test f-string pattern: f'Error: {redact_secrets(str(e))}'."""
+        secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        try:
+            raise ValueError(f"Auth token invalid: {secret}")
+        except Exception as e:
+            out = f"Error: {redact_secrets(str(e))}"
+        assert "eyJ" not in out
+        assert "[REDACTED:jwt]" in out
+
+    def test_json_dumps_pattern_redacted(self):
+        """Test json.dumps pattern used in triggers, working_memory, emotion."""
+        import json
+        secret = "sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234"
+        try:
+            raise RuntimeError(f"API call with {secret}")
+        except Exception as e:
+            out = json.dumps({"error": redact_secrets(str(e))})
+        assert "sk-proj-" not in out
+        assert "REDACTED" in out

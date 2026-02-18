@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short, TZ_COL
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import calculate_confidence_score
+from modules.secret_redact import redact_secrets
 
 
 # ============================================================
@@ -117,7 +118,7 @@ Tarea de mantenimiento registrada:
 Esta tarea aparecera en despertar_codi() cuando este vencida.
 """
     except Exception as e:
-        return f"Error registrando tarea: {str(e)}"
+        return f"Error registrando tarea: {redact_secrets(str(e))}"
 
 
 def _verificar_mantenimiento() -> str:
@@ -173,7 +174,7 @@ def _verificar_mantenimiento() -> str:
         return resultado
 
     except Exception as e:
-        return f"Error verificando mantenimiento: {str(e)}"
+        return f"Error verificando mantenimiento: {redact_secrets(str(e))}"
 
 
 def _marcar_mantenimiento_hecho(tarea_id: str, notas: str = "") -> str:
@@ -223,7 +224,7 @@ Mantenimiento completado: **{tarea['nombre']}**
         return f"No encontre tarea con ID '{tarea_id}'"
 
     except Exception as e:
-        return f"Error marcando tarea: {str(e)}"
+        return f"Error marcando tarea: {redact_secrets(str(e))}"
 
 
 def _mantenimiento_memorias() -> str:
@@ -277,7 +278,7 @@ def _mantenimiento_memorias() -> str:
                 resultado += "- No hay memorias nuevas en las ultimas 48h\n"
 
         except Exception as e:
-            resultado += f"- Error en consolidacion: {str(e)}\n"
+            resultado += f"- Error en consolidacion: {redact_secrets(str(e))}\n"
 
         # 2. Aplicar decay de salience
         resultado += "\n## 2. Decay de salience\n"
@@ -317,7 +318,7 @@ def _mantenimiento_memorias() -> str:
                 acciones.append(f"Decay aplicado a {decayed} memorias")
 
         except Exception as e:
-            resultado += f"- Error en decay: {str(e)}\n"
+            resultado += f"- Error en decay: {redact_secrets(str(e))}\n"
 
         # 3. Estadisticas generales
         resultado += "\n## 3. Estado de la memoria\n"
@@ -362,7 +363,7 @@ def _mantenimiento_memorias() -> str:
             acciones.append(f"Inventario: {total} memorias totales")
 
         except Exception as e:
-            resultado += f"- Error obteniendo stats: {str(e)}\n"
+            resultado += f"- Error obteniendo stats: {redact_secrets(str(e))}\n"
 
         # 4. Resumen
         resultado += "\n## Resumen\n"
@@ -377,7 +378,7 @@ def _mantenimiento_memorias() -> str:
         return resultado
 
     except Exception as e:
-        return f"Error en mantenimiento: {str(e)}"
+        return f"Error en mantenimiento: {redact_secrets(str(e))}"
 
 
 # ============================================================
@@ -425,7 +426,7 @@ def _ver_recordatorios_externos() -> str:
 
         return resultado
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def _limpiar_recordatorios() -> str:
@@ -439,7 +440,7 @@ def _limpiar_recordatorios() -> str:
         _guardar_recordatorios(data)
         return f"Limpiados {cantidad} recordatorios."
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {redact_secrets(str(e))}"
 
 
 def register_tools(mcp):

@@ -40,6 +40,7 @@ if BASE_DIR not in sys.path:
 
 from modules.config import FTS_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso
 from modules.events import event_bus, Events
+from modules.secret_redact import redact_secrets
 
 # ============================================================
 # TICK-LEVEL METRICS (E2.2)
@@ -214,7 +215,7 @@ def _tick_consolidation(budget_ms: int) -> dict:
         result["detail"] = report[:200] if report else "no output"
         result["elapsed_ms"] = round(elapsed)
     except Exception as e:
-        result["detail"] = f"error: {str(e)[:100]}"
+        result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
 
     return result
@@ -233,7 +234,7 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         sal_report = apply_salience_decay(decay_rate=0.05)
         parts.append(f"salience: {sal_report[:80]}")
     except Exception as e:
-        parts.append(f"salience: error {str(e)[:50]}")
+        parts.append(f"salience: error {redact_secrets(str(e))[:50]}")
 
     # Emotional decay (PAD toward baseline)
     try:
@@ -241,7 +242,7 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         emo_report = apply_emotional_decay()
         parts.append(f"emotional: {emo_report[:80]}")
     except Exception as e:
-        parts.append(f"emotional: error {str(e)[:50]}")
+        parts.append(f"emotional: error {redact_secrets(str(e))[:50]}")
 
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True
@@ -263,7 +264,7 @@ def _tick_prospective(budget_ms: int) -> dict:
         result["detail"] = "intention maintenance applied"
         result["elapsed_ms"] = round(elapsed)
     except Exception as e:
-        result["detail"] = f"error: {str(e)[:100]}"
+        result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
 
     return result
@@ -286,7 +287,7 @@ def _tick_health(budget_ms: int) -> dict:
         else:
             parts.append("fts: queue empty")
     except Exception as e:
-        parts.append(f"fts: error {str(e)[:50]}")
+        parts.append(f"fts: error {redact_secrets(str(e))[:50]}")
 
     # Health check
     try:
@@ -297,7 +298,7 @@ def _tick_health(budget_ms: int) -> dict:
         else:
             parts.append(f"health: {health.get('message', 'unknown')[:60]}")
     except Exception as e:
-        parts.append(f"health: error {str(e)[:50]}")
+        parts.append(f"health: error {redact_secrets(str(e))[:50]}")
 
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True
@@ -387,7 +388,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         except Exception as e:
             tick_results.append({
                 "tick": name, "ok": False,
-                "detail": f"unhandled: {str(e)[:80]}",
+                "detail": f"unhandled: {redact_secrets(str(e))[:80]}",
                 "elapsed_ms": 0,
                 "status": "error",
             })
@@ -527,7 +528,7 @@ def register_tools(mcp):
             return "\n".join(lines)
 
         except Exception as e:
-            return f"Sleep report status ERROR: {e}"
+            return f"Sleep report status ERROR: {redact_secrets(str(e))}"
 
 
 # ============================================================
