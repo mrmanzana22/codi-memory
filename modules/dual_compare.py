@@ -264,6 +264,22 @@ def compare_results(kind: str, sync_dict: dict, async_dict: dict,
                 "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
             }
 
+        # Expected legacy dedup: pre-DUAL-2 rows (write_mode unknown/empty)
+        # where one side saved and the other deduped.  Same dedup pattern,
+        # just missing the write_mode tag.
+        if write_mode in ("unknown", "", None):
+            is_dedup = (
+                (sync_action == "saved_new" and async_action == "skipped_duplicate")
+                or (async_action == "saved_new" and sync_action == "skipped_duplicate")
+            )
+            if is_dedup:
+                return {
+                    "match": True,
+                    "divergence_code": "expected_legacy_dedup",
+                    "diff_summary": f"expected dedup (legacy row): sync={sync_action}, async={async_action}",
+                    "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
+                }
+
         # Classify the divergence
         if async_action == "error":
             code = "async_failed"

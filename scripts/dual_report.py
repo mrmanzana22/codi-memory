@@ -151,7 +151,7 @@ def main(argv=None) -> int:
         f"WHERE {time_col} >= ? "
         f"  AND compare_status = 'computed' "
         f"  AND match = 0 "
-        f"  AND divergence_code NOT IN ('expected_shadow_dedup', 'expected_dual_dedup') "
+        f"  AND divergence_code NOT IN ('expected_shadow_dedup', 'expected_dual_dedup', 'expected_legacy_dedup') "
         f"GROUP BY divergence_code",
         (since,),
     ).fetchall()
@@ -169,7 +169,7 @@ def main(argv=None) -> int:
         f"FROM dual_compare_log "
         f"WHERE {time_col} >= ? "
         f"  AND compare_status = 'computed' "
-        f"  AND divergence_code IN ('expected_shadow_dedup', 'expected_dual_dedup') "
+        f"  AND divergence_code IN ('expected_shadow_dedup', 'expected_dual_dedup', 'expected_legacy_dedup') "
         f"GROUP BY divergence_code",
         (since,),
     ).fetchall()
@@ -233,6 +233,7 @@ def main(argv=None) -> int:
             "WHERE created_at >= ? "
             "  AND compare_status = 'pending' "
             "  AND write_mode = 'dual_ack' "
+            "  AND sync_compare_status = 'ok' "
             "ORDER BY age_seconds DESC",
             (since,),
         ).fetchall()
