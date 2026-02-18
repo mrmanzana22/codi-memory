@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Optional
 
 from modules.config import FTS_DB_PATH, now_iso
 from modules.tracing import get_trace_id
+from modules.secret_redact import redact_secrets
 
 
 @contextmanager
@@ -175,6 +176,9 @@ def instrument_mcp(mcp: Any) -> None:
                     args_size = _safe_len_bytes({"args": args, "kwargs": kwargs})
                     try:
                         result = await fn(*args, **kwargs)
+                        # Redact secrets from string responses before returning to client
+                        if isinstance(result, str):
+                            result = redact_secrets(result)
                         dur_ms = int((time.perf_counter() - t0) * 1000)
                         res_size = _safe_len_bytes(result)
                         log_tool_call(
@@ -216,6 +220,9 @@ def instrument_mcp(mcp: Any) -> None:
                 args_size = _safe_len_bytes({"args": args, "kwargs": kwargs})
                 try:
                     result = fn(*args, **kwargs)
+                    # Redact secrets from string responses before returning to client
+                    if isinstance(result, str):
+                        result = redact_secrets(result)
                     dur_ms = int((time.perf_counter() - t0) * 1000)
                     res_size = _safe_len_bytes(result)
                     log_tool_call(
@@ -366,3 +373,10 @@ def register_metrics_tools(mcp_server: Any) -> None:
         """Tool usage summary: call counts, success/fail rates, avg latency."""
         import json
         return json.dumps(tool_usage_summary(days=days), indent=2)
+
+    @mcp_server.tool()
+    def embed_cache_stats() -> str:
+        """Show embedding cache stats (hits, misses, hit rate, size)."""
+        import json
+        from modules.consolidation import get_embed_cache_info
+        return json.dumps(get_embed_cache_info(), indent=2)

@@ -22,6 +22,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+import hmac
+import logging
+
+_logger = logging.getLogger("codi-memory")
 
 # ============================================================
 # SCHEMA MIGRATIONS (D4) - must run BEFORE any module import
@@ -57,6 +61,7 @@ from modules import wiring
 from modules import assessment
 from modules import session_bridge
 from modules import sleep_loop
+from modules import write_queue
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -84,6 +89,7 @@ prospective.register_prospective_tools(mcp)
 assessment.register_assessment_tools(mcp)
 session_bridge.register_tools(mcp)
 sleep_loop.register_tools(mcp)
+write_queue.register_tools(mcp)
 
 # ============================================================
 # WIRE EVENT BUS (Thalamocortical Integration)
@@ -91,6 +97,78 @@ sleep_loop.register_tools(mcp)
 wiring.wire_event_bus()
 
 print(f"[codi-memory] All modules loaded. Tools registered. Event bus wired.")
+
+
+# ============================================================
+# HTTP SECURITY HELPERS (PR2 — C-03 + H-05)
+# ============================================================
+# Pure functions, importable and testable without starting the server.
+
+_DEFAULT_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def get_bind_host() -> str:
+    """Resolve bind host with safe defaults.
+
+    - Default: 127.0.0.1 (localhost only)
+    - If CODI_SERVER_HOST is 0.0.0.0 or ::, requires CODI_API_KEY
+    - Forces 127.0.0.1 + warning if binding remotely without API key
+    """
+    requested = os.getenv("CODI_SERVER_HOST", "127.0.0.1").strip()
+    api_key = os.getenv("CODI_API_KEY", "").strip()
+
+    if requested in ("0.0.0.0", "::"):
+        if not api_key:
+            _logger.warning(
+                "CODI_SERVER_HOST=%s without CODI_API_KEY -- forcing 127.0.0.1",
+                requested,
+            )
+            return "127.0.0.1"
+    return requested
+
+
+def get_allowed_hosts() -> set:
+    """Parse CODI_ALLOWED_HOSTS CSV into a set.
+
+    Default: localhost, 127.0.0.1, ::1.
+    Custom entries are added on top of the defaults (never replaces them).
+    """
+    raw = os.getenv("CODI_ALLOWED_HOSTS", "").strip()
+    hosts = set(_DEFAULT_ALLOWED_HOSTS)
+    if raw:
+        for h in raw.split(","):
+            h = h.strip().lower()
+            if h:
+                hosts.add(h)
+    return hosts
+
+
+def parse_host_header(host_header: str) -> str:
+    """Extract hostname from Host header, stripping port.
+
+    Handles: 'localhost:8000', '127.0.0.1:8765', '[::1]:8000', 'example.com'.
+    Returns lowercased hostname, or '' if missing/invalid.
+    """
+    if not host_header:
+        return ""
+    host_header = host_header.strip()
+    # IPv6 with brackets: [::1]:8000
+    if host_header.startswith("["):
+        bracket_end = host_header.find("]")
+        if bracket_end != -1:
+            return host_header[1:bracket_end].lower()
+        return ""
+    # host:port
+    if ":" in host_header:
+        return host_header.rsplit(":", 1)[0].lower()
+    return host_header.lower()
+
+
+def verify_api_key(provided: str, expected: str) -> bool:
+    """Timing-safe API key comparison using hmac.compare_digest."""
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 # ============================================================
@@ -114,12 +192,13 @@ if __name__ == "__main__":
         import time
 
         # ============================================================
-        # BASIC HTTP SECURITY (API KEY + RATE LIMIT + SIZE LIMIT)
+        # HTTP SECURITY (Host validation + API key + rate limit + size)
         # ============================================================
         CODI_API_KEY = os.getenv("CODI_API_KEY", "").strip()
         MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", "262144"))  # 256KB
         RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "60"))
 
+        _allowed_hosts = get_allowed_hosts()
         _rate_window = {}  # ip -> (window_start_epoch, count)
 
         def _client_ip(request) -> str:
@@ -130,29 +209,37 @@ if __name__ == "__main__":
 
         class SecurityMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request, call_next):
+                # 1. DNS rebinding protection (ALL routes, including /health)
+                host_header = request.headers.get("host", "")
+                hostname = parse_host_header(host_header)
+                if not hostname or hostname not in _allowed_hosts:
+                    return JSONResponse(
+                        {"error": "forbidden host"}, status_code=403
+                    )
+
                 path = request.url.path
 
-                # Always allow health checks
+                # 2. Health checks skip auth + rate-limit
                 if path == "/health":
                     return await call_next(request)
 
                 ip = _client_ip(request)
 
-                # Authentication:
+                # 3. Authentication (timing-safe):
                 # - If CODI_API_KEY is set, require it.
-                # - If not set, allow only localhost (safer default for personal use).
+                # - If not set, allow only localhost (safer default).
                 if CODI_API_KEY:
                     token = request.headers.get("x-api-key", "")
                     auth = request.headers.get("authorization", "")
                     if not token and auth.lower().startswith("bearer "):
                         token = auth.split(" ", 1)[1].strip()
-                    if token != CODI_API_KEY:
+                    if not verify_api_key(token, CODI_API_KEY):
                         return JSONResponse({"error": "unauthorized"}, status_code=401)
                 else:
                     if ip not in ("127.0.0.1", "::1"):
                         return JSONResponse({"error": "server not configured (CODI_API_KEY missing)"}, status_code=503)
 
-                # Rate limiting per IP (rolling 60s window)
+                # 4. Rate limiting per IP (rolling 60s window)
                 now = int(time.time())
                 window_start, count = _rate_window.get(ip, (now, 0))
                 if now - window_start >= 60:
@@ -162,7 +249,7 @@ if __name__ == "__main__":
                 if count > RATE_LIMIT_PER_MIN:
                     return JSONResponse({"error": "rate limited"}, status_code=429)
 
-                # Body size limit (best-effort using Content-Length)
+                # 5. Body size limit (best-effort using Content-Length)
                 if request.method in ("POST", "PUT", "PATCH"):
                     cl = request.headers.get("content-length")
                     if cl:
@@ -230,7 +317,9 @@ if __name__ == "__main__":
                 })
 
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
+                from modules.secret_redact import redact_secrets
+                _logger.error("recordatorio error: %s", e)
+                return JSONResponse({"error": redact_secrets(str(e))}, status_code=500)
 
         # Health check
         async def health(request):
@@ -297,7 +386,9 @@ if __name__ == "__main__":
                 })
 
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
+                from modules.secret_redact import redact_secrets
+                _logger.error("api_context error: %s", e)
+                return JSONResponse({"error": redact_secrets(str(e))}, status_code=500)
 
         async def api_memory(request):
             """POST /api/memory - Guarda una nueva memoria"""
@@ -348,7 +439,9 @@ if __name__ == "__main__":
                 })
 
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
+                from modules.secret_redact import redact_secrets
+                _logger.error("api_memory error: %s", e)
+                return JSONResponse({"error": redact_secrets(str(e))}, status_code=500)
 
         async def api_search(request):
             """GET /api/search?q=query&limit=5 - Busca memorias"""
@@ -380,10 +473,14 @@ if __name__ == "__main__":
                 })
 
             except Exception as e:
-                return JSONResponse({"error": str(e)}, status_code=500)
+                from modules.secret_redact import redact_secrets
+                _logger.error("api_search error: %s", e)
+                return JSONResponse({"error": redact_secrets(str(e))}, status_code=500)
 
         port = int(os.getenv("PORT", 8000))
-        print(f"[codi-memory] Starting MCP server on {transport} transport, port {port}")
+        host = get_bind_host()
+        print(f"[codi-memory] Starting MCP server on {transport} transport, {host}:{port}")
+        print(f"[codi-memory] Allowed hosts: {sorted(_allowed_hosts)}")
 
         # Rutas: MCP en /, API HTTP para n8n, recordatorios, health
         app = Starlette(routes=[
@@ -394,6 +491,6 @@ if __name__ == "__main__":
             Route("/health", health, methods=["GET"]),
             Mount("/", app=mcp.sse_app())
         ], middleware=[Middleware(SecurityMiddleware)])
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host=host, port=port)
     else:
         mcp.run()

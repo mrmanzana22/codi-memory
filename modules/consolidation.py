@@ -21,6 +21,7 @@ import json
 import sqlite3
 import uuid
 import math
+import functools
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -58,13 +59,35 @@ def _get_oai():
     return _oai_client
 
 
-def _embed_text(text: str) -> list:
-    """Generate embedding using text-embedding-3-small (1536 dims)."""
+@functools.lru_cache(maxsize=256)
+def _embed_text_cached(text: str) -> tuple:
+    """Generate embedding (cached). Returns tuple for hashability."""
     resp = _get_oai().embeddings.create(
         model="text-embedding-3-small",
         input=text
     )
-    return resp.data[0].embedding
+    return tuple(resp.data[0].embedding)
+
+
+def _embed_text(text: str) -> list:
+    """Generate embedding using text-embedding-3-small (1536 dims).
+
+    Results are LRU-cached (256 entries). Identical texts reuse
+    previous embeddings without an API call.
+    """
+    return list(_embed_text_cached(text))
+
+
+def get_embed_cache_info() -> dict:
+    """Return cache stats for _embed_text (hits, misses, size, maxsize)."""
+    info = _embed_text_cached.cache_info()
+    return {
+        "hits": info.hits,
+        "misses": info.misses,
+        "current_size": info.currsize,
+        "max_size": info.maxsize,
+        "hit_rate": f"{info.hits / (info.hits + info.misses) * 100:.1f}%" if (info.hits + info.misses) > 0 else "n/a",
+    }
 
 
 def _cosine_similarity(a: list, b: list) -> float:
@@ -676,6 +699,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
                 collection_name=COLLECTION_NAME,
                 payload={
                     "consolidation_status": "consolidated",
+                    "consolidated": True,
                     "consolidated_at": now,
                 },
                 points=batch,
@@ -690,6 +714,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
                         collection_name=COLLECTION_NAME,
                         payload={
                             "consolidation_status": "consolidated",
+                            "consolidated": True,
                             "consolidated_at": now,
                         },
                         points=[eid],

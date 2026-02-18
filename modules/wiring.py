@@ -28,9 +28,13 @@ import sys
 import os
 import math
 import time
+import logging
+import threading
 
 from modules.events import event_bus, Events
 from modules.config import now_iso
+
+_logger = logging.getLogger(__name__)
 
 # Track wiring state
 _wired = False
@@ -46,6 +50,10 @@ _SELF_MODEL_COOLDOWN = 120      # minimum seconds between refreshes
 
 # Importance string -> float map (from config - single source of truth)
 from modules.config import IMPORTANCE_WEIGHTS as IMPORTANCE_MAP, WM_IMPORTANCE_THRESHOLD
+
+# Spreading activation concurrency control (monkeypatchable for tests)
+_SPREADING_SEMAPHORE = threading.BoundedSemaphore(2)
+_SPREADING_SEMAPHORE_CAPACITY = 2
 
 
 # ============================================================
@@ -93,20 +101,38 @@ def _on_memory_retrieved(event_name: str, data: dict):
     what gets retrieved next time (associative priming).
     SAM model (Raaijmakers & Shiffrin 1981): co-activated memories
     contribute to associative context.
+
+    Spreading activation runs in a background thread (fire-and-forget)
+    to avoid blocking the recall() hot path. Results update activation
+    scores for FUTURE queries, not the current one.
     """
     try:
         retrieved_ids = data.get("retrieved_ids", [])
         result_count = data.get("result_count", 0)
-        query_topic = data.get("query", "")  # memory_core emits 'query', not 'query_topic'
+        query_topic = data.get("query", "")
 
-        # Only spread on meaningful retrievals (not empty results)
-        # Use recurrent_cycle for true re-entrant processing (Lamme 2006)
+        # Fire spreading activation in background (non-blocking)
         if result_count > 0 and retrieved_ids:
-            from modules.spreading import recurrent_cycle
-            from modules.config import SPREAD_DEFAULT_DEPTH, SPREAD_DEFAULT_FACTOR
-            recurrent_cycle(retrieved_ids[:3], cycles=SPREAD_DEFAULT_DEPTH, depth=1, factor=SPREAD_DEFAULT_FACTOR)
+            seed_ids = retrieved_ids[:3]
 
-        # Update attention schema with retrieval topic (coherence fix)
+            def _bg_spread():
+                sem = _SPREADING_SEMAPHORE  # Capture ref so release uses same object
+                if not sem.acquire(blocking=False):
+                    _logger.debug("spreading skipped: semaphore full")
+                    return
+                try:
+                    from modules.spreading import recurrent_cycle
+                    from modules.config import SPREAD_DEFAULT_DEPTH, SPREAD_DEFAULT_FACTOR
+                    recurrent_cycle(seed_ids, cycles=SPREAD_DEFAULT_DEPTH, depth=1, factor=SPREAD_DEFAULT_FACTOR)
+                except Exception as e:
+                    _logger.warning("bg spreading error: %s", e)
+                finally:
+                    sem.release()
+
+            t = threading.Thread(target=_bg_spread, daemon=True, name="spreading-bg")
+            t.start()
+
+        # Update attention schema synchronously (cheap, no I/O)
         if query_topic:
             _update_attention_schema(
                 focus=query_topic,
@@ -114,7 +140,7 @@ def _on_memory_retrieved(event_name: str, data: dict):
                 strength=0.5,
             )
     except Exception as e:
-        print(f"[wiring] _on_memory_retrieved error: {e}", file=sys.stderr)
+        _logger.warning("_on_memory_retrieved error: %s", e)
 
 
 # ============================================================
@@ -740,6 +766,14 @@ def wire_event_bus():
     event_bus.on(Events.RETRIEVAL_QUALITY, _on_retrieval_quality)
     event_bus.on(Events.CONTRADICTION_DETECTED, _on_contradiction_detected)
     event_bus.on(Events.RECONSOLIDATION_TRIGGERED, _on_reconsolidation_triggered)
+
+    # Bloque 2: PE -> Action handlers (flag-gated inside pe_actions)
+    try:
+        from modules.pe_actions import get_handlers as _pe_handlers
+        for evt, handler in _pe_handlers():
+            event_bus.on(evt, handler)
+    except Exception as e:
+        print(f"[wiring] PE action handlers not loaded: {e}", file=sys.stderr)
 
     _wired = True
     stats = event_bus.get_stats()
