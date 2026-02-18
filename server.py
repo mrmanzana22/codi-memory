@@ -56,12 +56,15 @@ from modules import working_memory
 from modules import interface
 from modules import spreading
 from modules import consolidation
+from modules import sharpe
+from modules import sharpe_insights
 from modules import prospective
 from modules import wiring
 from modules import assessment
 from modules import session_bridge
 from modules import sleep_loop
 from modules import write_queue
+from modules import tool_governance
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -85,18 +88,31 @@ working_memory.register_tools(mcp)
 interface.register_tools(mcp)
 spreading.register_tools(mcp)
 consolidation.register_consolidation_tools(mcp)
+sharpe.register_sharpe_tools(mcp)
+sharpe_insights.register_insights_tools(mcp)
 prospective.register_prospective_tools(mcp)
 assessment.register_assessment_tools(mcp)
 session_bridge.register_tools(mcp)
 sleep_loop.register_tools(mcp)
 write_queue.register_tools(mcp)
+tool_governance.register_governance_tool(mcp)
+
+# ============================================================
+# TOOL GOVERNANCE - Apply bundle-based visibility filter
+# ============================================================
+_toolset = tool_governance.resolve_toolset()
+_allowed = tool_governance.get_allowed_tools(_toolset)
+_total_before = len(mcp._tool_manager._tools)
+_removed_count, _removed_names = tool_governance.apply_allowlist(mcp, _allowed)
+_total_after = len(mcp._tool_manager._tools)
 
 # ============================================================
 # WIRE EVENT BUS (Thalamocortical Integration)
 # ============================================================
 wiring.wire_event_bus()
 
-print(f"[codi-memory] All modules loaded. Tools registered. Event bus wired.")
+print(f"[codi-memory] All modules loaded. Event bus wired.")
+print(f"[codi-memory] [toolset={_toolset}] visible={_total_after} hidden={_removed_count} (of {_total_before} total)")
 
 
 # ============================================================

@@ -31,6 +31,7 @@ data/
 .remember_mode
 .access_tracking_mode
 .destructive_guard
+.toolset
 qdrant_data/
 
 # Backups (G-02: timestamped backups contain PII)
