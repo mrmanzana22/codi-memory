@@ -5,7 +5,6 @@ FTS5 functions and add_memory_smart tool.
 
 import os
 import json
-import sqlite3
 
 
 from datetime import datetime
@@ -20,13 +19,12 @@ from modules.destructive_guard import (
     is_guard_enabled, compute_fingerprint,
     request_confirmation, validate_and_consume,
 )
+from modules.db_pool import get_conn
+
 
 def _fts_conn():
-    conn = sqlite3.connect(FTS_DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=3000")
-    return conn
+    """Return a pooled SQLite connection. Callers should NOT close it."""
+    return get_conn()
 
 from modules.utils import enrich_with_ownership
 from modules.events import event_bus, Events
@@ -51,24 +49,18 @@ def _index_memory_fts_raw(memory_id: str, content: str, category: str = "general
                           source: str = "experienced", importance: str = "medium"):
     """Raw FTS insert. Triggers sync FTS5 automatically. Raises on failure."""
     conn = _fts_conn()
-    try:
-        conn.execute("""
-            INSERT OR REPLACE INTO memories_text (memory_id, content, category, source, importance, created_at)
-            VALUES (?, ?, ?, ?, ?, datetime('now'))
-        """, (memory_id, content, category, source, importance))
-        conn.commit()
-    finally:
-        conn.close()
+    conn.execute("""
+        INSERT OR REPLACE INTO memories_text (memory_id, content, category, source, importance, created_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+    """, (memory_id, content, category, source, importance))
+    conn.commit()
 
 
 def _delete_memory_fts_raw(memory_id: str):
     """Raw FTS delete. Triggers sync FTS5 automatically. Raises on failure."""
     conn = _fts_conn()
-    try:
-        conn.execute("DELETE FROM memories_text WHERE memory_id = ?", (memory_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    conn.execute("DELETE FROM memories_text WHERE memory_id = ?", (memory_id,))
+    conn.commit()
 
 
 def index_memory_fts(memory_id: str, content: str, category: str = "general",
@@ -133,8 +125,6 @@ def queue_fts_op(memory_id: str, op: str, payload: dict = None, error: str = Non
     except Exception as e:
         print(f"[codi-memory] Error enqueuing FTS op: {e}")
         return {"ok": False, "error": str(e)}
-    finally:
-        conn.close()
 
 
 def process_fts_queue(limit: int = 50, max_attempts: int = 10) -> dict:
@@ -209,8 +199,6 @@ def process_fts_queue(limit: int = 50, max_attempts: int = 10) -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    finally:
-        conn.close()
 
 
 def fts_queue_stats() -> dict:
@@ -236,12 +224,22 @@ def fts_queue_stats() -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    finally:
-        conn.close()
 
 
 def search_fts(query: str, limit: int = 20) -> list:
-    """Busca en FTS5 usando BM25 ranking."""
+    """Busca en FTS5 usando BM25 ranking.
+
+    All user input is sanitized through fts_safety.sanitize_fts_query()
+    before reaching FTS5 MATCH. This prevents query injection (C-02).
+    """
+    from modules.fts_safety import sanitize_fts_query, clamp_fts_limit
+
+    safe_query = sanitize_fts_query(query)
+    if not safe_query:
+        return []
+
+    safe_limit = clamp_fts_limit(limit)
+
     conn = _fts_conn()
     try:
         results = conn.execute("""
@@ -250,13 +248,11 @@ def search_fts(query: str, limit: int = 20) -> list:
             WHERE content MATCH ?
             ORDER BY rank
             LIMIT ?
-        """, (query, limit)).fetchall()
+        """, (safe_query, safe_limit)).fetchall()
         return [{"memory_id": r[0], "content": r[1], "category": r[2],
                  "source": r[3], "bm25_rank": r[4]} for r in results]
     except Exception:
         return []
-    finally:
-        conn.close()
 
 
 def bm25_rank_to_score(rank: float) -> float:
@@ -293,7 +289,6 @@ def sync_fts_from_backup():
             conn = _fts_conn()
             conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
             conn.commit()
-            conn.close()
         except Exception:
             pass
         print(f"[codi-memory] Synced {count} memories to FTS index")
@@ -316,6 +311,19 @@ def sync_fts_from_backup():
 
 _contradiction_cooldown: dict = {}  # topic_key -> last_alert_iso
 _contradiction_session_count = 0
+
+
+def reset_contradiction_counter() -> None:
+    """Reset the per-session contradiction counter and cooldowns.
+
+    Called at session start (despertar_codi) so the rate limiter
+    doesn't carry over from previous sessions. Without this, after
+    CONTRADICTION_MAX_PER_SESSION detections the system permanently
+    stops detecting contradictions until MCP restart.
+    """
+    global _contradiction_session_count, _contradiction_cooldown
+    _contradiction_session_count = 0
+    _contradiction_cooldown.clear()
 
 
 def _inline_contradiction_check(
@@ -699,7 +707,6 @@ def sync_fts_index(dry_run: bool = False, confirm_token: str = "") -> str:
             conn = _fts_conn()
             row = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()
             doc_count = row[0] if row else 0
-            conn.close()
         except Exception:
             pass
 

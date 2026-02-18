@@ -1,0 +1,22 @@
+{
+  "bridge_grounded": true,
+  "has_prediction_errors": false,
+  "has_session_bridge": true,
+  "has_sleep_report": true,
+  "intentions_present": [
+    {
+      "action_prefix": "Deploy trading bot v2",
+      "priority": "high"
+    }
+  ],
+  "sections_present": [
+    "CURIOSIDADES (6 pendientes, 4 alta prioridad)",
+    "DEBUG_MARKER: Llegamos aqui antes del bloque 9",
+    "ESTADO EMOCIONAL",
+    "INTENCIONES PENDIENTES (2)",
+    "PREDICCION CONTEXTUAL",
+    "SESSION BRIDGE",
+    "SLEEP REPORT",
+    "WORKER STATUS: MISSING"
+  ]
+}

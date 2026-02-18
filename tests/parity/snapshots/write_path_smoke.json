@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "report_length_within_cap": true,
+  "report_line_count": 5,
+  "report_starts_with": "SLEEP REPORT (parity_test, 0ms",
+  "ticks_ok": 4,
+  "ticks_total": 4
+}

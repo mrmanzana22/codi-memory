@@ -87,7 +87,7 @@ def continuity_db(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.sleep_loop.FTS_DB_PATH", db_path)
     monkeypatch.setattr("modules.sleep_loop.DATA_DIR", str(tmp_path))
     monkeypatch.setattr("modules.sleep_loop.LOCK_FILE", str(tmp_path / "sleep_loop.lock"))
-    monkeypatch.setattr("modules.working_memory.FTS_DB_PATH", db_path)
+    monkeypatch.setattr("modules.db_pool.FTS_DB_PATH", db_path)
     monkeypatch.setattr("modules.working_memory._TABLES_INITIALIZED", False)
 
     return db_path

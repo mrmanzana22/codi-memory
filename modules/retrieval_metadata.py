@@ -138,8 +138,8 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
     Returns:
         {"fok_score": 0.0-1.0, "basis": str, "recommendation": "search"|"ask"|"uncertain"}
     """
-    import sqlite3
     import os
+    from modules.db_pool import get_conn
 
     fok = 0.5  # base
     basis_parts = ["base=0.5"]
@@ -148,14 +148,13 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
     failed_count = 0
     if fts_db_path and os.path.exists(fts_db_path):
         try:
-            conn = sqlite3.connect(fts_db_path)
+            conn = get_conn(fts_db_path)
             conn.execute("SELECT 1 FROM failed_searches LIMIT 1")
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM (SELECT 1 FROM failed_searches WHERE query LIKE ? ORDER BY created_at DESC LIMIT 50)",
                 (f"%{query[:30]}%",)
             )
             failed_count = cursor.fetchone()[0]
-            conn.close()
             if failed_count > 0:
                 penalty = min(0.3, failed_count * 0.1)
                 fok -= penalty
@@ -164,14 +163,11 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
             pass
 
     # 2. Check working memory for topic presence
-    # Auto-create wm_conn from fts_db_path if not provided
     wm_hit = False
     _wm_local = wm_conn
-    _close_wm = False
     if not _wm_local and fts_db_path and os.path.exists(fts_db_path):
         try:
-            _wm_local = sqlite3.connect(fts_db_path)
-            _close_wm = True
+            _wm_local = get_conn(fts_db_path)
         except Exception:
             pass
     if _wm_local:
@@ -187,12 +183,6 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
                 basis_parts.append(f"in_wm(+0.15)")
         except Exception:
             pass
-        finally:
-            if _close_wm and _wm_local:
-                try:
-                    _wm_local.close()
-                except Exception:
-                    pass
 
     # 3. Check retrieval buffer for similar past queries
     buffer_hits = sum(
@@ -353,14 +343,14 @@ def record_rcj(query: str, fok_predicted: float, actual_coverage: str,
         actual_top_activation: Highest activation score in results
         fts_db_path: Path to FTS database
     """
-    import sqlite3
     import os
+    from modules.db_pool import get_conn
 
     if not fts_db_path:
         fts_db_path = os.environ.get("FTS_DB_PATH", "memories_fts.db")
 
     try:
-        conn = sqlite3.connect(fts_db_path)
+        conn = get_conn(fts_db_path)
         _init_fok_calibration_table(conn)
         conn.execute(
             "INSERT INTO fok_calibration_log (query, fok_predicted, actual_coverage, actual_count, actual_top_activation, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -374,7 +364,6 @@ def record_rcj(query: str, fok_predicted: float, actual_coverage: str,
             )
         """)
         conn.commit()
-        conn.close()
     except Exception:
         pass
 
@@ -388,21 +377,20 @@ def get_fok_calibration(lookback: int = 100, fts_db_path: str = None) -> dict:
         - overconfidence_bias: average (predicted - actual_quality), >0 means overconfident
         - n_records: number of records used
     """
-    import sqlite3
     import os
+    from modules.db_pool import get_conn
 
     if not fts_db_path:
         fts_db_path = os.environ.get("FTS_DB_PATH", "memories_fts.db")
 
     try:
-        conn = sqlite3.connect(fts_db_path)
+        conn = get_conn(fts_db_path)
         _init_fok_calibration_table(conn)
         cursor = conn.execute(
             "SELECT fok_predicted, actual_coverage, actual_count, actual_top_activation FROM fok_calibration_log ORDER BY created_at DESC LIMIT ?",
             (lookback,)
         )
         rows = cursor.fetchall()
-        conn.close()
 
         if not rows:
             return {"mean_absolute_error": 0.0, "overconfidence_bias": 0.0, "n_records": 0}

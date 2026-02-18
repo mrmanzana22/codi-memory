@@ -1,0 +1,5 @@
+SLEEP REPORT (launchd, 3200ms)
+- prospective: OK (150ms) intention maintenance applied
+- health: OK (800ms) fts: queue empty; health: OK (127 mems)
+- consolidation: OK (1800ms) no output
+- homeostasis: OK (400ms) salience: decayed 5 mems; emotional: PAD shifted

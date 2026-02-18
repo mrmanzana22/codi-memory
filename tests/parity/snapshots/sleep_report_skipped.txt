@@ -1,0 +1,5 @@
+SLEEP REPORT (launchd, 7950ms)
+- prospective: OK (150ms) intention maintenance applied
+- health: OK (800ms) fts: queue empty
+- consolidation: OK (6500ms) light consolidation
+- homeostasis: FAIL (0ms) skipped (need 200ms, only 50ms left)

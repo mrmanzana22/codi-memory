@@ -1,0 +1,22 @@
+[
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "prospective"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "health"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "consolidation"
+  },
+  {
+    "ok": true,
+    "status": "over_budget",
+    "tick": "homeostasis"
+  }
+]

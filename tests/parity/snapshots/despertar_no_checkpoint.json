@@ -1,0 +1,15 @@
+{
+  "bridge_grounded": false,
+  "has_prediction_errors": false,
+  "has_session_bridge": false,
+  "has_sleep_report": false,
+  "intentions_present": [],
+  "sections_present": [
+    "CURIOSIDADES (6 pendientes, 4 alta prioridad)",
+    "DEBUG_MARKER: Llegamos aqui antes del bloque 9",
+    "ESTADO EMOCIONAL",
+    "INTENCIONES PENDIENTES (2)",
+    "PREDICCION CONTEXTUAL",
+    "WORKER STATUS: MISSING"
+  ]
+}

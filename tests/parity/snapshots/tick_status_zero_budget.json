@@ -1,0 +1,22 @@
+[
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "prospective"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "health"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "consolidation"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "homeostasis"
+  }
+]

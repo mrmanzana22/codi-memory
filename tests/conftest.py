@@ -48,7 +48,8 @@ def _isolate_sqlite(tmp_path, monkeypatch):
 
     # Patch FTS_DB_PATH in modules that import it directly (import aliasing fix)
     for mod in ["modules.memory_smart", "modules.memory_core",
-                "modules.dual_compare", "modules.write_queue"]:
+                "modules.dual_compare", "modules.write_queue",
+                "modules.db_pool"]:
         monkeypatch.setattr(f"{mod}.FTS_DB_PATH", db_path, raising=False)
 
     # Redirect flag files to tmp_path so .remember_mode / .write_mode on disk
@@ -70,6 +71,14 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
 
     yield
+
+    # Clean up db_pool connections so next test gets fresh connections
+    # pointing to its own tmp_path DB
+    try:
+        from modules.db_pool import close_thread_connections
+        close_thread_connections()
+    except Exception:
+        pass
 
 
 @pytest.fixture

@@ -1,0 +1,22 @@
+[
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "prospective"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "health"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "consolidation"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "homeostasis"
+  }
+]

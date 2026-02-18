@@ -8,27 +8,21 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
-import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
-from modules.config import FTS_DB_PATH, now_iso
+from modules.config import now_iso
 from modules.tracing import get_trace_id
 from modules.secret_redact import redact_secrets
+from modules.db_pool import get_conn
 
 
 @contextmanager
 def metrics_conn():
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=3.0)
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=3000")
-        yield conn
-    finally:
-        conn.close()
+    """Yield a pooled SQLite connection. Does NOT close on exit (pool manages lifecycle)."""
+    yield get_conn()
 
 
 def _ensure_tool_calls_schema(conn: sqlite3.Connection) -> None:

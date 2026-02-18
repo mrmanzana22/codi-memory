@@ -165,27 +165,24 @@ class EventBus:
         if not self._dirty_counts:
             return
         try:
-            db_path = self._get_db_path()
-            conn = sqlite3.connect(db_path, timeout=2)
-            try:
-                if not EventBus._event_tables_validated:
-                    conn.execute("SELECT 1 FROM event_counts LIMIT 0")
-                    EventBus._event_tables_validated = True
-                now = datetime.now().isoformat()
-                for event_name, increment in self._dirty_counts.items():
-                    conn.execute("""
-                        INSERT INTO event_counts (event, count, last_seen)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(event) DO UPDATE SET
-                            count = count + excluded.count,
-                            last_seen = excluded.last_seen
-                    """, (event_name, increment, now))
-                conn.commit()
-                self._dirty_counts.clear()
-                self._dirty_total = 0
-                self._last_flush = time.monotonic()
-            finally:
-                conn.close()
+            from modules.db_pool import get_conn
+            conn = get_conn(self._get_db_path())
+            if not EventBus._event_tables_validated:
+                conn.execute("SELECT 1 FROM event_counts LIMIT 0")
+                EventBus._event_tables_validated = True
+            now = datetime.now().isoformat()
+            for event_name, increment in self._dirty_counts.items():
+                conn.execute("""
+                    INSERT INTO event_counts (event, count, last_seen)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(event) DO UPDATE SET
+                        count = count + excluded.count,
+                        last_seen = excluded.last_seen
+                """, (event_name, increment, now))
+            conn.commit()
+            self._dirty_counts.clear()
+            self._dirty_total = 0
+            self._last_flush = time.monotonic()
         except Exception:
             pass  # Never block emit
 
@@ -197,12 +194,12 @@ class EventBus:
             db_path = self._get_db_path()
             if not os.path.exists(db_path):
                 return 0
-            conn = sqlite3.connect(db_path, timeout=2)
+            from modules.db_pool import get_conn
+            conn = get_conn(db_path)
             cursor = conn.execute(
                 "SELECT count FROM event_counts WHERE event = ?", (event_name,)
             )
             row = cursor.fetchone()
-            conn.close()
             return row[0] if row else 0
         except Exception:
             return 0

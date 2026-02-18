@@ -5,15 +5,15 @@ SQLite-backed (memories_fts.db), connection-per-call, WAL mode.
 """
 
 import json
-import sqlite3
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 from modules.config import (
-    FTS_DB_PATH, WORKING_MEMORY_MAX_ACTIVE,
+    WORKING_MEMORY_MAX_ACTIVE,
     now_col, now_iso, TZ_COL,
     get_qdrant, COLLECTION_NAME,
 )
+from modules.db_pool import get_conn
 
 # ============================================================
 # DATABASE INIT & CONNECTION
@@ -32,20 +32,13 @@ def _init_tables(conn: sqlite3.Connection):
 
 @contextmanager
 def _get_conn():
-    """Yield a SQLite connection with WAL pragmas. One connection per call."""
+    """Yield a pooled SQLite connection. PRAGMAs set by db_pool, not here."""
     global _TABLES_INITIALIZED
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=3000")
+    conn = get_conn()
     if not _TABLES_INITIALIZED:
         _init_tables(conn)
         _TABLES_INITIALIZED = True
-    try:
-        yield conn
-    finally:
-        conn.close()
+    yield conn
 
 
 # ============================================================
