@@ -111,3 +111,32 @@ def validate_and_consume(token: str, tool_name: str, fingerprint: str) -> Option
         del _pending_tokens[token]
 
     return None  # success
+
+
+def log_security_event(
+    event_type: str,
+    tool_name: str,
+    outcome: str = "executed",
+    payload_fingerprint: str = None,
+    details: dict = None,
+) -> None:
+    """Log a destructive operation to security_audit_log (best-effort).
+
+    INSERT-only, immutable audit trail for forensics/compliance.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        from modules.db_pool import get_conn
+        from modules.config import now_iso
+        conn = get_conn()
+        details_json = json.dumps(details, default=str) if details else None
+        conn.execute(
+            "INSERT INTO security_audit_log "
+            "(event_type, tool_name, payload_fingerprint, details_json, outcome, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (event_type, tool_name, payload_fingerprint, details_json, outcome, now_iso()),
+        )
+        conn.commit()
+    except Exception as e:
+        _logger.debug("security audit log write failed: %s", e)
