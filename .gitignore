@@ -29,6 +29,7 @@ data/
 .codi-memory.pid
 .write_mode
 .remember_mode
+.access_tracking_mode
 .destructive_guard
 qdrant_data/
 
