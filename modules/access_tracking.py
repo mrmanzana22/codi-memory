@@ -29,6 +29,10 @@ FLUSH_INTERVAL: float = 0.5       # seconds between flush ticks
 MAX_PENDING: int = 1000            # trigger immediate flush if exceeded
 MAX_OPS_PER_BATCH: int = 200       # chunk size per batch_update_points call
 
+# Alert thresholds (for check_health)
+ALERT_ERRORS_PER_HOUR: int = 5     # FAIL if errors > this in 1h
+ALERT_PENDING_MAX: int = 500       # WARN if pending stays above this
+
 
 def _read_mode() -> str:
     """Read access tracking mode from env var or dot-file."""
@@ -46,6 +50,7 @@ def _read_mode() -> str:
 
 
 ACCESS_TRACKING_MODE: str = _read_mode()
+_logger.info("access_tracking_mode=%s", ACCESS_TRACKING_MODE)
 
 # ============================================================
 # INTERNAL STATE
@@ -157,6 +162,35 @@ def get_access_tracking_stats() -> dict:
     """Return current stats + pending count."""
     with _lock:
         return {**_stats, "pending": len(_pending)}
+
+
+def check_health() -> dict:
+    """Return health verdict for canary monitoring.
+
+    Returns dict with:
+        mode: current tracking mode
+        verdict: "PASS" | "WARN" | "FAIL"
+        reason: human-readable explanation
+        stats: full stats snapshot
+    """
+    stats = get_access_tracking_stats()
+    mode = ACCESS_TRACKING_MODE
+
+    if mode == "legacy":
+        return {"mode": mode, "verdict": "PASS", "reason": "legacy mode (no batching)", "stats": stats}
+
+    errors = stats.get("errors", 0)
+    dropped = stats.get("dropped", 0)
+    pending = stats.get("pending", 0)
+
+    if errors > ALERT_ERRORS_PER_HOUR:
+        return {"mode": mode, "verdict": "FAIL", "reason": f"errors={errors} > {ALERT_ERRORS_PER_HOUR}", "stats": stats}
+    if dropped > 0:
+        return {"mode": mode, "verdict": "WARN", "reason": f"dropped={dropped} (data loss)", "stats": stats}
+    if pending > ALERT_PENDING_MAX:
+        return {"mode": mode, "verdict": "WARN", "reason": f"pending={pending} > {ALERT_PENDING_MAX}", "stats": stats}
+
+    return {"mode": mode, "verdict": "PASS", "reason": "healthy", "stats": stats}
 
 
 def shutdown() -> None:
