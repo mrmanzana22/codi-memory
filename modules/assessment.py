@@ -553,6 +553,30 @@ def format_assessment(assessment: Dict[str, Any]) -> str:
 
 
 # ============================================================
+# SLEEP TICK LIVENESS (CC-4)
+# ============================================================
+
+def get_last_sleep_tick_age(db_path: str = None) -> Optional[float]:
+    """Return hours since last sleep_tick_* entry in tool_calls, or None.
+
+    Used by CC-4 consciousness contract and health/SLO monitoring.
+    """
+    from datetime import datetime
+    from modules.db_pool import get_conn
+    conn = get_conn(db_path)
+    row = conn.execute(
+        "SELECT started_at FROM tool_calls "
+        "WHERE tool_name LIKE 'sleep_tick_%' "
+        "ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    last = datetime.fromisoformat(str(row[0]))
+    age_hours = (datetime.now() - last).total_seconds() / 3600
+    return age_hours
+
+
+# ============================================================
 # MCP TOOL REGISTRATION
 # ============================================================
 

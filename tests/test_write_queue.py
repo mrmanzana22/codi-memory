@@ -310,7 +310,7 @@ class TestRetry:
 
         status = get_write_job_status(r["job_id"], db_path=queue_db)
         assert status["status"] == "done"
-        assert status["completed_at"] is not None
+        assert status["timestamps"]["completed_at"] is not None
 
 
 # ============================================================
@@ -388,7 +388,7 @@ class TestStatus:
         mark_job_done(job_id, db_path=queue_db)
         s3 = get_write_job_status(job_id, db_path=queue_db)
         assert s3["status"] == "done"
-        assert s3["completed_at"] is not None
+        assert s3["timestamps"]["completed_at"] is not None
 
 
 # ============================================================

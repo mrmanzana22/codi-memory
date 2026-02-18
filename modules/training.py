@@ -1,6 +1,37 @@
 import json
+import logging
 from datetime import datetime
 from modules.config import supabase, memory, USER_ID, now_iso
+
+_logger = logging.getLogger(__name__)
+
+
+def _audit_supabase_op(
+    operation: str,
+    table: str,
+    row_count: int = None,
+    outcome: str = "executed",
+) -> None:
+    """Log a Supabase operation to security_audit_log (best-effort).
+
+    Provides audit trail for compliance: who accessed what, when.
+    """
+    try:
+        from modules.db_pool import get_conn
+        conn = get_conn()
+        details = {"table": table}
+        if row_count is not None:
+            details["rows"] = row_count
+        conn.execute(
+            "INSERT INTO security_audit_log "
+            "(event_type, tool_name, details_json, outcome, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("supabase_access", f"training.{operation}",
+             json.dumps(details), outcome, now_iso()),
+        )
+        conn.commit()
+    except Exception as e:
+        _logger.debug("audit log write failed: %s", e)
 
 
 def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: str) -> str:

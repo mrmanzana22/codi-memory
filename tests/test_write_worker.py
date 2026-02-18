@@ -279,7 +279,7 @@ class TestDrainTick:
         with patch.object(ww, "process_one_job", side_effect=fake_process):
             drained = ww.drain_tick(max_jobs=10, max_seconds=20)
 
-        assert drained == 3
+        assert drained["processed"] == 3
 
     def test_drain_respects_max_jobs(self, worker_db):
         """drain_tick() stops at max_jobs even if more work exists."""
@@ -288,7 +288,7 @@ class TestDrainTick:
         with patch.object(ww, "process_one_job", return_value=True):
             drained = ww.drain_tick(max_jobs=5, max_seconds=60)
 
-        assert drained == 5
+        assert drained["processed"] == 5
 
     def test_drain_stops_on_empty_queue(self, worker_db):
         """drain_tick() returns 0 when queue is empty."""
@@ -297,7 +297,7 @@ class TestDrainTick:
         with patch.object(ww, "process_one_job", return_value=False):
             drained = ww.drain_tick(max_jobs=10, max_seconds=20)
 
-        assert drained == 0
+        assert drained["processed"] == 0
 
 
 # ============================================================
