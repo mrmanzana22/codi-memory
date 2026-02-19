@@ -456,9 +456,32 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
         pass
 
 
+def _compute_dedup_threshold(importance: str = "medium") -> float:
+    """Hippocampal-inspired dynamic dedup threshold.
+
+    Emotional arousal and importance raise the bar for dedup,
+    mirroring amygdala-modulated encoding (LaBar & Cabeza 2006).
+
+    Base:  0.90
+    Arousal boost:  up to +0.05 when |arousal| > 0.3
+    Importance boost:  critical +0.05, high +0.03
+    Clamped to [0.85, 0.97]
+    """
+    base = 0.90
+    try:
+        from modules.config import _emotional_state
+        arousal = abs(_emotional_state["current"].get("arousal", 0.0))
+        if arousal > 0.3:
+            base += min(0.05, (arousal - 0.3) * 0.07)
+    except Exception:
+        pass
+    base += {"critical": 0.05, "high": 0.03}.get(importance, 0.0)
+    return min(0.97, max(0.85, round(base, 3)))
+
+
 def add_memory_smart(content: str, category: str = "general",
                      source: str = "experienced", importance: str = "medium",
-                     dedup_threshold: float = 0.90,
+                     dedup_threshold: float = 0.0,
                      relate_threshold: float = 0.75) -> str:
     """
     Guarda memoria con deduplicacion inteligente.
@@ -469,13 +492,17 @@ def add_memory_smart(content: str, category: str = "general",
         category: Categoria (identidad, aprendizaje, episodio, proyecto, general)
         source: Como obtuve esta memoria (experienced, told, learned, inferred)
         importance: Importancia (critical, high, medium, low)
-        dedup_threshold: Umbral para considerar duplicado (default 0.90)
+        dedup_threshold: Umbral para considerar duplicado (0 = auto via PAD+importance)
         relate_threshold: Umbral para marcar como relacionada (default 0.75)
 
     Returns:
         Resultado de la operacion con explicacion
     """
     try:
+        # Resolve dynamic dedup threshold (amygdala-modulated encoding)
+        if dedup_threshold <= 0:
+            dedup_threshold = _compute_dedup_threshold(importance)
+
         # 1. Buscar memorias similares
         similar_results = memory.search(query=content, user_id=USER_ID, limit=3)
         contradiction_result = None  # Phase 5: set by inline check if similar found
@@ -492,9 +519,10 @@ def add_memory_smart(content: str, category: str = "general",
                 return json.dumps({
                     "action": "skipped_duplicate",
                     "score": round(top_score, 3),
+                    "dedup_threshold_used": dedup_threshold,
                     "existing_memory": top_text,
                     "existing_id": top_id,
-                    "message": f"Memoria ya existe (similitud {top_score:.2f})"
+                    "message": f"Memoria ya existe (similitud {top_score:.2f}, threshold {dedup_threshold:.2f})"
                 }, ensure_ascii=False)
 
             # Phase 5: Inline contradiction check (Kumaran & Maguire 2007)
