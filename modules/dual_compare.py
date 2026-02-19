@@ -252,17 +252,27 @@ def compare_results(kind: str, sync_dict: dict, async_dict: dict,
                 "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
             }
 
-        # Expected dual_ack dedup: async saves first, sync sees the duplicate.
-        # Inverted direction from shadow mode.
-        if (write_mode == "dual_ack"
-                and async_action == "saved_new"
-                and sync_action == "skipped_duplicate"):
-            return {
-                "match": True,
-                "divergence_code": "expected_dual_dedup",
-                "diff_summary": "expected in dual_ack: async saved then sync deduped",
-                "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
-            }
+        # Expected dual_ack dedup: either direction is valid because
+        # the bg sync-compare thread and async worker race.
+        # Normal: async saves first, sync dedupes.
+        # Race:   sync (bg compare) saves first, async dedupes.
+        if write_mode == "dual_ack":
+            if (async_action == "saved_new"
+                    and sync_action == "skipped_duplicate"):
+                return {
+                    "match": True,
+                    "divergence_code": "expected_dual_dedup",
+                    "diff_summary": "expected in dual_ack: async saved then sync deduped",
+                    "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
+                }
+            if (sync_action == "saved_new"
+                    and async_action == "skipped_duplicate"):
+                return {
+                    "match": True,
+                    "divergence_code": "expected_dual_dedup",
+                    "diff_summary": "expected in dual_ack: sync saved then async deduped (race)",
+                    "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
+                }
 
         # Expected legacy dedup: pre-DUAL-2 rows (write_mode unknown/empty)
         # where one side saved and the other deduped.  Same dedup pattern,
