@@ -1,3 +1,4 @@
+import atexit
 import json
 import logging
 import os
@@ -32,11 +33,42 @@ _WRITE_MODE_FILE = os.path.join(_PROJECT_ROOT, ".write_mode")
 _REMEMBER_MODE_FILE = os.path.join(_PROJECT_ROOT, ".remember_mode")
 
 # Sync-compare thread limits (module-level for monkeypatching in tests)
-_SYNC_COMPARE_SEMAPHORE = threading.BoundedSemaphore(3)
-_SYNC_COMPARE_SEMAPHORE_CAPACITY = 3
+_SYNC_COMPARE_SEMAPHORE = threading.BoundedSemaphore(5)
+_SYNC_COMPARE_SEMAPHORE_CAPACITY = 5
 _SYNC_COMPARE_TIMEOUT = 90  # seconds
 _SYNC_COMPARE_ACTIVE = 0
 _SYNC_COMPARE_LOCK = threading.Lock()
+_SYNC_COMPARE_THREADS: list = []  # track live bg threads for drain
+
+_DRAIN_TIMEOUT = 10  # max seconds to wait for compare threads on shutdown
+
+
+def drain_sync_compares(timeout: float = 0) -> int:
+    """Wait for in-flight sync-compare threads to finish.
+
+    Called by atexit or manually.  Returns number of threads that
+    were still alive after timeout (0 = clean drain).
+    """
+    t = timeout or _DRAIN_TIMEOUT
+    deadline = __import__("time").time() + t
+    alive = 0
+    for th in list(_SYNC_COMPARE_THREADS):
+        remaining = max(0, deadline - __import__("time").time())
+        if remaining <= 0:
+            break
+        th.join(timeout=remaining)
+        if th.is_alive():
+            alive += 1
+    # Clean up dead refs
+    _SYNC_COMPARE_THREADS[:] = [th for th in _SYNC_COMPARE_THREADS if th.is_alive()]
+    if alive:
+        _logger.warning("[drain] %d sync-compare threads still alive after %.1fs", alive, t)
+    else:
+        _logger.info("[drain] all sync-compare threads drained cleanly")
+    return alive
+
+
+atexit.register(drain_sync_compares)
 
 def _get_write_mode() -> str:
     mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
@@ -440,8 +472,12 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                         _iface._SYNC_COMPARE_ACTIVE -= 1
                     sem.release()
 
-            bg_thread = threading.Thread(target=_bg_sync_compare, daemon=True)
+            bg_thread = threading.Thread(target=_bg_sync_compare, daemon=True,
+                                        name=f"sync-compare-{job_id[:8]}")
             bg_thread.start()
+            _SYNC_COMPARE_THREADS.append(bg_thread)
+            # Prune dead threads to prevent unbounded list growth
+            _SYNC_COMPARE_THREADS[:] = [t for t in _SYNC_COMPARE_THREADS if t.is_alive()]
 
         elif write_mode == "shadow":
             # Shadow: sync first, then enqueue + record dual compare

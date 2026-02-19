@@ -280,6 +280,7 @@ def process_one_job(lease_seconds: int = DEFAULT_LEASE_SECONDS) -> bool:
         log_job_completion(job_id, kind, "canceled", attempts,
                            error_class="CancelTombstone",
                            error_msg="cancel_requested before execution")
+        _dual_compare_hook(job_id, error="canceled", failure_reason="cancel_tombstone")
         _logger.info("%s %s canceled (tombstone, pre-exec)", kind, job_id[:8])
         return True
 
@@ -302,6 +303,7 @@ def process_one_job(lease_seconds: int = DEFAULT_LEASE_SECONDS) -> bool:
         log_job_completion(job_id, kind, "canceled", attempts,
                            error_class="CancelTombstone",
                            error_msg="cancel_requested before execution (post-start)")
+        _dual_compare_hook(job_id, error="canceled", failure_reason="cancel_tombstone")
         _logger.info("%s %s canceled (tombstone, post-start)", kind, job_id[:8])
         return True
 

@@ -530,8 +530,15 @@ def compute_comparison_for_job(job_id: str, db_path: str = None) -> Optional[dic
 
         sync_dict = json.loads(sync_json)
 
+        # Cancel tombstone: job was canceled, not a real divergence
+        if row["failure_reason"] == "cancel_tombstone":
+            result = {
+                "match": True,
+                "divergence_code": "canceled_tombstone",
+                "diff_summary": "async canceled via tombstone (expected)",
+            }
         # If async failed, mark as divergence
-        if row["async_last_error"] and not async_json:
+        elif row["async_last_error"] and not async_json:
             result = {
                 "match": False,
                 "divergence_code": "async_failed",

@@ -169,7 +169,7 @@ def main(argv=None) -> int:
         f"FROM dual_compare_log "
         f"WHERE {time_col} >= ? "
         f"  AND compare_status = 'computed' "
-        f"  AND divergence_code IN ('expected_shadow_dedup', 'expected_dual_dedup', 'expected_legacy_dedup') "
+        f"  AND divergence_code IN ('expected_shadow_dedup', 'expected_dual_dedup', 'expected_legacy_dedup', 'canceled_tombstone') "
         f"GROUP BY divergence_code",
         (since,),
     ).fetchall()
