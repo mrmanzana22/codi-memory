@@ -1,3 +1,22 @@
+[project]
+name = "codi-memory"
+version = "1.0.0"
+description = "MCP memory server with cognitive architecture for Codi AI"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+markers = [
+    "battery: Task Battery cognitive integration tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pyiceberg.*",
+    "ignore::DeprecationWarning:backoff.*",
+]
+
 [tool.bandit]
 # Exclude test files and virtual environments
 exclude_dirs = ["tests", "venv", "claude-code-server"]
