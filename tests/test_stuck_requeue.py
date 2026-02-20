@@ -13,7 +13,9 @@ ignore recent, started_at vs claimed_at distinction.
 
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from modules.config import now_col
 
 import pytest
 
@@ -47,7 +49,7 @@ def _insert_running_job(
     lease_until: str = None,
 ):
     """Insert a job directly in 'running' state for testing."""
-    now = datetime.now()
+    now = now_col()
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO write_queue "
@@ -99,7 +101,7 @@ class TestReapStuckJobs:
         """Job stuck >180s with attempts < max_attempts -> requeued."""
         from modules.write_queue import reap_stuck_jobs
 
-        old_started = (datetime.now() - timedelta(seconds=240)).isoformat()
+        old_started = (now_col() - timedelta(seconds=240)).isoformat()
         _insert_running_job(
             queue_db, job_id="stuck-requeue",
             attempts=2, max_attempts=8,
@@ -126,7 +128,7 @@ class TestReapStuckJobs:
         """Job stuck >180s with attempts >= max_attempts -> dead."""
         from modules.write_queue import reap_stuck_jobs
 
-        old_started = (datetime.now() - timedelta(seconds=300)).isoformat()
+        old_started = (now_col() - timedelta(seconds=300)).isoformat()
         _insert_running_job(
             queue_db, job_id="stuck-dead",
             attempts=8, max_attempts=8,
@@ -150,7 +152,7 @@ class TestReapStuckJobs:
         """Job started <180s ago -> NOT touched."""
         from modules.write_queue import reap_stuck_jobs
 
-        recent_started = (datetime.now() - timedelta(seconds=60)).isoformat()
+        recent_started = (now_col() - timedelta(seconds=60)).isoformat()
         _insert_running_job(
             queue_db, job_id="recent-job",
             attempts=1, max_attempts=8,
@@ -174,8 +176,8 @@ class TestReapStuckJobs:
         """
         from modules.write_queue import reap_stuck_jobs
 
-        old_claimed = (datetime.now() - timedelta(seconds=600)).isoformat()
-        recent_started = (datetime.now() - timedelta(seconds=30)).isoformat()
+        old_claimed = (now_col() - timedelta(seconds=600)).isoformat()
+        recent_started = (now_col() - timedelta(seconds=30)).isoformat()
 
         _insert_running_job(
             queue_db, job_id="old-claim-new-start",
