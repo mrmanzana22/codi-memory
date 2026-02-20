@@ -1,0 +1,910 @@
+{
+  "generated_at": "2026-02-16T17:56:48.689434+00:00",
+  "period_days": 30,
+  "data_range": {
+    "first": "2026-02-08T12:39:50.167876-05:00",
+    "last": "2026-02-16T12:45:58.269094-05:00"
+  },
+  "total_calls": 413,
+  "tools": [
+    {
+      "count": 118,
+      "p50": 3624,
+      "p95": 7479,
+      "p99": 41373,
+      "max": 71697,
+      "avg": 5112,
+      "error_rate": 0.0,
+      "tool": "despertar_codi",
+      "is_critical": true,
+      "slo_status": "VIOLATION",
+      "slo_violations": [
+        "p99(41373ms > 15000ms)"
+      ]
+    },
+    {
+      "count": 100,
+      "p50": 36249,
+      "p95": 79218,
+      "p99": 302075,
+      "max": 302075,
+      "avg": 36686,
+      "error_rate": 0.0,
+      "tool": "remember",
+      "is_critical": true,
+      "slo_status": "VIOLATION",
+      "slo_violations": [
+        "p50(36249ms > 2000ms)",
+        "p95(79218ms > 5000ms)",
+        "p99(302075ms > 10000ms)"
+      ]
+    },
+    {
+      "count": 79,
+      "p50": 2179,
+      "p95": 6145,
+      "p99": 34250,
+      "max": 34250,
+      "avg": 3238,
+      "error_rate": 0.0,
+      "tool": "recall",
+      "is_critical": true,
+      "slo_status": "VIOLATION",
+      "slo_violations": [
+        "p99(34250ms > 12000ms)"
+      ]
+    },
+    {
+      "count": 40,
+      "p50": 1983,
+      "p95": 4354,
+      "p99": 5494,
+      "max": 5494,
+      "avg": 2103,
+      "error_rate": 0.0,
+      "tool": "search_memory",
+      "is_critical": true,
+      "slo_status": "OK",
+      "slo_violations": []
+    },
+    {
+      "count": 17,
+      "p50": 43750,
+      "p95": 63598,
+      "p99": 63598,
+      "max": 63598,
+      "avg": 41668,
+      "error_rate": 0.0,
+      "tool": "checkpoint_memoria",
+      "is_critical": true,
+      "slo_status": "VIOLATION",
+      "slo_violations": [
+        "p50(43750ms > 2000ms)",
+        "p95(63598ms > 5000ms)",
+        "p99(63598ms > 10000ms)"
+      ]
+    },
+    {
+      "count": 15,
+      "p50": 39418,
+      "p95": 49489,
+      "p99": 49489,
+      "max": 49489,
+      "avg": 32305,
+      "error_rate": 0.0,
+      "tool": "add_memory",
+      "is_critical": true,
+      "slo_status": "VIOLATION",
+      "slo_violations": [
+        "p50(39418ms > 2000ms)",
+        "p95(49489ms > 5000ms)",
+        "p99(49489ms > 10000ms)"
+      ]
+    },
+    {
+      "count": 6,
+      "p50": 34573,
+      "p95": 147463,
+      "p99": 147463,
+      "max": 147463,
+      "avg": 51678,
+      "error_rate": 0.0,
+      "tool": "flush_session",
+      "is_critical": true,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 5,
+      "p50": 582,
+      "p95": 1826,
+      "p99": 1826,
+      "max": 1826,
+      "avg": 815,
+      "error_rate": 0.0,
+      "tool": "correct_memory",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 4,
+      "p50": 6,
+      "p95": 7,
+      "p99": 7,
+      "max": 7,
+      "avg": 5,
+      "error_rate": 0.0,
+      "tool": "get_working_memory",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 3,
+      "p50": 2510,
+      "p95": 29262,
+      "p99": 29262,
+      "max": 29262,
+      "avg": 11381,
+      "error_rate": 0.0,
+      "tool": "add_memory_smart",
+      "is_critical": true,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 3,
+      "p50": 819,
+      "p95": 834,
+      "p99": 834,
+      "max": 834,
+      "avg": 796,
+      "error_rate": 0.0,
+      "tool": "guardar_ejemplo_training",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 3,
+      "p50": 12465,
+      "p95": 21484,
+      "p99": 21484,
+      "max": 21484,
+      "avg": 11669,
+      "error_rate": 0.0,
+      "tool": "marcar_mantenimiento_hecho",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 2,
+      "p50": 3,
+      "p95": 3,
+      "p99": 3,
+      "max": 3,
+      "avg": 2,
+      "error_rate": 0.0,
+      "tool": "ver_intenciones",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 78,
+      "p95": 78,
+      "p99": 78,
+      "max": 78,
+      "avg": 78,
+      "error_rate": 0.0,
+      "tool": "assessment_report",
+      "is_critical": true,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 20883,
+      "p95": 20883,
+      "p99": 20883,
+      "max": 20883,
+      "avg": 20883,
+      "error_rate": 0.0,
+      "tool": "consolidate_recent",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 3199,
+      "p95": 3199,
+      "p99": 3199,
+      "max": 3199,
+      "avg": 3199,
+      "error_rate": 0.0,
+      "tool": "context_snapshot",
+      "is_critical": true,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 3,
+      "p95": 3,
+      "p99": 3,
+      "max": 3,
+      "avg": 3,
+      "error_rate": 0.0,
+      "tool": "crear_intencion",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 8689,
+      "p95": 8689,
+      "p99": 8689,
+      "max": 8689,
+      "avg": 8689,
+      "error_rate": 0.0,
+      "tool": "dream_consolidation",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0,
+      "avg": 0,
+      "error_rate": 0.0,
+      "tool": "evaluar_triggers",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 200,
+      "p95": 200,
+      "p99": 200,
+      "max": 200,
+      "avg": 200,
+      "error_rate": 0.0,
+      "tool": "get_activation_map",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 625,
+      "p95": 625,
+      "p99": 625,
+      "max": 625,
+      "avg": 625,
+      "error_rate": 0.0,
+      "tool": "get_consolidation_stats",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 348,
+      "p95": 348,
+      "p99": 348,
+      "max": 348,
+      "avg": 348,
+      "error_rate": 0.0,
+      "tool": "get_critical_memories",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 384,
+      "p95": 384,
+      "p99": 384,
+      "max": 384,
+      "avg": 384,
+      "error_rate": 0.0,
+      "tool": "get_high_salience_memories",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0,
+      "avg": 0,
+      "error_rate": 0.0,
+      "tool": "get_workspace_state",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 1152,
+      "p95": 1152,
+      "p99": 1152,
+      "max": 1152,
+      "avg": 1152,
+      "error_rate": 0.0,
+      "tool": "identify_knowledge_gaps",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0,
+      "avg": 0,
+      "error_rate": 0.0,
+      "tool": "listar_triggers",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 2,
+      "p95": 2,
+      "p99": 2,
+      "max": 2,
+      "avg": 2,
+      "error_rate": 0.0,
+      "tool": "session_bridge_status",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 892,
+      "p95": 892,
+      "p99": 892,
+      "max": 892,
+      "avg": 892,
+      "error_rate": 0.0,
+      "tool": "ver_libro",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0,
+      "avg": 0,
+      "error_rate": 0.0,
+      "tool": "ver_recordatorios_externos",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 0,
+      "p95": 0,
+      "p99": 0,
+      "max": 0,
+      "avg": 0,
+      "error_rate": 0.0,
+      "tool": "verificar_mantenimiento",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    },
+    {
+      "count": 1,
+      "p50": 4171,
+      "p95": 4171,
+      "p99": 4171,
+      "max": 4171,
+      "avg": 4171,
+      "error_rate": 0.0,
+      "tool": "verificar_salud_memoria",
+      "is_critical": false,
+      "slo_status": "no_slo",
+      "slo_violations": []
+    }
+  ],
+  "outliers": {
+    "despertar_codi": [
+      {
+        "started_at": "2026-02-12T09:50:02.619463-05:00",
+        "duration_ms": 71697,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T10:48:01.126458-05:00",
+        "duration_ms": 41373,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T12:39:27.282482-05:00",
+        "duration_ms": 16699,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T10:04:41.014547-05:00",
+        "duration_ms": 11164,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T15:43:08.086397-05:00",
+        "duration_ms": 8117,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T12:24:27.660809-05:00",
+        "duration_ms": 7479,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-11T15:40:24.961383-05:00",
+        "duration_ms": 7443,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T08:06:06.546368-05:00",
+        "duration_ms": 7439,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-09T17:03:00.474995-05:00",
+        "duration_ms": 7320,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T08:02:08.488710-05:00",
+        "duration_ms": 7106,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "recall": [
+      {
+        "started_at": "2026-02-12T10:37:25.204588-05:00",
+        "duration_ms": 34250,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-12T09:51:20.188888-05:00",
+        "duration_ms": 33980,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-12T10:48:50.112924-05:00",
+        "duration_ms": 13612,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-10T08:04:29.213824-05:00",
+        "duration_ms": 6145,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-10T08:12:50.251096-05:00",
+        "duration_ms": 5899,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-14T15:00:50.862606-05:00",
+        "duration_ms": 4745,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-13T11:10:36.333504-05:00",
+        "duration_ms": 4133,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-16T09:29:27.939936-05:00",
+        "duration_ms": 4101,
+        "session_id": "889bc2d1b874",
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-14T20:42:55.408925-05:00",
+        "duration_ms": 3725,
+        "session_id": null,
+        "tag": "macro:recall"
+      },
+      {
+        "started_at": "2026-02-13T17:34:23.959808-05:00",
+        "duration_ms": 3377,
+        "session_id": null,
+        "tag": "macro:recall"
+      }
+    ],
+    "remember": [
+      {
+        "started_at": "2026-02-13T11:56:18.136454-05:00",
+        "duration_ms": 302075,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-13T12:01:20.327994-05:00",
+        "duration_ms": 88868,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-16T11:35:19.172551-05:00",
+        "duration_ms": 81855,
+        "session_id": "9d427813ebf3",
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-12T08:09:24.913693-05:00",
+        "duration_ms": 80744,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-12T09:16:36.412110-05:00",
+        "duration_ms": 79218,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-11T15:57:15.461059-05:00",
+        "duration_ms": 74815,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-12T09:05:40.394448-05:00",
+        "duration_ms": 62567,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-12T13:11:19.620325-05:00",
+        "duration_ms": 58743,
+        "session_id": null,
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-16T09:47:50.000736-05:00",
+        "duration_ms": 57009,
+        "session_id": "d95b0d3aea92",
+        "tag": "macro:remember"
+      },
+      {
+        "started_at": "2026-02-10T16:08:55.839668-05:00",
+        "duration_ms": 56512,
+        "session_id": null,
+        "tag": "macro:remember"
+      }
+    ],
+    "search_memory": [
+      {
+        "started_at": "2026-02-10T21:28:27.619613-05:00",
+        "duration_ms": 5494,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T10:28:28.272281-05:00",
+        "duration_ms": 4354,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T19:02:08.609172-05:00",
+        "duration_ms": 4298,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T19:02:26.654639-05:00",
+        "duration_ms": 3004,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T19:02:19.664379-05:00",
+        "duration_ms": 2907,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T16:55:08.824299-05:00",
+        "duration_ms": 2844,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T14:09:25.532449-05:00",
+        "duration_ms": 2770,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-14T15:01:14.415471-05:00",
+        "duration_ms": 2586,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T13:56:28.217737-05:00",
+        "duration_ms": 2519,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T17:00:22.700864-05:00",
+        "duration_ms": 2482,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "checkpoint_memoria": [
+      {
+        "started_at": "2026-02-13T15:43:35.150111-05:00",
+        "duration_ms": 63598,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T22:09:56.667194-05:00",
+        "duration_ms": 57494,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T22:30:46.414343-05:00",
+        "duration_ms": 55658,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T13:19:25.196803-05:00",
+        "duration_ms": 51429,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T08:06:45.175281-05:00",
+        "duration_ms": 51250,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T16:03:29.085486-05:00",
+        "duration_ms": 50547,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T23:45:58.806672-05:00",
+        "duration_ms": 48766,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T15:13:19.810898-05:00",
+        "duration_ms": 46099,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-11T16:28:57.769204-05:00",
+        "duration_ms": 43750,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T15:57:41.684458-05:00",
+        "duration_ms": 42769,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "add_memory": [
+      {
+        "started_at": "2026-02-12T17:24:25.336868-05:00",
+        "duration_ms": 49489,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T10:44:54.271524-05:00",
+        "duration_ms": 46528,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T13:16:33.479444-05:00",
+        "duration_ms": 45194,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T16:01:25.764055-05:00",
+        "duration_ms": 44453,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T21:30:23.153445-05:00",
+        "duration_ms": 43603,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-10T16:58:19.580930-05:00",
+        "duration_ms": 42813,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T17:26:02.846224-05:00",
+        "duration_ms": 41318,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T17:25:23.421655-05:00",
+        "duration_ms": 39418,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-11T22:34:51.257508-05:00",
+        "duration_ms": 33670,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-13T13:58:19.952771-05:00",
+        "duration_ms": 32979,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "add_memory_smart": [
+      {
+        "started_at": "2026-02-12T17:01:20.284286-05:00",
+        "duration_ms": 29262,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T15:47:35.078131-05:00",
+        "duration_ms": 2510,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-12T16:59:36.415814-05:00",
+        "duration_ms": 2370,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "assessment_report": [
+      {
+        "started_at": "2026-02-16T11:41:31.092644-05:00",
+        "duration_ms": 78,
+        "session_id": null,
+        "tag": null
+      }
+    ],
+    "context_snapshot": [
+      {
+        "started_at": "2026-02-10T15:43:22.255240-05:00",
+        "duration_ms": 3199,
+        "session_id": null,
+        "tag": "macro:context"
+      }
+    ],
+    "flush_session": [
+      {
+        "started_at": "2026-02-15T08:04:11.829224-05:00",
+        "duration_ms": 147463,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T23:34:08.106072-05:00",
+        "duration_ms": 64362,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-14T21:12:58.706862-05:00",
+        "duration_ms": 34573,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T23:38:22.974093-05:00",
+        "duration_ms": 29971,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T23:44:06.399037-05:00",
+        "duration_ms": 18320,
+        "session_id": null,
+        "tag": null
+      },
+      {
+        "started_at": "2026-02-15T23:43:44.441740-05:00",
+        "duration_ms": 15379,
+        "session_id": null,
+        "tag": null
+      }
+    ]
+  },
+  "slo_targets": {
+    "despertar_codi": {
+      "p50": 4000,
+      "p95": 8000,
+      "p99": 15000
+    },
+    "recall": {
+      "p50": 3000,
+      "p95": 7000,
+      "p99": 12000
+    },
+    "remember": {
+      "p50": 2000,
+      "p95": 5000,
+      "p99": 10000
+    },
+    "search_memory": {
+      "p50": 2500,
+      "p95": 5000,
+      "p99": 8000
+    },
+    "checkpoint_memoria": {
+      "p50": 2000,
+      "p95": 5000,
+      "p99": 10000
+    },
+    "add_memory": {
+      "p50": 2000,
+      "p95": 5000,
+      "p99": 10000
+    }
+  }
+}

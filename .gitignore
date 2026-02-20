@@ -32,15 +32,35 @@ data/
 .access_tracking_mode
 .destructive_guard
 .toolset
+.sharpe_mode
 qdrant_data/
 
 # Backups (G-02: timestamped backups contain PII)
 memories_backup.json
 memories_backup_*.json
 server.py.backup*
+server.py.bak.*
+server.py.lazy_init_patch
 *.bak
 *.dump
 *.sql.gz
+
+# Runtime JSON data (local state, not code)
+preguntas_curiosidad.json
+pending_memories.json
+mantenimiento.json
+triggers.json
+libros.json
+recordatorios_pendientes.json
+sharpe_baseline.json
+m95_knowledge_import.json
+
+# Session trackers (hooks)
+hooks/.trackers/
+
+# Generated reports (not source)
+*_report.txt
+*_baseline.txt
 
 # Logs
 *.log
@@ -55,3 +75,6 @@ logs/
 
 # Claude Code server (subproyecto separado)
 claude-code-server/
+
+# macOS launch agents (local)
+*.plist
