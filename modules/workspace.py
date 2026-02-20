@@ -20,6 +20,7 @@ from modules.utils import (
 )
 from modules.activation import compute_unified_activation
 from modules.competition import CompetitionCandidate, run_workspace_competition
+from modules.access_tracking import record_access
 
 __all__ = [
     "get_workspace",
@@ -113,18 +114,14 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                         },
                     ))
 
-                    # Update attention metadata
+                    # Update attention metadata (batched)
                     new_salience = min(salience + 0.1, 1.0)
                     access_count = payload.get('attention_access_count', 0)
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={
-                            'attention_salience': new_salience,
-                            'attention_access_count': access_count + 1,
-                            'attention_last_accessed': now_iso()
-                        },
-                        points=[mem_id]
-                    )
+                    record_access(COLLECTION_NAME, mem_id, {
+                        'attention_salience': new_salience,
+                        'attention_access_count': access_count + 1,
+                        'attention_last_accessed': now_iso(),
+                    })
             except Exception:
                 competition_candidates.append(CompetitionCandidate(
                     content=r.get('memory', ''),
@@ -198,16 +195,12 @@ def broadcast_to_workspace(memory_id: str) -> str:
         lines.append(f"**Contenido:** {main_content[:80]}...")
         lines.append(f"**Temas:** {', '.join(main_themes) if main_themes else 'ninguno'}\n")
 
-        qdrant.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={
-                'attention_salience': 1.0,
-                'attention_access_count': payload.get('attention_access_count', 0) + 5,
-                'attention_last_accessed': now_iso(),
-                'was_broadcast': True
-            },
-            points=[full_id]
-        )
+        record_access(COLLECTION_NAME, full_id, {
+            'attention_salience': 1.0,
+            'attention_access_count': payload.get('attention_access_count', 0) + 5,
+            'attention_last_accessed': now_iso(),
+            'was_broadcast': True,
+        })
 
         # Spreading activation: propagar depth=2 desde la memoria broadcast
         from modules.spreading import _spread_activation
@@ -298,11 +291,9 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
             if salience > min_salience:
                 new_salience = max(salience - decay_rate, min_salience)
-                qdrant.set_payload(
-                    collection_name=COLLECTION_NAME,
-                    payload={'attention_salience': new_salience},
-                    points=[point.id]
-                )
+                record_access(COLLECTION_NAME, point.id, {
+                    'attention_salience': new_salience,
+                })
                 decayed_count += 1
 
         lines = [f"# Salience Decay Aplicado\n"]
@@ -401,15 +392,11 @@ def emotional_focus_attention(context: str) -> str:
                         'importance': importance, 'emotion': payload.get('pad_emotion', 'unknown')
                     })
                     new_salience = min(salience + 0.1, 1.0)
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={
-                            'attention_salience': new_salience,
-                            'attention_access_count': payload.get('attention_access_count', 0) + 1,
-                            'attention_last_accessed': now_iso()
-                        },
-                        points=[mem_id]
-                    )
+                    record_access(COLLECTION_NAME, mem_id, {
+                        'attention_salience': new_salience,
+                        'attention_access_count': payload.get('attention_access_count', 0) + 1,
+                        'attention_last_accessed': now_iso(),
+                    })
             except Exception:
                 spotlight_candidates.append({
                     'id': mem_id, 'content': r.get('memory', ''), 'attention_score': base_score,

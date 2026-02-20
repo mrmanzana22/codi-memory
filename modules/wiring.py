@@ -34,6 +34,7 @@ import threading
 from modules.events import event_bus, Events
 from modules.config import now_iso
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 
 _logger = logging.getLogger(__name__)
 
@@ -613,11 +614,9 @@ def _on_competition_complete(event_name: str, data: dict):
                 for p in points:
                     old_sal = p.payload.get('attention_salience', 0.5)
                     new_sal = max(0.1, old_sal - 0.05)
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={'attention_salience': new_sal},
-                        points=[p.id]
-                    )
+                    record_access(COLLECTION_NAME, p.id, {
+                        'attention_salience': new_sal,
+                    })
             except Exception:
                 pass
     except Exception as e:

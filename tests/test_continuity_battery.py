@@ -465,6 +465,8 @@ class TestSynapticHomeostasis:
         fake = FakeQdrant(points)
         monkeypatch.setattr("modules.consciousness.qdrant", fake)
         monkeypatch.setattr("modules.workspace.qdrant", fake, raising=False)
+        monkeypatch.setattr("modules.config.qdrant", fake)
+        monkeypatch.setattr("modules.access_tracking.ACCESS_TRACKING_MODE", "legacy")
 
         from modules.consciousness import apply_salience_decay
         result = apply_salience_decay(decay_rate=0.05)
@@ -488,6 +490,8 @@ class TestSynapticHomeostasis:
         fake = FakeQdrant(points)
         monkeypatch.setattr("modules.consciousness.qdrant", fake)
         monkeypatch.setattr("modules.workspace.qdrant", fake, raising=False)
+        monkeypatch.setattr("modules.config.qdrant", fake)
+        monkeypatch.setattr("modules.access_tracking.ACCESS_TRACKING_MODE", "legacy")
 
         from modules.consciousness import apply_salience_decay
         apply_salience_decay(decay_rate=0.05)

@@ -512,6 +512,8 @@ def get_assessment(evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "attention schema state",
     ]
 
+    worker_health = get_worker_health()
+
     return {
         "version": ASSESSMENT_VERSION,
         "score_total": total,
@@ -520,6 +522,7 @@ def get_assessment(evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         "indicators": indicators,
         "summary": summary,
         "evidence_sources": evidence_sources,
+        "worker_health": worker_health,
     }
 
 
@@ -549,6 +552,14 @@ def format_assessment(assessment: Dict[str, Any]) -> str:
     lines.append(f"- Partial indicators: {summary['partial']}")
     lines.append(f"- Absent indicators: {summary['absent']}")
 
+    wh = assessment.get("worker_health")
+    if wh:
+        lines.append(f"\n## Worker Health")
+        lines.append(f"- Status: {wh['status']}")
+        lines.append(f"- Last tick age: {wh['age_minutes']} min" if wh['age_minutes'] is not None else "- Last tick age: N/A")
+        if wh.get('queue_backlog'):
+            lines.append(f"- Queue backlog: {wh['queue_backlog']}")
+
     return "\n".join(lines)
 
 
@@ -574,6 +585,67 @@ def get_last_sleep_tick_age(db_path: str = None) -> Optional[float]:
     last = datetime.fromisoformat(str(row[0]))
     age_hours = (datetime.now() - last).total_seconds() / 3600
     return age_hours
+
+
+# ============================================================
+# WORKER LIVENESS (operational monitoring)
+# ============================================================
+
+WORKER_HEALTHY_THRESHOLD = 10.0    # minutes: healthy if tick age <= this
+WORKER_STALE_THRESHOLD = 30.0      # minutes: stale if tick age <= this
+WORKER_DEGRADED_THRESHOLD = 60.0   # minutes: degraded if tick age > stale
+
+
+def classify_worker_status(age_minutes: Optional[float]) -> str:
+    """Classify worker health from tick age (minutes).
+
+    Returns: 'missing' | 'healthy' | 'stale' | 'degraded'
+    """
+    if age_minutes is None:
+        return "missing"
+    if age_minutes <= WORKER_HEALTHY_THRESHOLD:
+        return "healthy"
+    if age_minutes <= WORKER_STALE_THRESHOLD:
+        return "stale"
+    return "degraded"
+
+
+def get_last_worker_tick_age(db_path: str = None) -> Optional[float]:
+    """Return minutes since last write_worker_tick in tool_calls, or None."""
+    from datetime import datetime
+    from modules.db_pool import get_conn
+    conn = get_conn(db_path)
+    row = conn.execute(
+        "SELECT started_at FROM tool_calls "
+        "WHERE tool_name = 'write_worker_tick' "
+        "ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    last = datetime.fromisoformat(str(row[0]))
+    return (datetime.now() - last).total_seconds() / 60
+
+
+def get_queue_backlog(db_path: str = None) -> Dict[str, int]:
+    """Return write_queue job counts by status."""
+    from modules.db_pool import get_conn
+    conn = get_conn(db_path)
+    rows = conn.execute(
+        "SELECT status, COUNT(*) as cnt FROM write_queue GROUP BY status"
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def get_worker_health(db_path: str = None) -> Dict[str, Any]:
+    """Unified worker health check."""
+    age = get_last_worker_tick_age(db_path)
+    status = classify_worker_status(age)
+    backlog = get_queue_backlog(db_path)
+    return {
+        "status": status,
+        "age_minutes": round(age, 1) if age is not None else None,
+        "queue_backlog": backlog,
+    }
 
 
 # ============================================================
