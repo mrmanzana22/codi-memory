@@ -49,7 +49,7 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     # Patch FTS_DB_PATH in modules that import it directly (import aliasing fix)
     for mod in ["modules.memory_smart", "modules.memory_core",
                 "modules.dual_compare", "modules.write_queue",
-                "modules.db_pool"]:
+                "modules.db_pool", "modules.consolidation_common"]:
         monkeypatch.setattr(f"{mod}.FTS_DB_PATH", db_path, raising=False)
 
     # Force legacy access tracking in tests (tests mock qdrant, not batch API)
@@ -311,6 +311,9 @@ def patch_externals(monkeypatch, fake_mem0, fake_qdrant):
         "modules.maintenance",
         "modules.triggers",
         "modules.books",
+        "modules.self_model",
+        "modules.emotion",
+        "modules.curiosity",
     ]
     for mod_path in _modules_with_memory:
         try:
