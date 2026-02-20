@@ -368,49 +368,65 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
 
 
 def _build_extraction_prompt(topic: str, episodes_block: str, num_episodes: int) -> str:
-    """Build the LLM prompt for semantic fact extraction."""
-    return f"""You are a memory consolidation system extracting SEMANTIC FACTS from episodic memories.
+    """Build the LLM prompt for semantic fact extraction.
 
-A semantic fact is declarative knowledge that can be reused in future contexts.
-It is NOT an opinion, prescription, motivation, or trivially obvious statement.
+    Prompt is in Spanish (our working language) to ensure facts are generated
+    in Spanish. See consolidation quality audit 2026-02-20.
+    """
+    return f"""Eres un sistema de consolidacion de memoria que extrae HECHOS SEMANTICOS de memorias episodicas.
 
-TOPIC: "{topic}"
-NUMBER OF EPISODES: {num_episodes}
+Un hecho semantico es conocimiento declarativo reutilizable en contextos futuros.
+NO es una opinion, prescripcion, motivacion, ni algo trivialmente obvio.
 
-EPISODES:
+IDIOMA: Responde SIEMPRE en espanol. Los hechos deben estar escritos en espanol.
+
+TEMA: "{topic}"
+NUMERO DE EPISODIOS: {num_episodes}
+
+EPISODIOS:
 {episodes_block}
 
-== FACT CATEGORIES ==
-TECHNICAL: How systems, tools, APIs, or services work (parameters, behaviors, constraints, configs)
-PROCEDURAL: How to accomplish specific tasks (step sequences, prerequisites, commands)
-RELATIONAL: Facts about people, their preferences, behavioral patterns, relationships
-ARCHITECTURAL: System designs, data flows, integrations, schemas, infrastructure
-CONTEXTUAL: Project states, decisions made, milestones reached, constraints discovered
+== CATEGORIAS ==
+TECHNICAL: Como funcionan sistemas, herramientas, APIs o servicios (parametros, comportamientos, restricciones, configuraciones)
+PROCEDURAL: Como lograr tareas especificas (secuencias de pasos, prerequisitos, comandos)
+RELATIONAL: Hechos sobre personas, sus preferencias, patrones de comportamiento, relaciones
+ARCHITECTURAL: Disenos de sistema, flujos de datos, integraciones, esquemas, infraestructura
+CONTEXTUAL: Estados de proyectos, decisiones tomadas, hitos alcanzados, restricciones descubiertas
 
-== EXAMPLES OF GOOD FACTS ==
-- {{"fact": "The TIAW-MainSync workflow uses a cron trigger set to 2-minute intervals to sync WSC inventory to Supabase", "category": "TECHNICAL", "confidence": 0.90, "specificity": "high"}}
-- {{"fact": "Qdrant requires explicit collection creation with vector size and distance metric before any upsert operation", "category": "TECHNICAL", "confidence": 0.85, "specificity": "high"}}
-- {{"fact": "Hare prefers to review the implementation plan before any code execution begins", "category": "RELATIONAL", "confidence": 0.90, "specificity": "high"}}
-- {{"fact": "The codi_semantic collection uses text-embedding-3-small with 1536 dimensions and cosine distance", "category": "ARCHITECTURAL", "confidence": 0.95, "specificity": "high"}}
-- {{"fact": "To deploy n8n workflow changes, the workflow must be deactivated first, then updated, then reactivated", "category": "PROCEDURAL", "confidence": 0.80, "specificity": "high"}}
+== EJEMPLOS DE BUENOS HECHOS ==
+- {{"fact": "El workflow TIAW-MainSync usa un cron trigger cada 2 minutos para sincronizar inventario WSC a Supabase", "category": "TECHNICAL", "confidence": 0.90, "specificity": "high"}}
+- {{"fact": "Qdrant requiere creacion explicita de la coleccion con vector_size y distancia antes de cualquier upsert", "category": "TECHNICAL", "confidence": 0.85, "specificity": "high"}}
+- {{"fact": "Hare prefiere revisar el plan de implementacion antes de que se ejecute cualquier codigo", "category": "RELATIONAL", "confidence": 0.90, "specificity": "high"}}
+- {{"fact": "La coleccion codi_semantic usa text-embedding-3-small con 1536 dimensiones y distancia coseno", "category": "ARCHITECTURAL", "confidence": 0.95, "specificity": "high"}}
+- {{"fact": "Para desplegar cambios en workflows de n8n, primero desactivar, luego actualizar, luego reactivar", "category": "PROCEDURAL", "confidence": 0.80, "specificity": "high"}}
 
-== EXAMPLES OF BAD FACTS (DO NOT PRODUCE THESE) ==
-- "It is important to test code thoroughly" -> prescriptive, not a fact
-- "Workflows consist of multiple nodes" -> trivially obvious to anyone
-- "Good improvements were observed" -> vague, no concrete detail
-- "Communication is key for project success" -> generic platitude
-- "The system was updated successfully" -> one-time event, not reusable knowledge
+== EJEMPLOS DE HECHOS MALOS (NO PRODUCIR) ==
+- "Es importante testear el codigo" -> prescriptivo, no es un hecho
+- "Los workflows tienen multiples nodos" -> trivialmente obvio
+- "Se observaron buenas mejoras" -> vago, sin detalle concreto
+- "La comunicacion es clave para el exito" -> platitud generica
+- "El sistema se actualizo exitosamente" -> evento puntual, no conocimiento reutilizable
+- "Se cambio la linea 42 de server.py" -> detalle de implementacion transitorio
+- "El error de conexion se resolvio reiniciando" -> error temporal, no patron
 
-== RULES ==
-1. Extract only facts with CONCRETE details (names, numbers, parameters, specific behaviors)
-2. Each fact must be a single declarative sentence that would be useful if retrieved 30 days from now
-3. Confidence (0.0-1.0): base on how many episodes support it and how consistent the evidence is
-4. Specificity must be "high" -- if you cannot include a concrete detail, do not include the fact
-5. Combine overlapping observations into one stronger fact rather than listing near-duplicates
-6. Maximum 5 facts per cluster
-7. If fewer than 2 facts meet the quality bar, return fewer -- do NOT pad with low-quality facts
+== FILTRO ANTI-BASURA ==
+IGNORAR y NO extraer:
+- Detalles de lineas de codigo especificas (ej. "linea 42", "commit abc123")
+- Errores temporales ya resueltos (ej. "el deploy fallo y se arreglo")
+- Estados transitorios de deploys o PRs
+- Numeros de version que cambian frecuentemente
+- Conteos que se desactualizan rapido (ej. "hay 138 facts", "830 tests")
 
-Respond ONLY with a JSON array (no markdown, no explanation):
+== REGLAS ==
+1. Extraer solo hechos con DETALLES CONCRETOS (nombres, parametros, comportamientos especificos)
+2. Cada hecho debe ser una oracion declarativa util si se recupera 30 dias despues
+3. Confianza (0.0-1.0): basada en cuantos episodios lo soportan y cuan consistente es la evidencia
+4. Especificidad debe ser "high" -- si no puedes incluir un detalle concreto, no incluyas el hecho
+5. Combinar observaciones superpuestas en un hecho mas fuerte en vez de listar casi-duplicados
+6. Maximo 5 hechos por cluster
+7. Si menos de 2 hechos cumplen el estandar de calidad, devuelve menos -- NO rellenes con hechos malos
+
+Responde SOLO con un array JSON (sin markdown, sin explicacion):
 [{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL", "confidence": 0.85, "specificity": "high"}}]"""
 
 

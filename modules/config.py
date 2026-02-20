@@ -113,11 +113,11 @@ RECONSOLIDATION_MAX_BLEND = 0.3             # Max 30% new content blends in
 # ============================================================
 # PHASE 5: INLINE CONTRADICTION DETECTION (Kumaran & Maguire 2007)
 # ============================================================
-CONTRADICTION_SCORE_FLOOR = 0.50            # Min similarity to compare (below = unrelated)
-CONTRADICTION_PE_SILENT = 0.30              # PE >= this: silent WM note
+CONTRADICTION_SCORE_FLOOR = 0.35            # Min similarity to compare (lowered from 0.50: contradictions often have low cosine sim)
+CONTRADICTION_PE_SILENT = 0.20              # PE >= this: silent WM note (lowered from 0.30: still needs 2-channel convergence)
 CONTRADICTION_PE_ALERT = 0.50               # PE >= this: visible alert + mark labile
 CONTRADICTION_PE_CRITICAL = 0.70            # PE >= this: critical alert, LLM should ask user
-CONTRADICTION_MIN_ENTITIES = 2              # Min shared entities to compare
+CONTRADICTION_MIN_ENTITIES = 1              # Min shared entities to compare (lowered from 2: short memories rarely share 2+)
 CONTRADICTION_COOLDOWN_MINUTES = 30         # Same-topic cooldown
 CONTRADICTION_MAX_PER_SESSION = 3           # Max alerts before silent-only mode
 

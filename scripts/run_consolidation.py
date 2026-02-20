@@ -15,6 +15,7 @@ import json
 import argparse
 import logging
 import re
+import fcntl
 from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 from urllib.error import URLError
@@ -43,6 +44,33 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 HARE_USER_ID = "2b7878b2-c51b-4106-baf7-c3c0cf9c9363"
 
 LOG_FILE = os.path.join(PROJECT_ROOT, "data", "consolidation_cron.log")
+LOCK_FILE = os.path.join(PROJECT_ROOT, "data", "consolidation.lock")
+
+
+def _acquire_lock():
+    """Acquire exclusive lockfile to prevent concurrent consolidation runs.
+
+    Returns file handle on success, None if another run is active.
+    """
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    try:
+        lock_fd = open(LOCK_FILE, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fd.write(f"{os.getpid()} {datetime.now().isoformat()}\n")
+        lock_fd.flush()
+        return lock_fd
+    except (IOError, OSError):
+        return None
+
+
+def _release_lock(lock_fd):
+    """Release the lockfile."""
+    if lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+        except Exception:
+            pass
 
 
 def _log(msg: str):
@@ -209,6 +237,14 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Parse and evaluate without running consolidation")
     args = parser.parse_args()
 
+    # Acquire lockfile to prevent overlapping runs
+    lock_fd = _acquire_lock()
+    if lock_fd is None:
+        msg = "Another consolidation run is already active. Skipping."
+        _log(msg)
+        print(json.dumps({"status": "locked", "message": msg}))
+        return
+
     # Redirect stdout to stderr during module execution
     real_stdout = sys.stdout
     sys.stdout = sys.stderr
@@ -307,6 +343,8 @@ def main():
         sys.stdout = real_stdout
         print(json.dumps(error_payload))
         sys.exit(1)
+    finally:
+        _release_lock(lock_fd)
 
 
 if __name__ == "__main__":
