@@ -1448,7 +1448,8 @@ class TestGraphDensification:
         }
 
         with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant:
+             patch('modules.memory_smart.qdrant') as mock_qdrant, \
+             patch('modules.config.qdrant', mock_qdrant):
             mock_mem.search.return_value = mock_results
 
             _auto_connect_neighbors("new-id", "test content")
@@ -1474,7 +1475,8 @@ class TestGraphDensification:
         }
 
         with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant:
+             patch('modules.memory_smart.qdrant') as mock_qdrant, \
+             patch('modules.config.qdrant', mock_qdrant):
             mock_mem.search.return_value = mock_results
 
             _auto_connect_neighbors("new-id", "test", exclude_ids=["already-connected"])
@@ -1496,7 +1498,8 @@ class TestGraphDensification:
         }
 
         with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant:
+             patch('modules.memory_smart.qdrant') as mock_qdrant, \
+             patch('modules.config.qdrant', mock_qdrant):
             mock_mem.search.return_value = mock_results
 
             _auto_connect_neighbors("new-id", "test")

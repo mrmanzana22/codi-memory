@@ -18,6 +18,8 @@ import os
 import json
 import sqlite3
 import math
+
+from modules.access_tracking import record_access
 import random
 import threading
 import time
@@ -302,11 +304,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             '_v': 4.0  # Phase 3: SDR + temporal context
         }
 
-        qdrant.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload=ownership_metadata,
-            points=[memory_id]
-        )
+        record_access(COLLECTION_NAME, memory_id, ownership_metadata)
     except Exception as e:
         _logger.error("Error enriching memory: %s", redact_secrets(str(e)))
 

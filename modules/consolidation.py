@@ -47,6 +47,7 @@ from modules.consolidation_common import (
     _embed_text_cached,
 )
 from modules.utils import now_iso
+from modules.access_tracking import record_access
 from modules.secret_redact import redact_secrets
 
 # ============================================================
@@ -103,6 +104,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     candidates = _phase_selection(lookback_hours)
     if not candidates:
         return f"[consolidation:{batch_id}] No unconsolidated episodes found in last {lookback_hours}h"
+
+    # Phase 1.5: Sharpe scoring (shadow/on/off via feature flag)
+    try:
+        from modules.sharpe import sharpe_score_candidates
+        candidates = sharpe_score_candidates(candidates)
+    except Exception as e:
+        _logger.warning("[sharpe] Scoring skipped: %s", e)
 
     # Phase 2: Clustering
     clusters = _phase_clustering(candidates)
@@ -518,19 +526,15 @@ def _phase_integration(facts: list) -> dict:
                 new_sources = list(set(old_sources + fact["source_episode_ids"]))
                 old_evidence = int(old_payload.get("evidence_count", 1))
 
-                qdrant.set_payload(
-                    collection_name=SEMANTIC_COLLECTION,
-                    payload={
-                        "evidence_count": old_evidence + fact["evidence_count"],
-                        "source_episode_ids": new_sources,
-                        "last_observed": now,
-                        "confidence": max(
-                            float(old_payload.get("confidence", 0.5)),
-                            fact["confidence"]
-                        ),
-                    },
-                    points=[duplicate.id],
-                )
+                record_access(SEMANTIC_COLLECTION, duplicate.id, {
+                    "evidence_count": old_evidence + fact["evidence_count"],
+                    "source_episode_ids": new_sources,
+                    "last_observed": now,
+                    "confidence": max(
+                        float(old_payload.get("confidence", 0.5)),
+                        fact["confidence"]
+                    ),
+                })
                 updated += 1
                 _logger.info("Updated existing fact: %s...", fact_text[:60])
             else:
@@ -583,35 +587,17 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
     now = now_iso()
 
     batch_size = 50
-    for i in range(0, len(consolidated_episode_ids), batch_size):
-        batch = consolidated_episode_ids[i:i + batch_size]
+    consolidation_payload = {
+        "consolidation_status": "consolidated",
+        "consolidated": True,
+        "consolidated_at": now,
+    }
+    for eid in consolidated_episode_ids:
         try:
-            qdrant.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={
-                    "consolidation_status": "consolidated",
-                    "consolidated": True,
-                    "consolidated_at": now,
-                },
-                points=batch,
-            )
-            marked += len(batch)
-        except Exception as e:
-            _logger.error("Pruning batch error: %s", redact_secrets(str(e)))
-            for eid in batch:
-                try:
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={
-                            "consolidation_status": "consolidated",
-                            "consolidated": True,
-                            "consolidated_at": now,
-                        },
-                        points=[eid],
-                    )
-                    marked += 1
-                except Exception:
-                    pass
+            record_access(COLLECTION_NAME, eid, consolidation_payload)
+            marked += 1
+        except Exception:
+            pass
 
     _logger.info("Pruning: %d episodes marked as consolidated", marked)
     return {"marked_consolidated": marked, "decayed": decayed}

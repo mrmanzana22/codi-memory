@@ -317,7 +317,8 @@ class TestGraphAndSpreading:
         from modules.memory_smart import _auto_connect_neighbors
 
         with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant:
+             patch('modules.memory_smart.qdrant') as mock_qdrant, \
+             patch('modules.config.qdrant', mock_qdrant):
 
             mock_mem.search.return_value = {
                 "results": [

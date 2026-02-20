@@ -18,6 +18,7 @@ from datetime import datetime
 _logger = logging.getLogger(__name__)
 
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, now_col
+from modules.access_tracking import record_access
 from modules.secret_redact import redact_secrets
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -253,19 +254,15 @@ def register_tools(mcp):
                 for r in result["results"]:
                     mem_id = r.get("id")
                     if mem_id:
-                        qdrant.set_payload(
-                            collection_name=COLLECTION_NAME,
-                            payload={
-                                'category': 'capitulo',
-                                'libro': libro_key,
-                                'numero': nuevo_numero,
-                                'titulo': titulo,
-                                'resumen': resumen,
-                                'fecha': fecha,
-                                'narrative_importance': 'high'
-                            },
-                            points=[mem_id]
-                        )
+                        record_access(COLLECTION_NAME, mem_id, {
+                            'category': 'capitulo',
+                            'libro': libro_key,
+                            'numero': nuevo_numero,
+                            'titulo': titulo,
+                            'resumen': resumen,
+                            'fecha': fecha,
+                            'narrative_importance': 'high',
+                        })
 
             # También guardar en archivo local como backup
             nuevo_cap = {
@@ -335,20 +332,16 @@ Guardado en: Qdrant + backup local
                 for r in result["results"]:
                     mem_id = r.get("id")
                     if mem_id:
-                        qdrant.set_payload(
-                            collection_name=COLLECTION_NAME,
-                            payload={
-                                'category': 'libro',
-                                'libro_key': nombre_key,
-                                'nombre': nombre.upper(),
-                                'descripcion': descripcion,
-                                'iniciado': fecha_inicio,
-                                'estado': 'activo',
-                                'siguiente_paso': None,
-                                'narrative_importance': 'critical'
-                            },
-                            points=[mem_id]
-                        )
+                        record_access(COLLECTION_NAME, mem_id, {
+                            'category': 'libro',
+                            'libro_key': nombre_key,
+                            'nombre': nombre.upper(),
+                            'descripcion': descripcion,
+                            'iniciado': fecha_inicio,
+                            'estado': 'activo',
+                            'siguiente_paso': None,
+                            'narrative_importance': 'critical',
+                        })
 
             # También guardar en archivo local como backup
             data['libros'][nombre_key] = {
@@ -399,11 +392,9 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
             # Actualizar en Qdrant si tenemos el memory_id
             if libro_data.get('memory_id'):
                 try:
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={"siguiente_paso": siguiente},
-                        points=[libro_data['memory_id']]
-                    )
+                    record_access(COLLECTION_NAME, libro_data['memory_id'], {
+                        "siguiente_paso": siguiente,
+                    })
                 except Exception as e:
                     _logger.warning("No se pudo actualizar en Qdrant: %s", redact_secrets(str(e)))
 

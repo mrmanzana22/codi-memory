@@ -18,6 +18,7 @@ from modules.config import (
     KNOWN_PROJECTS, RELATIONSHIP_QUERY,
 )
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 from modules.utils import (
     get_session_id, resolve_memory_id, maybe_backup,
     _classify_emotion, _get_emotion_text, _get_emotional_state,
@@ -97,25 +98,20 @@ def consolidate_recent(hours: int = 24) -> str:
                     if s_id != mem_id and score >= 0.7:
                         related_ids.append(s_id)
                         try:
-                            qdrant.set_payload(
-                                collection_name=COLLECTION_NAME,
-                                payload={'consolidated_with': [mem_id], 'attention_salience': min(point.payload.get('attention_salience', 0.5) + 0.1, 1.0)},
-                                points=[s_id]
-                            )
+                            record_access(COLLECTION_NAME, s_id, {
+                                'consolidated_with': [mem_id],
+                                'attention_salience': min(point.payload.get('attention_salience', 0.5) + 0.1, 1.0),
+                            })
                         except Exception:
                             pass
                         connections_found += 1
 
-                qdrant.set_payload(
-                    collection_name=COLLECTION_NAME,
-                    payload={
-                        'consolidated': True,
-                        'consolidated_with': related_ids,
-                        'consolidated_at': now_iso(),
-                        'consolidation_status': 'consolidated',
-                    },
-                    points=[mem_id]
-                )
+                record_access(COLLECTION_NAME, mem_id, {
+                    'consolidated': True,
+                    'consolidated_with': related_ids,
+                    'consolidated_at': now_iso(),
+                    'consolidation_status': 'consolidated',
+                })
                 consolidated_count += 1
                 if related_ids:
                     lines.append(f"- Consolidada: {mem_data[:40]}... -> {len(related_ids)} conexiones")
@@ -237,11 +233,12 @@ def dream_consolidation() -> str:
             if similar and similar.get('results'):
                 related_ids = [s.get('id') for s in similar['results'] if s.get('id') != point.id and s.get('score', 0) >= 0.6]
                 if related_ids:
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={'consolidated': True, 'consolidated_with': related_ids, 'consolidated_at': now_iso(), 'dream_consolidated': True},
-                        points=[point.id]
-                    )
+                    record_access(COLLECTION_NAME, point.id, {
+                        'consolidated': True,
+                        'consolidated_with': related_ids,
+                        'consolidated_at': now_iso(),
+                        'dream_consolidated': True,
+                    })
                     connections_made += 1
         lines.append(f"- Conexiones establecidas: {connections_made}")
 
@@ -252,7 +249,7 @@ def dream_consolidation() -> str:
             salience = p.payload.get('attention_salience', 0.5)
             access_count = p.payload.get('attention_access_count', 0)
             if access_count == 0 and salience > 0.2:
-                qdrant.set_payload(collection_name=COLLECTION_NAME, payload={'attention_salience': max(salience - 0.05, 0.2)}, points=[p.id])
+                record_access(COLLECTION_NAME, p.id, {'attention_salience': max(salience - 0.05, 0.2)})
                 decayed += 1
         lines.append(f"- Memorias con salience reducida: {decayed}")
 

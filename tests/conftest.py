@@ -52,6 +52,11 @@ def _isolate_sqlite(tmp_path, monkeypatch):
                 "modules.db_pool"]:
         monkeypatch.setattr(f"{mod}.FTS_DB_PATH", db_path, raising=False)
 
+    # Force legacy access tracking in tests (tests mock qdrant, not batch API)
+    monkeypatch.setattr(
+        "modules.access_tracking.ACCESS_TRACKING_MODE", "legacy", raising=False
+    )
+
     # Redirect flag files to tmp_path so .remember_mode / .write_mode on disk
     # don't contaminate tests. Tests control mode via env vars instead.
     monkeypatch.setattr(

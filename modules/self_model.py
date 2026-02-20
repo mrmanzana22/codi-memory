@@ -13,6 +13,7 @@ from modules.config import (
     now_iso, now_short,
 )
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     calculate_confidence_score,
@@ -686,11 +687,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
                         'self_model_aspect': aspect,
                         '_v': 2.1
                     }
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload=ownership_metadata,
-                        points=[mem_id]
-                    )
+                    record_access(COLLECTION_NAME, mem_id, ownership_metadata)
 
         # P1: backup removed from hot path
         return f"Self-model actualizado [{aspect}]: {insight[:50]}..."

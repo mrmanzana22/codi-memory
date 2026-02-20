@@ -5,6 +5,7 @@ from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, B
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import calculate_confidence_score
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 
 
 # ============================================================
@@ -304,11 +305,9 @@ def _mantenimiento_memorias() -> str:
                             # Reducir salience
                             old_salience = p.payload.get('salience', 0.5)
                             new_salience = max(0.1, old_salience - 0.1)
-                            qdrant.set_payload(
-                                collection_name=COLLECTION_NAME,
-                                payload={'salience': new_salience},
-                                points=[p.id]
-                            )
+                            record_access(COLLECTION_NAME, p.id, {
+                                'salience': new_salience,
+                            })
                             decayed += 1
                     except Exception:
                         pass

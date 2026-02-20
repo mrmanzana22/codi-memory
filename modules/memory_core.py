@@ -1140,11 +1140,10 @@ def update_memory_importance(memory_id: str, new_importance: str) -> str:
         if not full_id:
             return f"No encontre memoria con ID que empiece con '{memory_id}'"
 
-        qdrant.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={'narrative_importance': new_importance},
-            points=[full_id]
-        )
+        from modules.access_tracking import record_access as _record_access
+        _record_access(COLLECTION_NAME, full_id, {
+            'narrative_importance': new_importance,
+        })
 
         return f"Memoria {memory_id} actualizada a importancia: {new_importance}"
     except Exception as e:

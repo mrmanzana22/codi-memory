@@ -11,6 +11,7 @@ from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -138,11 +139,10 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
                         importance="high" if intensity == "high" else "medium",
                         emotional_valence="mixed"
                     )
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={'prediction_error': True, 'prediction_error_value': surprise_value},
-                        points=[mem_id]
-                    )
+                    record_access(COLLECTION_NAME, mem_id, {
+                        'prediction_error': True,
+                        'prediction_error_value': surprise_value,
+                    })
 
         # Emit canonical PREDICTION_ERROR event (Bloque 2 pipeline)
         try:
@@ -259,11 +259,10 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
                 mem_id = r.get("id")
                 if mem_id:
                     enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=content, source="experienced", importance="high")
-                    qdrant.set_payload(
-                        collection_name=COLLECTION_NAME,
-                        payload={'belief_update': True, 'belief_topic': topic},
-                        points=[mem_id]
-                    )
+                    record_access(COLLECTION_NAME, mem_id, {
+                        'belief_update': True,
+                        'belief_topic': topic,
+                    })
 
         # P1: backup removed from hot path
         lines = [f"# CREENCIA ACTUALIZADA\n"]

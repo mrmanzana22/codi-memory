@@ -13,6 +13,7 @@ from modules.config import (
     now_iso, now_short,
 )
 from modules.secret_redact import redact_secrets
+from modules.access_tracking import record_access
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     resolve_memory_id, enrich_with_ownership,
@@ -281,7 +282,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
                         'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
                         'pad_emotion': emotion_label, 'pad_intensity': intensity, '_v': 2.2
                     }
-                    qdrant.set_payload(collection_name=COLLECTION_NAME, payload=ownership_metadata, points=[mem_id])
+                    record_access(COLLECTION_NAME, mem_id, ownership_metadata)
 
         # P1: backup removed from hot path
         result_json = {
@@ -315,16 +316,12 @@ def tag_memory_emotion(memory_id: str, pleasure: float, arousal: float, dominanc
         emotion_label = _classify_emotion(p, a, d)
         intensity = _calculate_emotional_intensity(p, a, d)
 
-        qdrant.set_payload(
-            collection_name=COLLECTION_NAME,
-            payload={
-                'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
-                'pad_emotion': emotion_label, 'pad_intensity': intensity,
-                'experiential_emotional_weight': min(intensity / 1.73, 1.0),
-                'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral'
-            },
-            points=[full_id]
-        )
+        record_access(COLLECTION_NAME, full_id, {
+            'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
+            'pad_emotion': emotion_label, 'pad_intensity': intensity,
+            'experiential_emotional_weight': min(intensity / 1.73, 1.0),
+            'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral',
+        })
         result = {
             'result': 'Memoria etiquetada con emocion', 'memory_id': memory_id,
             'emotion': {'label': emotion_label, 'description': _get_emotion_text(emotion_label), 'pleasure': p, 'arousal': a, 'dominance': d, 'intensity': round(intensity, 2)}

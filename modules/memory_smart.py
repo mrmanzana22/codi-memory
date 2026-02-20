@@ -18,6 +18,7 @@ from modules.config import (
     CONTRADICTION_MIN_ENTITIES, CONTRADICTION_COOLDOWN_MINUTES,
     CONTRADICTION_MAX_PER_SESSION,
 )
+from modules.access_tracking import record_access
 from modules.destructive_guard import (
     is_guard_enabled, compute_fingerprint,
     request_confirmation, validate_and_consume,
@@ -447,11 +448,9 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
                 break
 
         if connections:
-            qdrant.set_payload(
-                collection_name=COLLECTION_NAME,
-                payload={'related_memories': connections},
-                points=[new_id],
-            )
+            record_access(COLLECTION_NAME, new_id, {
+                'related_memories': connections,
+            })
     except Exception:
         pass
 
@@ -559,15 +558,11 @@ def add_memory_smart(content: str, category: str = "general",
                             )
                             # Agregar metadata de relacion
                             try:
-                                qdrant.set_payload(
-                                    collection_name=COLLECTION_NAME,
-                                    payload={
-                                        'related_to': top_id,
-                                        'relation_score': top_score,
-                                        'relation_type': 'semantic_similar'
-                                    },
-                                    points=[new_id]
-                                )
+                                record_access(COLLECTION_NAME, new_id, {
+                                    'related_to': top_id,
+                                    'relation_score': top_score,
+                                    'relation_type': 'semantic_similar',
+                                })
                             except Exception:
                                 pass
 
