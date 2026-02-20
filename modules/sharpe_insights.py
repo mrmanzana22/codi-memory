@@ -348,7 +348,7 @@ def _fingerprint(domains: tuple, text: str) -> str:
     """Generate dedup fingerprint for an insight."""
     normalized = re.sub(r'\s+', ' ', text.lower().strip())
     key = f"{sorted(domains)}:{normalized[:200]}"
-    return hashlib.md5(key.encode()).hexdigest()
+    return hashlib.md5(key.encode(), usedforsecurity=False).hexdigest()
 
 
 # ============================================================
