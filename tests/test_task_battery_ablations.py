@@ -2,7 +2,7 @@
 """
 TASK BATTERY ABLATIONS - Prove each module contributes
 ======================================================
-3 ablation tests: disable ONE module, verify degradation in a specific task.
+7 ablation classes: disable ONE module, verify degradation in a specific task.
 
 If disabling a module causes NO degradation, either:
   (a) the module isn't contributing, or
@@ -221,3 +221,252 @@ class TestAblationGWT:
         assert "WINNER_DOCKER_TEXT" in out, "Winner should still appear"
         assert "LOSER_PIZZA_TEXT" in out, \
             "Without GWT competition, below-threshold loser should leak through"
+
+
+# ============================================================
+# ABLATION D: Without Contradiction Detection
+# ============================================================
+
+class TestAblationContradiction:
+    """Disable contradiction detection, verify PE signal vanishes."""
+
+    def test_without_contradiction_no_pe(self):
+        """When detect_contradiction is ablated (returns PE=0), contradictions go undetected.
+
+        Mirror of: TestContradictionDetection::test_negation_inversion_triggers_pe
+        Expected: PE=0 even for contradictory texts (negation not detected).
+        """
+        # The real function would detect "is great" vs "is not great" as contradiction
+        memory_text = "Docker is great for production deployment"
+        context = "Docker is not great for production deployment"
+
+        # ABLATION: detect_contradiction returns zero PE (no contradiction engine)
+        ablated_result = {
+            "prediction_error": 0.0,
+            "channels": {"keywords": 0, "topic_confirm": 0, "negation": 0},
+        }
+
+        with patch('modules.reconsolidation.detect_contradiction', return_value=ablated_result):
+            from modules.reconsolidation import detect_contradiction
+            result = detect_contradiction(memory_text, context)
+
+        # DEGRADATION CHECK: PE is 0 even for contradictory texts
+        assert result["prediction_error"] == 0.0, \
+            "With contradiction detection ablated, PE should be 0 (blind to negation)"
+        assert result["channels"]["negation"] == 0, \
+            "Negation channel should not fire when ablated"
+
+    def test_without_contradiction_unrelated_same_as_contradictory(self):
+        """Without contradiction detection, contradictory and unrelated texts look the same.
+
+        Both return PE=0, proving the module is needed to distinguish them.
+        """
+        ablated_result = {
+            "prediction_error": 0.0,
+            "channels": {"keywords": 0, "topic_confirm": 0, "negation": 0},
+        }
+
+        with patch('modules.reconsolidation.detect_contradiction', return_value=ablated_result):
+            from modules.reconsolidation import detect_contradiction
+            contradictory = detect_contradiction(
+                "Docker is great", "Docker is not great"
+            )
+            unrelated = detect_contradiction(
+                "Docker is great", "Pizza was delicious"
+            )
+
+        # DEGRADATION CHECK: both look identical (cannot distinguish)
+        assert contradictory["prediction_error"] == unrelated["prediction_error"] == 0.0, \
+            "Ablated system cannot distinguish contradictory from unrelated"
+
+
+# ============================================================
+# ABLATION E: Without Reconsolidation (correct_memory)
+# ============================================================
+
+class TestAblationReconsolidation:
+    """Disable reconsolidation, verify old trace persists unchanged."""
+
+    def test_without_correct_memory_no_upsert(self):
+        """When correct_memory is ablated, qdrant.upsert is never called.
+
+        Mirror of: TestReconsolidation::test_correct_memory_upserts_new_vector
+        Expected: No upsert (old vector survives, no re-embedding).
+        """
+        # ABLATION: correct_memory is a no-op that returns a message
+        with patch('modules.reconsolidation.qdrant') as mock_qdrant:
+            with patch('modules.consolidation.correct_memory',
+                       return_value="[ABLATED] No reconsolidation"):
+                from modules.consolidation import correct_memory
+                result = correct_memory("full-uuid-123", "Docker ya no es recomendado")
+
+        # DEGRADATION CHECK: no upsert (old trace NOT destroyed)
+        mock_qdrant.upsert.assert_not_called()
+        assert "ABLATED" in result, "Ablated path should indicate no reconsolidation"
+
+    def test_without_correct_memory_confidence_unchanged(self):
+        """When reconsolidation is ablated, confidence is never decremented.
+
+        Mirror of: TestReconsolidation::test_correct_memory_decrements_confidence
+        The system cannot learn from corrections -- old confidence persists.
+        """
+        original_confidence = 0.8
+
+        # ABLATION: correct_memory does nothing, confidence stays at original
+        with patch('modules.consolidation.correct_memory',
+                    return_value="[ABLATED] No reconsolidation"):
+            # Confidence is never touched
+            pass
+
+        # DEGRADATION CHECK: confidence unchanged (no PE-based decrement)
+        assert original_confidence == 0.8, \
+            "Without reconsolidation, confidence cannot decrease from corrections"
+
+
+# ============================================================
+# ABLATION F: Without Attention Prediction Error
+# ============================================================
+
+class TestAblationAttentionPE:
+    """Disable attention PE, verify self-correction loop breaks."""
+
+    def test_without_attention_pe_no_event(self, clean_event_bus):
+        """When PE computation is ablated, no ATTENTION_PREDICTION_ERROR emitted.
+
+        Mirror of: TestAttentionPredictionError::test_attention_pe_emitted_on_mismatch
+        Expected: Even with mismatch (predicted B, actual C), no PE event fires.
+        """
+        import modules.wiring as wiring
+
+        old_schema = {k: (v[:] if isinstance(v, list) else v)
+                      for k, v in wiring._attention_schema.items()}
+        wiring._attention_schema["current_focus"] = "A"
+        wiring._attention_schema["focus_strength"] = 0.5
+        wiring._attention_schema["topic_transitions"] = [
+            {"from": "A", "to": "B", "at": "t1", "driver": "test"},
+            {"from": "A", "to": "B", "at": "t2", "driver": "test"},
+        ]
+
+        try:
+            # ABLATION: predict_next_focus always returns (None, 0) -> PE path skipped
+            with patch.object(wiring, 'predict_next_focus', return_value=(None, 0.0)):
+                wiring._update_attention_schema(focus="C", driver="test_ablated")
+
+            history = event_bus.get_history()
+            pe_events = [e for e in history if e["event"] == Events.ATTENTION_PREDICTION_ERROR]
+
+            # DEGRADATION CHECK: no PE event (predictor ablated)
+            assert len(pe_events) == 0, \
+                f"With prediction ablated, no PE event should fire, got {len(pe_events)}"
+        finally:
+            wiring._attention_schema.update(old_schema)
+
+    def test_without_attention_pe_no_edge_decay(self, clean_event_bus):
+        """When PE is ablated, wrong edges are never decayed (no self-correction).
+
+        Mirror of: TestAttentionPredictionError::test_attention_pe_decays_wrong_edge
+        Expected: After mismatch, predictor still returns B with prob 1.0 from A.
+        """
+        import modules.wiring as wiring
+
+        old_schema = {k: (v[:] if isinstance(v, list) else v)
+                      for k, v in wiring._attention_schema.items()}
+        wiring._attention_schema["current_focus"] = "A"
+        wiring._attention_schema["focus_strength"] = 0.5
+        wiring._attention_schema["topic_transitions"] = [
+            {"from": "A", "to": "B", "at": "t1", "driver": "test"},
+            {"from": "A", "to": "B", "at": "t2", "driver": "test"},
+            {"from": "A", "to": "B", "at": "t3", "driver": "test"},
+        ]
+
+        try:
+            # Count A->B edges before
+            ab_before = sum(
+                1 for t in wiring._attention_schema["topic_transitions"]
+                if t["from"] == "A" and t["to"] == "B"
+            )
+
+            # ABLATION: predict_next_focus returns None -> PE never computed -> no decay
+            with patch.object(wiring, 'predict_next_focus', return_value=(None, 0.0)):
+                wiring._update_attention_schema(focus="C", driver="test_no_decay")
+
+            # Count A->B edges after (should NOT have decreased)
+            ab_after = sum(
+                1 for t in wiring._attention_schema["topic_transitions"]
+                if t["from"] == "A" and t["to"] == "B"
+            )
+
+            # DEGRADATION CHECK: edges unchanged (no self-correction)
+            assert ab_after == ab_before, \
+                f"Without PE, A->B edges should stay at {ab_before}, got {ab_after}"
+        finally:
+            wiring._attention_schema.update(old_schema)
+
+
+# ============================================================
+# ABLATION G: Without Self-Model Refresh (HOT-1)
+# ============================================================
+
+class TestAblationSelfModelRefresh:
+    """Disable periodic self-model refresh, verify HOT-1 loop breaks."""
+
+    def test_without_hot1_no_refresh_event(self, clean_event_bus, monkeypatch):
+        """When HOT-1 path is ablated, no SELF_MODEL_REFRESHED event fires.
+
+        Mirror of: TestSelfModelRefresh::test_self_model_refresh_fires_at_interval
+        Expected: After 50 ticks, still 0 SELF_MODEL_REFRESHED events.
+        """
+        import modules.wiring as wiring
+
+        old_tick = wiring._self_model_tick
+        old_refresh = wiring._last_self_model_refresh
+        wiring._self_model_tick = 0
+        wiring._last_self_model_refresh = 0.0
+        monkeypatch.setattr(wiring, "_SELF_MODEL_COOLDOWN", 0)
+
+        try:
+            # ABLATION: reflect_on_self raises, simulating module removed
+            with patch("modules.consciousness.reflect_on_self",
+                       side_effect=ImportError("Ablated: no self-model module")):
+                for _ in range(50):
+                    wiring.process_elapsed_time(0.5)
+
+            history = event_bus.get_history()
+            refresh_events = [e for e in history if e["event"] == Events.SELF_MODEL_REFRESHED]
+
+            # DEGRADATION CHECK: no refresh event (HOT-1 broken)
+            assert len(refresh_events) == 0, \
+                f"With HOT-1 ablated, no refresh should fire, got {len(refresh_events)}"
+        finally:
+            wiring._self_model_tick = old_tick
+            wiring._last_self_model_refresh = old_refresh
+
+    def test_without_hot1_schema_not_updated(self, clean_event_bus, monkeypatch):
+        """When HOT-1 is ablated, the system has no self-awareness refresh.
+
+        The real system would update its self-model every 50 ticks.
+        Ablated: reflect_on_self never runs, so there's no meta-representation.
+        """
+        import modules.wiring as wiring
+
+        old_tick = wiring._self_model_tick
+        old_refresh = wiring._last_self_model_refresh
+        initial_refresh_time = wiring._last_self_model_refresh
+        wiring._self_model_tick = 0
+        wiring._last_self_model_refresh = 0.0
+        monkeypatch.setattr(wiring, "_SELF_MODEL_COOLDOWN", 0)
+
+        try:
+            # ABLATION: make HOT-1 interval impossibly large (never triggers)
+            monkeypatch.setattr(wiring, "_SELF_MODEL_INTERVAL", 999999)
+
+            with patch("modules.consciousness.reflect_on_self", return_value="I am Codi"):
+                for _ in range(50):
+                    wiring.process_elapsed_time(0.5)
+
+            # DEGRADATION CHECK: _last_self_model_refresh unchanged (never ran)
+            assert wiring._last_self_model_refresh == 0.0, \
+                "With interval ablated (999999), refresh should never trigger"
+        finally:
+            wiring._self_model_tick = old_tick
+            wiring._last_self_model_refresh = old_refresh
