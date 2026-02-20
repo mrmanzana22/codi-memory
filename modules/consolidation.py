@@ -63,6 +63,9 @@ from modules.reconsolidation import (  # noqa: F401
     mark_as_labile,
     clear_expired_labile,
     _extract_key_entities,
+    queue_correction_suggestion,
+    get_pending_corrections,
+    expire_stale_corrections,
     CORRECTION_PATTERNS,
     NEGATION_MARKERS,
 )
@@ -146,6 +149,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         if consolidated_ids:
             pruning = _phase_pruning(consolidated_ids)
             result["episodes_pruned"] = pruning.get("marked_consolidated", 0)
+
+    # Housekeeping: expire stale correction suggestions
+    try:
+        expired = expire_stale_corrections()
+        result["corrections_expired"] = expired
+    except Exception:
+        pass
 
     # Log the run
     duration_ms = int((datetime.now() - start).total_seconds() * 1000)
@@ -652,3 +662,4 @@ def register_consolidation_tools(mcp):
     mcp.tool()(correct_memory)
     mcp.tool()(get_semantic_facts)
     mcp.tool()(get_consolidation_stats)
+    mcp.tool()(get_pending_corrections)

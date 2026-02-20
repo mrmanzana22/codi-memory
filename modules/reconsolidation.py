@@ -432,3 +432,139 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
         f"Confidence: {old_confidence:.2f} -> {new_confidence:.2f}. "
         f"Vector re-embedded and FTS updated."
     )
+
+
+# ============================================================
+# SUGGEST MODE: Queue correction proposals instead of auto-applying
+# ============================================================
+
+def queue_correction_suggestion(
+    old_memory_id: str,
+    old_text: str,
+    new_text: str,
+    prediction_error: float,
+    new_memory_id: str = "",
+    shared_entities: list = None,
+    channels: dict = None,
+    window_hours: float = 24.0,
+) -> int:
+    """Queue a correction suggestion for later review.
+
+    Instead of auto-correcting, this implements the reconsolidation window
+    as a time-dependent review process (Nader 2000). Suggestions expire
+    after window_hours if not reviewed.
+
+    Returns:
+        ID of the queued suggestion, or -1 on error.
+    """
+    import json
+    try:
+        conn = _consolidation_conn()
+        now = datetime.now()
+        expires = now + timedelta(hours=window_hours)
+
+        cursor = conn.execute("""
+            INSERT INTO pending_corrections
+            (old_memory_id, new_memory_id, old_text, new_text,
+             prediction_error, shared_entities, channels,
+             status, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """, (
+            old_memory_id,
+            new_memory_id or "",
+            old_text[:500],
+            new_text[:500],
+            prediction_error,
+            json.dumps(shared_entities or []),
+            json.dumps(channels or {}),
+            now.isoformat(),
+            expires.isoformat(),
+        ))
+        conn.commit()
+        row_id = cursor.lastrowid
+        conn.close()
+        _logger.info("Queued correction suggestion #%d for memory %s (PE=%.2f)",
+                      row_id, old_memory_id[:8], prediction_error)
+        return row_id
+    except Exception as e:
+        _logger.error("Failed to queue correction: %s", redact_secrets(str(e)))
+        return -1
+
+
+def get_pending_corrections(include_expired: bool = False) -> str:
+    """Get pending correction suggestions for review.
+
+    MCP tool to inspect and act on queued contradictions.
+
+    Args:
+        include_expired: If True, also show expired suggestions
+    """
+    import json
+    try:
+        conn = _consolidation_conn()
+        now = datetime.now().isoformat()
+
+        if include_expired:
+            rows = conn.execute("""
+                SELECT id, old_memory_id, old_text, new_text,
+                       prediction_error, shared_entities, status,
+                       created_at, expires_at
+                FROM pending_corrections
+                ORDER BY prediction_error DESC
+                LIMIT 20
+            """).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, old_memory_id, old_text, new_text,
+                       prediction_error, shared_entities, status,
+                       created_at, expires_at
+                FROM pending_corrections
+                WHERE status = 'pending' AND expires_at > ?
+                ORDER BY prediction_error DESC
+                LIMIT 20
+            """, (now,)).fetchall()
+        conn.close()
+
+        if not rows:
+            return "[reconsolidation] No pending corrections."
+
+        lines = [f"=== Pending Corrections ({len(rows)}) ==="]
+        for r in rows:
+            row_id, old_id, old_txt, new_txt, pe, entities_json, status, created, expires = r
+            entities = json.loads(entities_json) if entities_json else []
+            lines.append(
+                f"\n#{row_id} [{status}] PE={pe:.2f} | entities: {', '.join(entities[:5])}\n"
+                f"  OLD ({old_id[:8]}): {old_txt[:100]}\n"
+                f"  NEW: {new_txt[:100]}\n"
+                f"  created: {created[:19]} | expires: {expires[:19]}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"[reconsolidation] Error: {redact_secrets(str(e))}"
+
+
+def expire_stale_corrections() -> int:
+    """Mark expired pending corrections as 'expired'.
+
+    Called during consolidation runs to clean up the queue.
+
+    Returns:
+        Number of corrections expired.
+    """
+    try:
+        conn = _consolidation_conn()
+        now = datetime.now().isoformat()
+        cursor = conn.execute("""
+            UPDATE pending_corrections
+            SET status = 'expired', reviewed_at = ?
+            WHERE status = 'pending' AND expires_at <= ?
+        """, (now, now))
+        count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if count > 0:
+            _logger.info("Expired %d stale correction suggestions", count)
+        return count
+    except Exception as e:
+        _logger.warning("expire_stale_corrections error: %s", redact_secrets(str(e)))
+        return 0

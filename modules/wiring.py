@@ -675,7 +675,7 @@ def _on_contradiction_detected(event_name: str, data: dict):
         from modules.config import CONTRADICTION_PE_ALERT
 
         if pe >= CONTRADICTION_PE_ALERT:
-            # High PE: explicit alert + mark labile
+            # High PE: explicit alert + mark labile + queue suggestion
             alert = (
                 f"[CONTRADICTION PE={pe:.2f}] "
                 f"New: '{new_text[:100]}...' conflicts with "
@@ -696,6 +696,22 @@ def _on_contradiction_detected(event_name: str, data: dict):
                         memory_id=old_memory_id,
                         prediction_error=pe,
                         trigger_context=f"Inline PE at encoding: {new_text[:200]}"
+                    )
+                except Exception:
+                    pass
+
+                # Queue correction suggestion (suggest mode -- Nader 2000 window)
+                try:
+                    from modules.consolidation import queue_correction_suggestion
+                    channels = data.get("channels", {})
+                    queue_correction_suggestion(
+                        old_memory_id=old_memory_id,
+                        old_text=old_text,
+                        new_text=new_text,
+                        prediction_error=pe,
+                        new_memory_id=data.get("new_memory_id", ""),
+                        shared_entities=shared_entities,
+                        channels=channels,
                     )
                 except Exception:
                     pass
