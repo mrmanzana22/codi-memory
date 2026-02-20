@@ -157,8 +157,10 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
             canal3_score = min(1.0, entity_overlap * 1.5)
 
     # Weighted sum: C2 (topic confirmation) amplifies C1+C3
+    # Floor raised from 0.4→0.55: if keywords+negation fire, that's enough
+    # signal even without strong topic confirmation (diagnostic 2026-02-20)
     raw_pe = canal1_score * 0.5 + canal3_score * 0.5
-    pe = raw_pe * (0.4 + 0.6 * canal2_score)
+    pe = raw_pe * (0.55 + 0.45 * canal2_score)
 
     channels = {
         "keywords": canal1_score,
