@@ -333,12 +333,16 @@ def get_qdrant():
 class _LazyMemory:
     """Proxy que inicializa mem0 en el primer uso."""
     def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(get_memory(), name)
 
 
 class _LazyQdrant:
     """Proxy que inicializa Qdrant en el primer uso."""
     def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(get_qdrant(), name)
 
 

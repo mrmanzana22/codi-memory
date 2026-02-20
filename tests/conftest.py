@@ -314,6 +314,7 @@ def patch_externals(monkeypatch, fake_mem0, fake_qdrant):
         "modules.self_model",
         "modules.emotion",
         "modules.curiosity",
+        "modules.flush",
     ]
     for mod_path in _modules_with_memory:
         try:
