@@ -95,6 +95,10 @@ class TestMetacognitiveControl:
 # PART 2: PP-3 Prediction-Error-Driven Reconsolidation
 # ============================================================
 
+@pytest.mark.skipif(
+    os.environ.get("CODI_SKIP_QDRANT") == "1",
+    reason="Qdrant not available in CI"
+)
 class TestReconsolidation:
     """Nader 2000: PE-driven reconsolidation."""
 
