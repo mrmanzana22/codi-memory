@@ -26,6 +26,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
 TRACKER_DIR = os.path.join(BASE_DIR, "hooks", ".trackers")
+PROSPECTIVE_DB_PATH = os.path.join(BASE_DIR, "prospective.db")
 
 # Signal keywords — adapted from supermemory + our own
 SIGNAL_KEYWORDS = [
@@ -335,6 +336,175 @@ def main():
     except Exception:
         # Never block Claude — silent fail
         pass
+
+    # Phase 2: Session bridge checkpoint (lightweight SQLite-only)
+    try:
+        _session_bridge_checkpoint(session_id)
+    except Exception:
+        pass
+
+
+def _session_bridge_checkpoint(session_id: str):
+    """Lightweight session bridge checkpoint via direct SQLite.
+
+    Captures working memory, predictions, intentions, and traces
+    without importing heavy modules (Qdrant, mem0, OpenAI).
+    Respects 120s dedupe window and 50-row retention.
+    """
+    # WM tables are in the SAME DB as FTS (memories_fts.db)
+    if not os.path.exists(FTS_DB_PATH):
+        return
+
+    conn = get_db_connection()
+
+    # --- DEDUPE CHECK ---
+    try:
+        existing = conn.execute(
+            "SELECT id, source, created_at FROM session_checkpoints "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if existing:
+            try:
+                from datetime import timezone, timedelta
+                ex_dt = datetime.fromisoformat(existing[2])
+                now = datetime.now(timezone(timedelta(hours=-5)))
+                if ex_dt.tzinfo is None:
+                    ex_dt = ex_dt.replace(tzinfo=timezone(timedelta(hours=-5)))
+                age_sec = (now - ex_dt).total_seconds()
+            except Exception:
+                age_sec = 9999
+            if age_sec < 120:
+                # Within dedupe window: skip if existing is flush (higher priority)
+                if existing[1] == "flush":
+                    conn.close()
+                    return
+    except Exception:
+        pass
+
+    now_iso = datetime.now().isoformat()
+
+    # 1. Working memory items + active project (same DB)
+    wm_items = []
+    wm_active_count = 0
+    wm_topics = []
+    active_project = None
+    active_traces = []
+    try:
+        wm_active_count = conn.execute(
+            "SELECT COUNT(*) FROM working_memory WHERE active = 1"
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT content, topic, relevance FROM working_memory "
+            "WHERE active = 1 ORDER BY relevance DESC LIMIT 15"
+        ).fetchall()
+        for r in rows:
+            wm_items.append({
+                "content": (r[0] or "")[:200],
+                "topic": r[1],
+                "relevance": round(float(r[2] or 0), 2),
+            })
+            if r[1] and r[1] not in wm_topics:
+                wm_topics.append(r[1])
+            if not active_project and r[1] not in ('metamemory', 'contradiction', 'general', ''):
+                active_project = r[1]
+    except Exception:
+        pass
+
+    # Active traces (same DB)
+    try:
+        trace_rows = conn.execute(
+            "SELECT trace_name, theme FROM narrative_traces WHERE active = 1 LIMIT 10"
+        ).fetchall()
+        for r in trace_rows:
+            active_traces.append({"trace_name": r[0], "theme": r[1]})
+    except Exception:
+        pass
+
+    # 2. Prediction state + recent PEs
+    last_pred_topic = None
+    last_pred_confidence = None
+    recent_pes = []
+    try:
+        row = conn.execute(
+            "SELECT predicted_topic, confidence FROM prediction_state WHERE id=1"
+        ).fetchone()
+        if row:
+            last_pred_topic = row[0]
+            last_pred_confidence = row[1]
+    except Exception:
+        pass
+    try:
+        pe_rows = conn.execute(
+            "SELECT actual_topic, predicted_topic, surprise_score, created_at "
+            "FROM prediction_results ORDER BY id DESC LIMIT 3"
+        ).fetchall()
+        for r in pe_rows:
+            recent_pes.append({
+                "actual": r[0], "predicted": r[1],
+                "surprise": r[2], "ts": r[3]
+            })
+    except Exception:
+        pass
+
+    # 3. Pending intentions (from prospective.db)
+    pending_intentions = []
+    if os.path.exists(PROSPECTIVE_DB_PATH):
+        try:
+            pm_conn = sqlite3.connect(PROSPECTIVE_DB_PATH, timeout=3)
+            pm_conn.execute("PRAGMA busy_timeout=2000")
+            int_rows = pm_conn.execute(
+                "SELECT id, action, priority, activation, expiry FROM intentions "
+                "WHERE status = 'pending' ORDER BY activation DESC LIMIT 10"
+            ).fetchall()
+            for r in int_rows:
+                pending_intentions.append({
+                    "id": r[0], "action": (r[1] or "")[:150],
+                    "priority": r[2], "activation": r[3], "expiry": r[4],
+                })
+            pm_conn.close()
+        except Exception:
+            pass
+
+    # 4. Build and insert checkpoint
+    try:
+        conn.execute(
+            "INSERT INTO session_checkpoints "
+            "(trace_id, session_id, source, goal_stack, active_project, "
+            " session_summary, attention_focus, attention_strength, "
+            " last_prediction_topic, last_prediction_confidence, "
+            " recent_prediction_errors, wm_items, wm_active_count, "
+            " pad_pleasure, pad_arousal, pad_dominance, pad_trigger, "
+            " last_decisions, pending_intentions, active_traces, "
+            " session_duration_minutes, created_at, sleep_report) "
+            "VALUES (?, ?, 'hook', '[]', ?, ?, NULL, 0.0, ?, ?, ?, ?, ?, "
+            " 0.0, 0.0, 0.0, '', '[]', ?, ?, NULL, ?, NULL)",
+            (
+                "",  # trace_id (not available in hook)
+                session_id or "",
+                active_project,
+                "",  # session_summary (auto-captured separately)
+                last_pred_topic,
+                last_pred_confidence,
+                json.dumps(recent_pes, ensure_ascii=False),
+                json.dumps(wm_items, ensure_ascii=False),
+                wm_active_count,
+                json.dumps(pending_intentions, ensure_ascii=False),
+                json.dumps(active_traces, ensure_ascii=False),
+                now_iso,
+            ),
+        )
+        conn.commit()
+
+        # Retention: keep only last 50
+        conn.execute(
+            "DELETE FROM session_checkpoints WHERE id NOT IN "
+            "(SELECT id FROM session_checkpoints ORDER BY created_at DESC LIMIT 50)"
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':
