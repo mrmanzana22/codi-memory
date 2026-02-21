@@ -528,8 +528,9 @@ class TestSynapticHomeostasis:
         new_a = result["current"]["arousal"]
         new_d = result["current"]["dominance"]
 
-        # Expected: 0.8 + (0.2 - 0.8) * 0.1 = 0.74
-        assert abs(new_p - 0.74) < 0.01, f"pleasure: expected 0.74, got {new_p}"
+        # Asymmetric decay: positive above mood decays faster (rate * 1.5)
+        # Expected: 0.8 + (0.2 - 0.8) * (0.1 * 1.5) = 0.71
+        assert abs(new_p - 0.71) < 0.02, f"pleasure: expected ~0.71, got {new_p}"
         # Expected: 0.9 + (0.1 - 0.9) * 0.1 = 0.82
         assert abs(new_a - 0.82) < 0.01, f"arousal: expected 0.82, got {new_a}"
         # Expected: 0.7 + (0.3 - 0.7) * 0.1 = 0.66

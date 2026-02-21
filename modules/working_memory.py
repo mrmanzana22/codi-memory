@@ -288,6 +288,16 @@ def push_to_working_memory(
             occurred_at = added_at
 
         relevance = min(1.0, max(0.0, float(relevance)))
+        base_relevance = relevance
+
+        # Arousal modulates WM admission priority (Phelps 2006)
+        try:
+            from modules.config import _emotional_state
+            current_arousal = abs(float(_emotional_state["current"].get("arousal", 0.0)))
+            if current_arousal > 0.05:
+                relevance = min(1.0, relevance + current_arousal * 0.15)
+        except Exception:
+            pass
 
         with _get_conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -315,7 +325,8 @@ def push_to_working_memory(
                 "id": new_id,
                 "chain_id": chain_id,
                 "topic": topic,
-                "relevance": relevance,
+                "relevance": base_relevance,
+                "effective_relevance": relevance,
                 "added_at": added_at,
                 "occurred_at": occurred_at,
                 "pretty": f"# WORKING MEMORY\nPushed: {content[:60]}... -> chain {chain_id}",

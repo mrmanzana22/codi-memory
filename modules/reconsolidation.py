@@ -218,13 +218,23 @@ def check_reconsolidation(memory_id: str, memory_payload: dict,
     memory_text = memory_payload.get("data", "") or memory_payload.get("memory", "")
     contradiction = detect_contradiction(memory_text, current_context)
 
-    if contradiction["prediction_error"] > RECONSOLIDATION_PE_THRESHOLD:
+    # Emotional memories are more susceptible to reconsolidation
+    # (Nader & Einarsson 2010): lower PE threshold for high-arousal memories
+    pad_enc = memory_payload.get("pad_at_encoding", {})
+    arousal_enc = abs(float(pad_enc.get("A", 0.0))) if isinstance(pad_enc, dict) else 0.0
+    effective_threshold = RECONSOLIDATION_PE_THRESHOLD
+    if arousal_enc > 0.4:
+        effective_threshold *= (1.0 - arousal_enc * 0.3)  # up to 30% lower threshold
+
+    if contradiction["prediction_error"] > effective_threshold:
         return {
             "should_reconsolidate": True,
             "prediction_error": contradiction["prediction_error"],
             "memory_strength": strength,
             "contradiction": contradiction["detail"],
-            "reason": "prediction_error_exceeded_threshold"
+            "reason": "prediction_error_exceeded_threshold",
+            "emotional_vulnerability": arousal_enc > 0.4,
+            "effective_threshold": round(effective_threshold, 3),
         }
 
     return {"should_reconsolidate": False, "reason": "no_prediction_error",

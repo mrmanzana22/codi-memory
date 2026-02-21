@@ -236,13 +236,21 @@ def _phase_selection(lookback_hours: int) -> list:
             if not text or len(text) < 10:
                 continue
 
-            # Score: importance weight * recency (hours since cutoff, inverted)
+            # Score: importance * recency * emotional priority
+            # Payne & Kensinger 2010: arousal x valence interaction
             imp = payload.get("narrative_importance", "medium")
             imp_w = importance_weights.get(imp, 0.5)
             hours_ago = max(0.1, (datetime.now() - created).total_seconds() / 3600)
             recency = 1.0 / (1.0 + hours_ago / lookback_hours)  # 0-1, higher = more recent
 
-            score = imp_w * 0.6 + recency * 0.4
+            # Emotional consolidation priority (McGaugh 2004, Payne & Kensinger 2010)
+            pad_enc = payload.get("pad_at_encoding", {})
+            arousal_enc = abs(float(pad_enc.get("A", 0.0))) if isinstance(pad_enc, dict) else 0.0
+            pleasure_enc = float(pad_enc.get("P", 0.0)) if isinstance(pad_enc, dict) else 0.0
+            negativity_bonus = 0.3 if pleasure_enc < -0.2 else 0.0
+            emotional_priority = min(1.0, arousal_enc * (1.0 + negativity_bonus))
+
+            score = imp_w * 0.45 + recency * 0.30 + emotional_priority * 0.25
 
             candidates.append({
                 "id": str(p.id),

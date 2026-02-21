@@ -173,3 +173,51 @@ class TestLabileMemory:
         ).fetchone()
         conn.close()
         assert row is None
+
+
+class TestEmotionalVulnerability:
+    """Tests for emotional reconsolidation vulnerability (Nader & Einarsson 2010)."""
+
+    @patch("modules.reconsolidation.compute_unified_activation")
+    @patch("modules.reconsolidation.detect_contradiction")
+    def test_emotional_memory_lower_threshold(self, mock_contradiction, mock_activation):
+        """High-arousal memory should reconsolidate with lower PE."""
+        from modules.reconsolidation import check_reconsolidation
+        from modules.config import RECONSOLIDATION_PE_THRESHOLD
+
+        mock_activation.return_value = MagicMock(total=0.5)
+
+        # PE just below normal threshold but above emotional threshold
+        pe_value = RECONSOLIDATION_PE_THRESHOLD * 0.85  # 15% below normal threshold
+        mock_contradiction.return_value = {
+            "prediction_error": pe_value,
+            "detail": "test contradiction",
+        }
+
+        # Neutral memory: should NOT reconsolidate (PE below threshold)
+        neutral_payload = {"data": "neutral fact", "pad_at_encoding": {"P": 0.0, "A": 0.0, "D": 0.0}}
+        result_neutral = check_reconsolidation("mem1", neutral_payload, "context")
+        assert result_neutral["should_reconsolidate"] is False
+
+        # Emotional memory: SHOULD reconsolidate (lower effective threshold)
+        emotional_payload = {"data": "emotional fact", "pad_at_encoding": {"P": -0.5, "A": 0.8, "D": 0.0}}
+        result_emotional = check_reconsolidation("mem2", emotional_payload, "context")
+        assert result_emotional["should_reconsolidate"] is True
+        assert result_emotional.get("emotional_vulnerability") is True
+
+    @patch("modules.reconsolidation.compute_unified_activation")
+    @patch("modules.reconsolidation.detect_contradiction")
+    def test_low_arousal_uses_normal_threshold(self, mock_contradiction, mock_activation):
+        """Low-arousal memory should use the standard PE threshold."""
+        from modules.reconsolidation import check_reconsolidation
+        from modules.config import RECONSOLIDATION_PE_THRESHOLD
+
+        mock_activation.return_value = MagicMock(total=0.5)
+        mock_contradiction.return_value = {
+            "prediction_error": RECONSOLIDATION_PE_THRESHOLD * 0.9,
+            "detail": "minor",
+        }
+
+        payload = {"data": "calm fact", "pad_at_encoding": {"P": 0.2, "A": 0.1, "D": 0.3}}
+        result = check_reconsolidation("mem3", payload, "context")
+        assert result["should_reconsolidate"] is False

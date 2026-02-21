@@ -31,6 +31,8 @@ __all__ = [
     "tag_memory_emotion",
     "search_by_emotion",
     "get_emotional_memories",
+    "infer_emotion_from_text",
+    "evolve_pad_from_text",
     "register_tools",
 ]
 
@@ -168,7 +170,10 @@ def apply_emotional_decay() -> str:
         if not current['timestamp']:
             return json.dumps({'result': 'Sin estado emocional para decaer', 'applied': False})
 
-        new_p = current['pleasure'] + (mood['pleasure'] - current['pleasure']) * decay_rate
+        # Asymmetric decay: positive fades faster, negative persists
+        # Baumeister et al. 2001, Larsen & Prizmic 2008
+        p_decay = decay_rate * 1.5 if current['pleasure'] > mood['pleasure'] else decay_rate * 0.8
+        new_p = current['pleasure'] + (mood['pleasure'] - current['pleasure']) * p_decay
         new_a = current['arousal'] + (mood['arousal'] - current['arousal']) * decay_rate
         new_d = current['dominance'] + (mood['dominance'] - current['dominance']) * decay_rate
 
@@ -426,8 +431,182 @@ def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
+# ============================================================
+# PAD AUTO-EVOLUTION FROM TEXT
+# Scherer 2001 CPM, Kuppens et al. 2010 OU-process
+# ============================================================
+
+# Drift limits per dimension (per interaction)
+_DRIFT_MAX_PLEASURE = 0.10    # Valence shifts slowly
+_DRIFT_MAX_AROUSAL = 0.15     # Arousal shifts faster (physiological)
+_DRIFT_MAX_DOMINANCE = 0.05   # Dominance most stable (personality-level)
+
+# Negativity bias (Baumeister et al. 2001: "bad is stronger than good")
+_NEGATIVITY_BIAS = 1.3
+
+# Keyword lexicons (Spanish-aware for Hare's context)
+_POSITIVE_CUES = {
+    "bien", "excelente", "perfecto", "genial", "increible", "funciona",
+    "listo", "ready", "nice", "great", "cool", "bueno", "amor",
+    "gracias", "feliz", "contento", "orgulloso",
+}
+_NEGATIVE_CUES = {
+    "error", "fallo", "roto", "bug", "problema", "crash", "mal",
+    "mierda", "frustrado", "preocupado", "worried", "broken",
+    "failed", "no funciona", "no sirve", "perdido",
+}
+_HIGH_AROUSAL_CUES = {
+    "urgente", "critico", "ahora", "rapido", "ya", "importante",
+    "increible", "wow", "emocionado", "excited", "asap",
+}
+_LOW_AROUSAL_CUES = {
+    "tranquilo", "calma", "despacio", "relax", "chill", "suave",
+    "pausa", "descanso",
+}
+_HIGH_DOMINANCE_CUES = {
+    "dale", "metele", "ejecuta", "hazlo", "control", "decido",
+    "apruebo", "autorizo",
+}
+_LOW_DOMINANCE_CUES = {
+    "ayuda", "no se", "help", "confused", "perdido", "bloqueado",
+    "stuck",
+}
+
+# Bigrams that override single-word interpretation
+_NEGATION_PREFIXES = {"no", "ni", "sin", "nunca", "tampoco"}
+
+# Strong event cues (magnitude amplifier)
+_STRONG_CUES = {
+    "error critico", "se rompio", "funciono perfecto", "increible",
+    "production down", "all tests pass", "todo verde", "se cayo",
+}
+
+
+def infer_emotion_from_text(text: str) -> dict:
+    """Infer PAD deltas from text content using keyword heuristics.
+
+    Returns {pleasure_delta, arousal_delta, dominance_delta}.
+    All deltas clamped to dimension-specific max drift.
+
+    Scherer 2001: gradual appraisal-driven shifts, not discrete jumps.
+    Kuppens et al. 2010: Ornstein-Uhlenbeck mean-reverting process.
+    """
+    if not text or len(text) < 3:
+        return {"pleasure_delta": 0.0, "arousal_delta": 0.0, "dominance_delta": 0.0}
+
+    text_lower = text.lower()
+    words = set(text_lower.split())
+
+    # Check for negation context (simple: if negation word precedes a cue)
+    negated_words = set()
+    word_list = text_lower.split()
+    for i, w in enumerate(word_list):
+        if w in _NEGATION_PREFIXES and i + 1 < len(word_list):
+            negated_words.add(word_list[i + 1])
+
+    # Strong event magnitude
+    magnitude = 1.0
+    for cue in _STRONG_CUES:
+        if cue in text_lower:
+            magnitude = 1.8
+            break
+
+    # Pleasure (valence)
+    pos_hits = len(words & _POSITIVE_CUES) - len(negated_words & _POSITIVE_CUES)
+    neg_hits = len(words & _NEGATIVE_CUES) - len(negated_words & _NEGATIVE_CUES)
+    # Check bigram negative cues
+    for cue in _NEGATIVE_CUES:
+        if " " in cue and cue in text_lower:
+            neg_hits += 1
+    raw_p = (pos_hits - neg_hits) * 0.05
+    if raw_p < 0:
+        raw_p *= _NEGATIVITY_BIAS  # Negative emotions hit harder
+
+    # Arousal
+    high_a = len(words & _HIGH_AROUSAL_CUES)
+    low_a = len(words & _LOW_AROUSAL_CUES)
+    raw_a = (high_a - low_a) * 0.06
+
+    # Dominance
+    high_d = len(words & _HIGH_DOMINANCE_CUES)
+    low_d = len(words & _LOW_DOMINANCE_CUES)
+    raw_d = (high_d - low_d) * 0.04
+
+    # Apply magnitude and clamp
+    p_delta = max(-_DRIFT_MAX_PLEASURE, min(_DRIFT_MAX_PLEASURE, raw_p * magnitude))
+    a_delta = max(-_DRIFT_MAX_AROUSAL, min(_DRIFT_MAX_AROUSAL, raw_a * magnitude))
+    d_delta = max(-_DRIFT_MAX_DOMINANCE, min(_DRIFT_MAX_DOMINANCE, raw_d * magnitude))
+
+    return {
+        "pleasure_delta": round(p_delta, 4),
+        "arousal_delta": round(a_delta, 4),
+        "dominance_delta": round(d_delta, 4),
+    }
+
+
+def evolve_pad_from_text(text: str) -> dict:
+    """Apply inferred PAD deltas to current emotional state.
+
+    Called automatically when memories are stored. Applies gradual
+    drift per Scherer's Component Process Model.
+
+    Returns the new emotional state after drift, or None if no change.
+    """
+    deltas = infer_emotion_from_text(text)
+
+    # Skip if all deltas are zero
+    if all(abs(v) < 0.001 for v in deltas.values()):
+        return {"changed": False, "deltas": deltas}
+
+    global _emotional_state
+    current = _emotional_state["current"]
+
+    new_p = _clamp_pad_value(current["pleasure"] + deltas["pleasure_delta"])
+    new_a = _clamp_pad_value(current["arousal"] + deltas["arousal_delta"])
+    new_d = _clamp_pad_value(current["dominance"] + deltas["dominance_delta"])
+
+    _emotional_state["history"].append(current.copy())
+    _emotional_state["history"] = _emotional_state["history"][-20:]
+
+    _emotional_state["current"] = {
+        "pleasure": new_p,
+        "arousal": new_a,
+        "dominance": new_d,
+        "timestamp": now_iso(),
+        "trigger": "text_inference",
+    }
+
+    # Emit event for other subsystems
+    from modules.events import event_bus, Events
+    event_bus.emit(Events.EMOTION_CHANGED, {
+        "source": "text_inference",
+        "deltas": deltas,
+        "new_state": {"P": new_p, "A": new_a, "D": new_d},
+    })
+
+    return {
+        "changed": True,
+        "deltas": deltas,
+        "new_state": {"P": round(new_p, 3), "A": round(new_a, 3), "D": round(new_d, 3)},
+    }
+
+
+def _on_memory_stored(data: dict):
+    """Event handler: auto-evolve PAD when a memory is stored.
+
+    Wired to Events.MEMORY_STORED so PAD evolves organically
+    from conversation content, not just manual set_emotional_state().
+    """
+    content = data.get("content", "")
+    if content and len(content) > 10:
+        try:
+            evolve_pad_from_text(content)
+        except Exception:
+            pass
+
+
 def register_tools(mcp):
-    """Register emotion MCP tools."""
+    """Register emotion MCP tools and wire event handlers."""
     mcp.tool()(set_emotional_state)
     mcp.tool()(get_emotional_state)
     mcp.tool()(update_mood_baseline)
@@ -437,3 +616,7 @@ def register_tools(mcp):
     mcp.tool()(tag_memory_emotion)
     mcp.tool()(search_by_emotion)
     mcp.tool()(get_emotional_memories)
+
+    # Wire PAD auto-evolution to memory storage events
+    from modules.events import event_bus, Events
+    event_bus.on(Events.MEMORY_STORED, _on_memory_stored)

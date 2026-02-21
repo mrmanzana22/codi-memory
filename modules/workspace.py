@@ -40,7 +40,11 @@ _global_workspace = {
     'spotlight': [],
     'recent_context': [],
     'last_broadcast': None,
-    'workspace_theme': None
+    'workspace_theme': None,
+    # GWT-6: Cognitive cycle tracking (Baars 1988, LIDA Franklin 2006)
+    'cycle_count': 0,
+    'cycle_history': [],          # Last 10 winners [{cycle, theme, content, timestamp}]
+    'last_cycle_timestamp': None,
 }
 
 
@@ -57,6 +61,33 @@ def update_workspace_spotlight(memories: list, theme: str = None):
     _global_workspace['last_broadcast'] = now_iso()
     if theme:
         _global_workspace['workspace_theme'] = theme
+
+
+def record_workspace_cycle(theme: str, winner_content: str) -> None:
+    """Record a cognitive cycle for seriality tracking (GWT-6).
+
+    Baars 1988: Consciousness is serial -- one content at a time in the spotlight.
+    LIDA (Franklin 2006): Cognitive cycles are the fundamental unit of processing.
+
+    Args:
+        theme: Topic of the winning content
+        winner_content: Text of the winner (truncated to 100 chars)
+    """
+    global _global_workspace
+    now = now_iso()
+
+    _global_workspace['cycle_count'] += 1
+    _global_workspace['last_cycle_timestamp'] = now
+
+    cycle_entry = {
+        'cycle': _global_workspace['cycle_count'],
+        'theme': theme,
+        'content': winner_content[:100],
+        'timestamp': now,
+    }
+    _global_workspace['cycle_history'].append(cycle_entry)
+    # Keep last 10 cycles
+    _global_workspace['cycle_history'] = _global_workspace['cycle_history'][-10:]
 
 
 def focus_attention(context: str, depth: str = "normal") -> str:
@@ -148,6 +179,10 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         spotlight = spotlight_candidates
         update_workspace_spotlight(spotlight, theme=context)
 
+        # GWT-6: Record cognitive cycle
+        if spotlight:
+            record_workspace_cycle(context, spotlight[0].get('content', ''))
+
         # Spreading activation: propagar a vecinos de las memorias en spotlight
         try:
             from modules.spreading import _spread_activation
@@ -218,6 +253,12 @@ def broadcast_to_workspace(memory_id: str) -> str:
         workspace['spotlight'] = [{'id': full_id, 'content': main_content}]
         workspace['last_broadcast'] = now_iso()
 
+        # GWT-6: Record cognitive cycle
+        record_workspace_cycle(
+            main_themes[0] if main_themes else "broadcast",
+            main_content,
+        )
+
         # Emit WORKSPACE_BROADCAST event (LAZY import to avoid cycles)
         try:
             from modules.events import event_bus, Events
@@ -226,6 +267,17 @@ def broadcast_to_workspace(memory_id: str) -> str:
                 'content': main_content[:200],
                 'themes': main_themes,
                 'connections_made': connections_made,
+            })
+        except Exception:
+            pass
+
+        # GWT-5: Recruitment cycle -- modules react to broadcast (Baars 1988)
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.WORKSPACE_RECRUITMENT, {
+                'broadcast_content': main_content[:200],
+                'broadcast_theme': main_themes[0] if main_themes else 'unknown',
+                'memory_id': full_id,
             })
         except Exception:
             pass
@@ -249,6 +301,10 @@ def get_workspace_state() -> str:
 
         lines.append(f"**Tema actual:** {workspace.get('workspace_theme', 'ninguno')}")
         lines.append(f"**Ultimo broadcast:** {workspace.get('last_broadcast', 'nunca')}")
+        lines.append(f"**Ciclos cognitivos:** {workspace.get('cycle_count', 0)}")
+        if workspace.get('cycle_history'):
+            last = workspace['cycle_history'][-1]
+            lines.append(f"**Ultimo ciclo:** #{last['cycle']} - {last['theme']}")
         lines.append(f"\n## En el Spotlight ({len(workspace['spotlight'])} memorias)")
         for i, mem in enumerate(workspace['spotlight'], 1):
             content = mem.get('content', 'N/A')[:60]
@@ -267,11 +323,24 @@ def get_workspace_state() -> str:
 
 def apply_salience_decay(decay_rate: float = 0.05) -> str:
     """
-    Aplica decay a la salience de todas las memorias no accedidas recientemente.
+    Aplica decay a la salience usando FadeMem importance-modulated curves.
+
+    Uses proper forgetting curves (Ebbinghaus 1885, Wixted & Ebbesen 1991)
+    instead of flat subtraction. Decay rate varies by importance, consolidation
+    status, and emotional arousal at encoding.
+
+    Falls back to flat decay for memories without timing data.
 
     Args:
-        decay_rate: Cuanto reducir la salience (default 0.05)
+        decay_rate: Scaling factor for decay intensity (default 0.05).
+                    Maps to decay_multiplier = decay_rate / 0.05 for FadeMem.
     """
+    from modules.forgetting import (
+        compute_fadem_strength, _get_hours_since_access,
+        _get_emotional_arousal, _is_consolidated, _get_memory_type,
+        FADEM_FLOOR,
+    )
+
     try:
         all_points, _ = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)
         if not all_points:
@@ -279,7 +348,10 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
         decayed_count = 0
         preserved_count = 0
-        min_salience = 0.1
+        fadem_count = 0
+
+        # Map decay_rate to FadeMem multiplier (0.05 = 1.0x, 0.03 = 0.6x)
+        decay_multiplier = decay_rate / 0.05
 
         for point in all_points:
             salience = point.payload.get('attention_salience', 0.5)
@@ -289,19 +361,39 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                 preserved_count += 1
                 continue
 
-            if salience > min_salience:
-                new_salience = max(salience - decay_rate, min_salience)
+            if salience <= FADEM_FLOOR:
+                continue
+
+            # Try FadeMem curve (needs timing data)
+            hours = _get_hours_since_access(point.payload)
+            if hours is not None:
+                new_salience = compute_fadem_strength(
+                    current_salience=salience,
+                    hours_since_access=hours,
+                    importance=importance,
+                    consolidated=_is_consolidated(point.payload),
+                    memory_type=_get_memory_type(point.payload),
+                    emotional_arousal=_get_emotional_arousal(point.payload),
+                    decay_multiplier=decay_multiplier,
+                )
+                fadem_count += 1
+            else:
+                # Flat fallback for memories without timing data
+                new_salience = max(FADEM_FLOOR, salience - decay_rate)
+
+            if new_salience < salience:
                 record_access(COLLECTION_NAME, point.id, {
                     'attention_salience': new_salience,
                 })
                 decayed_count += 1
 
-        lines = [f"# Salience Decay Aplicado\n"]
-        lines.append(f"**Decay rate:** {decay_rate}")
+        lines = [f"# Salience Decay Aplicado (FadeMem)\n"]
+        lines.append(f"**Decay multiplier:** {decay_multiplier:.2f}x")
         lines.append(f"**Memorias procesadas:** {len(all_points)}")
         lines.append(f"**Con decay aplicado:** {decayed_count}")
+        lines.append(f"**FadeMem curves:** {fadem_count}")
+        lines.append(f"**Flat fallback:** {decayed_count - fadem_count}")
         lines.append(f"**Preservadas (alta importancia):** {preserved_count}")
-        lines.append(f"\n*El decay simula el olvido gradual de memorias no atendidas*")
         return "\n".join(lines)
     except Exception as e:
         return f"Error aplicando decay: {redact_secrets(str(e))}"

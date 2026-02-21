@@ -652,7 +652,14 @@ def search_memory(query: str, limit: int = 5) -> str:
                     if not text:
                         text = payload.get("data", payload.get("memory", ""))
 
-                    memories.append(f"{i}. {date_display}{temporal_tag}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}] {text}")
+                    # Per-memory confidence (Koriat 1997)
+                    try:
+                        from modules.retrieval_metadata import compute_memory_confidence
+                        mem_conf = compute_memory_confidence(payload, activation=act)
+                    except Exception:
+                        mem_conf = 0.0
+
+                    memories.append(f"{i}. {date_display}{temporal_tag}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}|conf:{mem_conf:.2f}] {text}")
                 except Exception:
                     memories.append(f"{i}. [score:{score:.2f}] {text}")
 

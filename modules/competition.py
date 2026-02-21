@@ -25,6 +25,12 @@ DEFAULT_WORKSPACE_SLOTS = 5       # Max winners per competition (GWT capacity)
 ATTENTION_FOCUS_BONUS = 0.12      # Top-down attentional gain (Desimone & Duncan 1995)
 IGNITION_THRESHOLD = 0.25         # Min activation for workspace access (Dehaene & Changeux 2011)
 COALITION_TOPIC_BONUS = 0.10      # Bonus when multiple domains converge on same topic
+
+# GWT-4: Recurrent amplification (Dehaene & Changeux 2003)
+# Models NMDA-mediated bistable dynamics: winner self-excites, losers suppressed
+AMPLIFICATION_GAIN = 0.15         # Winner recurrent self-excitation
+LATERAL_INHIBITION = 0.12         # Loser suppression (strong lateral inhibition)
+
 VALID_DOMAINS = frozenset([
     "episodic", "semantic", "working_memory",
     "prospective", "prediction", "trigger",
@@ -105,6 +111,9 @@ def run_workspace_competition(
     winners = ranked[:slots]
     losers = ranked[slots:] + below_threshold
 
+    # GWT-4: Recurrent amplification (phase transition / ignition)
+    apply_recurrent_amplification(winners, losers)
+
     result = CompetitionResult(
         winners=winners,
         losers=losers,
@@ -140,6 +149,30 @@ def _apply_coalition_bonus(candidates: list) -> None:
         if len(domains) >= 2:
             for m in members:
                 m.activation = min(1.0, m.activation + COALITION_TOPIC_BONUS)
+
+
+def apply_recurrent_amplification(winners: list, losers: list) -> None:
+    """GWT-4: Nonlinear ignition dynamics (Dehaene & Changeux 2003).
+
+    After initial ranking, the primary winner gets recurrent self-excitation
+    while ALL losers suffer lateral inhibition. This creates a phase transition
+    (bistable dynamics): above threshold -> explosive amplification + suppression.
+
+    NMDA-mediated recurrence makes workspace access all-or-none:
+    the winner becomes much stronger, losers become much weaker.
+
+    Only the top winner gets amplified (single content in spotlight).
+    All losers get suppressed equally (uniform lateral inhibition).
+    """
+    if not winners:
+        return
+
+    # Recurrent self-excitation: top winner gets boosted
+    winners[0].activation = min(1.0, winners[0].activation + AMPLIFICATION_GAIN)
+
+    # Lateral inhibition: all losers suppressed
+    for loser in losers:
+        loser.activation = max(0.0, loser.activation - LATERAL_INHIBITION)
 
 
 def _emit_competition_event(result: CompetitionResult):

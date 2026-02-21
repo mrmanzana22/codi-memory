@@ -207,3 +207,128 @@ class TestSearchByEmotion:
                         'hostile', 'anxious', 'disdainful', 'bored']:
             result = json.loads(search_by_emotion(emotion))
             assert result["result"] != "error", f"Failed for {emotion}"
+
+
+class TestInferEmotionFromText:
+    """Tests for infer_emotion_from_text (PAD auto-evolution)."""
+
+    def test_positive_text_positive_pleasure(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("todo funciona perfecto, excelente trabajo")
+        assert result["pleasure_delta"] > 0
+
+    def test_negative_text_negative_pleasure(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("hay un error critico, el sistema esta roto")
+        assert result["pleasure_delta"] < 0
+
+    def test_negativity_bias_stronger(self):
+        """Negative cues produce larger magnitude than equivalent positive (single cue)."""
+        from modules.emotion import infer_emotion_from_text
+        # Single cue each to avoid hitting the clamp
+        pos = infer_emotion_from_text("esta genial el resultado")
+        neg = infer_emotion_from_text("hay un problema serio")
+        assert abs(neg["pleasure_delta"]) > abs(pos["pleasure_delta"])
+
+    def test_high_arousal_cues(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("urgente critico ahora rapido")
+        assert result["arousal_delta"] > 0
+
+    def test_low_arousal_cues(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("tranquilo relax calma despacio")
+        assert result["arousal_delta"] < 0
+
+    def test_dominance_cues(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("dale metele ejecuta hazlo")
+        assert result["dominance_delta"] > 0
+
+    def test_neutral_text_no_drift(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("revisando la documentacion del proyecto")
+        assert abs(result["pleasure_delta"]) < 0.01
+        assert abs(result["arousal_delta"]) < 0.01
+        assert abs(result["dominance_delta"]) < 0.01
+
+    def test_empty_text_no_drift(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("")
+        assert result == {"pleasure_delta": 0.0, "arousal_delta": 0.0, "dominance_delta": 0.0}
+
+    def test_drift_clamped_to_max(self):
+        """Even many cues cannot exceed max drift."""
+        from modules.emotion import infer_emotion_from_text, _DRIFT_MAX_PLEASURE
+        result = infer_emotion_from_text(
+            "error error error error error error error error error error"
+        )
+        assert abs(result["pleasure_delta"]) <= _DRIFT_MAX_PLEASURE + 0.001
+
+    def test_negation_handling(self):
+        from modules.emotion import infer_emotion_from_text
+        result = infer_emotion_from_text("no funciona")
+        # "funciona" is positive, but "no funciona" should negate it
+        assert result["pleasure_delta"] <= 0
+
+    def test_strong_event_magnitude(self):
+        """Strong cues amplify the signal."""
+        from modules.emotion import infer_emotion_from_text
+        normal = infer_emotion_from_text("hay un error")
+        strong = infer_emotion_from_text("error critico hay un error")
+        assert abs(strong["pleasure_delta"]) >= abs(normal["pleasure_delta"])
+
+
+class TestEvolvePadFromText:
+    """Tests for evolve_pad_from_text (applies drift to state)."""
+
+    def test_positive_text_increases_pleasure(self):
+        from modules.emotion import set_emotional_state, evolve_pad_from_text
+        import modules.config as cfg
+        set_emotional_state(0.0, 0.0, 0.0, "test")
+        result = evolve_pad_from_text("todo funciona perfecto genial")
+        assert result["changed"] is True
+        assert cfg._emotional_state["current"]["pleasure"] > 0
+
+    def test_neutral_text_no_change(self):
+        from modules.emotion import set_emotional_state, evolve_pad_from_text
+        set_emotional_state(0.5, 0.3, 0.2, "test")
+        result = evolve_pad_from_text("revisando el codigo")
+        assert result["changed"] is False
+
+    def test_state_stays_clamped(self):
+        """PAD values must stay in [-1, 1] after drift."""
+        from modules.emotion import set_emotional_state, evolve_pad_from_text
+        import modules.config as cfg
+        set_emotional_state(0.95, 0.95, 0.95, "test")
+        evolve_pad_from_text("perfecto excelente increible genial")
+        assert cfg._emotional_state["current"]["pleasure"] <= 1.0
+        assert cfg._emotional_state["current"]["arousal"] <= 1.0
+
+
+class TestAsymmetricDecay:
+    """Tests for asymmetric emotional decay (bad is stronger than good)."""
+
+    def test_positive_decays_faster(self):
+        """Positive emotion should decay at higher RATE toward baseline."""
+        from modules.emotion import set_emotional_state, apply_emotional_decay
+        import modules.config as cfg
+        import json
+
+        # Use equidistant points from baseline (mood pleasure=0.3)
+        # Positive: 0.8 (distance 0.5 above mood)
+        set_emotional_state(0.8, 0.0, 0.0, "test")
+        result1 = json.loads(apply_emotional_decay())
+        pos_change = 0.8 - result1["current"]["pleasure"]
+        pos_distance = 0.8 - cfg._emotional_state["mood"]["pleasure"]  # 0.5
+        pos_rate = pos_change / pos_distance if pos_distance > 0 else 0
+
+        # Negative: -0.2 (distance 0.5 below mood)
+        set_emotional_state(-0.2, 0.0, 0.0, "test")
+        result2 = json.loads(apply_emotional_decay())
+        neg_change = result2["current"]["pleasure"] - (-0.2)
+        neg_distance = cfg._emotional_state["mood"]["pleasure"] - (-0.2)  # 0.5
+        neg_rate = neg_change / neg_distance if neg_distance > 0 else 0
+
+        # Positive decay RATE should be higher than negative decay RATE
+        assert pos_rate > neg_rate

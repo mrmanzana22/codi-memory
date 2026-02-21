@@ -624,6 +624,40 @@ def _on_competition_complete(event_name: str, data: dict):
 
 
 # ============================================================
+# GWT-5: WORKSPACE RECRUITMENT HANDLER
+# ============================================================
+
+def _on_workspace_recruitment(event_name: str, data: dict):
+    """GWT-5: Modules react to broadcast content (Baars 1988).
+
+    After a memory is broadcast, other modules should update their state.
+    This closes the cognitive loop: broadcast -> module reaction -> new candidates.
+    """
+    try:
+        theme = data.get("broadcast_theme", "unknown")
+        content = data.get("broadcast_content", "")
+
+        if not content:
+            return
+
+        # Module 1: Push broadcast to working memory as high-relevance context
+        try:
+            from modules.working_memory import push_to_working_memory
+            push_to_working_memory(
+                content=f"[BROADCAST] {content[:150]}",
+                topic=theme,
+                relevance=0.85,
+                source="workspace_recruitment",
+            )
+        except Exception:
+            pass
+
+        _logger.debug("Workspace recruitment: theme=%s", theme)
+    except Exception as e:
+        _logger.error("Recruitment handler error: %s", redact_secrets(str(e)))
+
+
+# ============================================================
 # WIRING-7: RETRIEVAL QUALITY HANDLER
 # ============================================================
 
@@ -779,6 +813,7 @@ def wire_event_bus():
     event_bus.on(Events.CONSOLIDATION_COMPLETE, _on_consolidation_complete)
     event_bus.on(Events.PREDICTION_ERROR, _on_prediction_error)
     event_bus.on(Events.WORKSPACE_COMPETITION_COMPLETE, _on_competition_complete)
+    event_bus.on(Events.WORKSPACE_RECRUITMENT, _on_workspace_recruitment)
     event_bus.on(Events.RETRIEVAL_QUALITY, _on_retrieval_quality)
     event_bus.on(Events.CONTRADICTION_DETECTED, _on_contradiction_detected)
     event_bus.on(Events.RECONSOLIDATION_TRIGGERED, _on_reconsolidation_triggered)
@@ -790,6 +825,13 @@ def wire_event_bus():
             event_bus.on(evt, handler)
     except Exception as e:
         _logger.warning("PE action handlers not loaded: %s", redact_secrets(str(e)))
+
+    # Bloque 3: Forgetting handlers (RIF on retrieval)
+    try:
+        from modules.forgetting import register_forgetting_handlers
+        register_forgetting_handlers()
+    except Exception as e:
+        _logger.warning("Forgetting handlers not loaded: %s", redact_secrets(str(e)))
 
     _wired = True
     stats = event_bus.get_stats()

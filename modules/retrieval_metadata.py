@@ -7,11 +7,15 @@ Provides:
   - RetrievalResult: structured metadata about each search
   - wrap_retrieval_result(): compute coverage & confidence from merged results
   - feeling_of_knowing(): pre-retrieval FOK estimation (Feeling of Knowing)
+  - compute_memory_confidence(): per-memory reliability score (Koriat 1997)
+  - diagnose_retrieval_failure(): classify WHY retrieval failed (Schacter 1999)
+  - quality_class: experiential classification (Tulving 1985)
   - _retrieval_buffer: recent searches for pattern analysis
 
 Based on NEURO_ANALYSIS_REPORT Phase 2 requirements.
 """
 
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -33,6 +37,10 @@ class RetrievalResult:
     mean_activation: float
     confidence_estimate: float
     coverage: str  # "comprehensive" | "partial" | "sparse" | "empty"
+    quality_class: str = "blank"  # Tulving 1985 remembering-vs-knowing
+    # Values: "confident_recall" | "partial_recall" | "recognition_only" | "tip_of_tongue" | "blank"
+    failure_diagnosis: str = ""  # Schacter 1999: why retrieval failed (if applicable)
+    # Values: "" | "never_stored" | "decayed" | "tip_of_tongue" | "retrieval_failure"
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -79,6 +87,144 @@ def _compute_confidence(result_count: int, top_activation: float) -> float:
 
 
 # ============================================================
+# PER-MEMORY CONFIDENCE (Koriat 1997, Nelson & Narens 1990)
+# ============================================================
+
+# Source reliability weights (Nelson & Narens 1990)
+_SOURCE_WEIGHTS = {
+    "experienced": 1.0,
+    "learned": 0.7,
+    "told": 0.5,
+    "inferred": 0.4,
+    "unknown": 0.3,
+}
+
+
+def compute_memory_confidence(payload: dict, activation: float = 0.0) -> float:
+    """Compute per-memory confidence score from 5 signals.
+
+    Koriat 1997: confidence = retrieval fluency + source reliability.
+    Dunlosky & Metcalfe 2009: corroboration increases JOL.
+
+    Args:
+        payload: Memory's Qdrant payload dict
+        activation: ACT-R activation score (0-1) from search scoring
+
+    Returns:
+        Confidence score (0.0-1.0)
+    """
+    # 1. Source reliability (0-1)
+    source = payload.get("ownership_source", "unknown")
+    source_score = _SOURCE_WEIGHTS.get(source, 0.3)
+
+    # 2. Corroboration (log-normalized evidence_count)
+    evidence = int(payload.get("evidence_count", 1) or 1)
+    corroboration = min(1.0, math.log(evidence + 1) / math.log(6))  # 5+ evidence = 1.0
+
+    # 3. Contradiction penalty (already tracked by sharpe.py)
+    contradictions = int(payload.get("contradiction_count", 0) or 0)
+    contradiction_penalty = min(0.45, contradictions * 0.15)
+
+    # 4. Retrieval fluency (activation normalized 0-1)
+    fluency = max(0.0, min(1.0, activation))
+
+    # 5. Staleness (inverse hours since last access)
+    staleness_score = 0.5  # default if no timing data
+    last_accessed = payload.get("attention_last_accessed", "")
+    if last_accessed:
+        try:
+            last_dt = datetime.fromisoformat(
+                str(last_accessed).replace("Z", "+00:00").replace("+00:00", "")
+            )
+            hours_since = max(0, (datetime.now() - last_dt).total_seconds() / 3600)
+            staleness_score = math.exp(-0.01 * hours_since)  # ~0.79 at 24h, ~0.51 at 7d
+        except (ValueError, TypeError):
+            pass
+
+    # Weighted combination
+    raw = (
+        0.25 * source_score
+        + 0.20 * corroboration
+        + 0.25 * fluency
+        + 0.15 * staleness_score
+        + 0.15 * 1.0  # base reliability
+    )
+
+    return round(max(0.0, min(1.0, raw - contradiction_penalty)), 3)
+
+
+# ============================================================
+# QUALITY SPACE (Tulving 1985, Yonelinas 2002)
+# ============================================================
+
+def _classify_quality(coverage: str, mean_activation: float, confidence: float) -> str:
+    """Classify retrieval experience quality.
+
+    Tulving 1985: remembering (vivid, detailed) vs knowing (familiar, vague).
+    Yonelinas 2002: dual-process model of recognition.
+
+    Returns: confident_recall | partial_recall | recognition_only | blank
+             (tip_of_tongue is set by diagnose_retrieval_failure)
+    """
+    if coverage == "empty":
+        return "blank"
+    if coverage == "comprehensive" and confidence >= 0.7:
+        return "confident_recall"
+    if coverage in ("comprehensive", "partial") and confidence >= 0.4:
+        return "partial_recall"
+    return "recognition_only"
+
+
+# ============================================================
+# FAILURE DIAGNOSTICS (Schacter 1999)
+# ============================================================
+
+def diagnose_retrieval_failure(
+    coverage: str,
+    result_count: int,
+    top_activation: float,
+    query: str,
+) -> str:
+    """Diagnose WHY retrieval failed (Schacter 1999 seven sins of memory).
+
+    Only meaningful when coverage is sparse or empty.
+
+    Categories:
+    - never_stored: no memory of this topic ever existed
+    - decayed: was stored but has faded (trace decay)
+    - tip_of_tongue: almost there, partial retrieval (Brown & McNeill 1966)
+    - retrieval_failure: stored but can't access (cue mismatch)
+
+    Returns:
+        Diagnosis string or "" if not a failure
+    """
+    if coverage not in ("empty", "sparse"):
+        return ""
+
+    # Check past successes in the retrieval buffer
+    query_words = {w.lower() for w in query.split() if len(w) > 3}
+    past_success = any(
+        r.coverage in ("comprehensive", "partial")
+        and any(w in r.query.lower() for w in query_words)
+        for r in _retrieval_buffer
+    ) if query_words else False
+
+    if coverage == "empty":
+        if past_success:
+            return "decayed"
+        return "never_stored"
+
+    # Sparse: 1-2 results
+    if top_activation < 0.3:
+        return "tip_of_tongue"
+
+    if past_success:
+        return "retrieval_failure"
+
+    return "retrieval_failure"
+
+
+# ============================================================
 # MAIN API
 # ============================================================
 
@@ -100,6 +246,16 @@ def wrap_retrieval_result(query: str, merged: list) -> RetrievalResult:
     coverage = _classify_coverage(result_count, mean_activation)
     confidence = _compute_confidence(result_count, top_activation)
 
+    # Quality space classification (Tulving 1985)
+    quality = _classify_quality(coverage, mean_activation, confidence)
+
+    # Failure diagnosis (Schacter 1999) -- only for sparse/empty
+    diagnosis = diagnose_retrieval_failure(coverage, result_count, top_activation, query)
+
+    # Override quality_class for tip_of_tongue (Brown & McNeill 1966)
+    if diagnosis == "tip_of_tongue":
+        quality = "tip_of_tongue"
+
     result = RetrievalResult(
         query=query,
         result_count=result_count,
@@ -109,6 +265,8 @@ def wrap_retrieval_result(query: str, merged: list) -> RetrievalResult:
         mean_activation=mean_activation,
         confidence_estimate=confidence,
         coverage=coverage,
+        quality_class=quality,
+        failure_diagnosis=diagnosis,
     )
 
     # Store in buffer

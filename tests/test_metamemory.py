@@ -8,6 +8,7 @@ import sys
 import os
 import sqlite3
 import tempfile
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,6 +20,9 @@ from modules.retrieval_metadata import (
     _retrieval_buffer,
     _classify_coverage,
     _compute_confidence,
+    compute_memory_confidence,
+    _classify_quality,
+    diagnose_retrieval_failure,
     feeling_of_knowing,
     init_failed_searches_table,
     log_failed_search,
@@ -251,6 +255,195 @@ class TestFailedSearchLogging:
             conn.close()
         finally:
             os.unlink(db_path)
+
+
+# ============================================================
+# PER-MEMORY CONFIDENCE (Koriat 1997)
+# ============================================================
+
+class TestComputeMemoryConfidence:
+    def test_minimal_payload(self):
+        """Unknown source, no evidence, no activation = low confidence."""
+        conf = compute_memory_confidence({}, activation=0.0)
+        assert 0.0 <= conf <= 1.0
+        # base reliability (0.15) + source unknown 0.3*0.25 + corroboration log(2)/log(6)*0.20 + fluency 0 + staleness 0.5*0.15
+        assert conf > 0.0
+
+    def test_experienced_source_higher(self):
+        """Experienced source should yield higher confidence than unknown."""
+        conf_exp = compute_memory_confidence({"ownership_source": "experienced"}, activation=0.5)
+        conf_unk = compute_memory_confidence({"ownership_source": "unknown"}, activation=0.5)
+        assert conf_exp > conf_unk
+
+    def test_source_weight_ordering(self):
+        """experienced > learned > told > inferred > unknown."""
+        sources = ["experienced", "learned", "told", "inferred", "unknown"]
+        scores = [
+            compute_memory_confidence({"ownership_source": s}, activation=0.5)
+            for s in sources
+        ]
+        for i in range(len(scores) - 1):
+            assert scores[i] >= scores[i + 1], f"{sources[i]} should >= {sources[i+1]}"
+
+    def test_high_activation_boosts(self):
+        """Higher activation = higher confidence (retrieval fluency)."""
+        conf_high = compute_memory_confidence({}, activation=0.9)
+        conf_low = compute_memory_confidence({}, activation=0.1)
+        assert conf_high > conf_low
+
+    def test_contradictions_reduce(self):
+        """Contradictions should reduce confidence."""
+        conf_clean = compute_memory_confidence({"contradiction_count": 0}, activation=0.5)
+        conf_dirty = compute_memory_confidence({"contradiction_count": 3}, activation=0.5)
+        assert conf_clean > conf_dirty
+
+    def test_contradiction_penalty_capped(self):
+        """Contradiction penalty caps at 0.45."""
+        conf_max = compute_memory_confidence({"contradiction_count": 100}, activation=0.5)
+        assert conf_max >= 0.0
+
+    def test_evidence_corroboration(self):
+        """More evidence should increase confidence."""
+        conf_low_ev = compute_memory_confidence({"evidence_count": 1}, activation=0.5)
+        conf_high_ev = compute_memory_confidence({"evidence_count": 5}, activation=0.5)
+        assert conf_high_ev > conf_low_ev
+
+    def test_clamped_0_1(self):
+        """Confidence always between 0 and 1."""
+        for act in [0.0, 0.5, 1.0]:
+            for contra in [0, 5, 10]:
+                conf = compute_memory_confidence(
+                    {"contradiction_count": contra, "evidence_count": 10},
+                    activation=act,
+                )
+                assert 0.0 <= conf <= 1.0
+
+    def test_full_payload(self):
+        """Comprehensive payload should give high confidence."""
+        payload = {
+            "ownership_source": "experienced",
+            "evidence_count": 5,
+            "contradiction_count": 0,
+            "attention_last_accessed": datetime.now().isoformat(),
+        }
+        conf = compute_memory_confidence(payload, activation=0.9)
+        assert conf >= 0.7
+
+
+# ============================================================
+# QUALITY SPACE CLASSIFICATION (Tulving 1985)
+# ============================================================
+
+class TestClassifyQuality:
+    def test_empty_is_blank(self):
+        assert _classify_quality("empty", 0.0, 0.0) == "blank"
+
+    def test_comprehensive_high_confidence_is_confident_recall(self):
+        assert _classify_quality("comprehensive", 0.8, 0.8) == "confident_recall"
+
+    def test_comprehensive_medium_confidence_is_partial_recall(self):
+        assert _classify_quality("comprehensive", 0.6, 0.5) == "partial_recall"
+
+    def test_partial_medium_confidence_is_partial_recall(self):
+        assert _classify_quality("partial", 0.4, 0.5) == "partial_recall"
+
+    def test_sparse_low_confidence_is_recognition_only(self):
+        assert _classify_quality("sparse", 0.2, 0.2) == "recognition_only"
+
+    def test_comprehensive_low_confidence_is_recognition_only(self):
+        assert _classify_quality("comprehensive", 0.8, 0.3) == "recognition_only"
+
+    def test_partial_low_confidence_is_recognition_only(self):
+        assert _classify_quality("partial", 0.3, 0.2) == "recognition_only"
+
+    def test_confidence_boundary_07(self):
+        """At exactly 0.7 confidence, comprehensive = confident_recall."""
+        assert _classify_quality("comprehensive", 0.8, 0.7) == "confident_recall"
+
+    def test_confidence_boundary_04(self):
+        """At exactly 0.4 confidence, partial = partial_recall."""
+        assert _classify_quality("partial", 0.4, 0.4) == "partial_recall"
+
+
+# ============================================================
+# RETRIEVAL FAILURE DIAGNOSTICS (Schacter 1999)
+# ============================================================
+
+class TestDiagnoseRetrievalFailure:
+    def setup_method(self):
+        _retrieval_buffer.clear()
+
+    def test_comprehensive_no_diagnosis(self):
+        """Non-failure coverage returns empty string."""
+        assert diagnose_retrieval_failure("comprehensive", 5, 0.8, "test query") == ""
+
+    def test_partial_no_diagnosis(self):
+        assert diagnose_retrieval_failure("partial", 3, 0.5, "test query") == ""
+
+    def test_empty_no_history_is_never_stored(self):
+        """Empty + no past success = never_stored."""
+        result = diagnose_retrieval_failure("empty", 0, 0.0, "quantum entanglement")
+        assert result == "never_stored"
+
+    def test_empty_with_past_success_is_decayed(self):
+        """Empty + past successful query with similar words = decayed."""
+        # Add a past successful retrieval with similar topic
+        wrap_retrieval_result("kubernetes deployment guide", _fake_merged(5, activation=0.7))
+        result = diagnose_retrieval_failure("empty", 0, 0.0, "kubernetes deployment")
+        assert result == "decayed"
+
+    def test_sparse_low_activation_is_tip_of_tongue(self):
+        """Sparse + low activation = tip_of_tongue."""
+        result = diagnose_retrieval_failure("sparse", 1, 0.2, "some query here")
+        assert result == "tip_of_tongue"
+
+    def test_sparse_high_activation_is_retrieval_failure(self):
+        """Sparse + higher activation = retrieval_failure."""
+        result = diagnose_retrieval_failure("sparse", 2, 0.5, "some query here")
+        assert result == "retrieval_failure"
+
+    def test_short_query_words_ignored(self):
+        """Words <= 3 chars are ignored in buffer matching."""
+        wrap_retrieval_result("the cat sat on mat", _fake_merged(5, activation=0.7))
+        # "the" and "cat" are <=3, so no match with "the big cat"
+        result = diagnose_retrieval_failure("empty", 0, 0.0, "the big cat")
+        # "the" is <=3, "big" is ==3, "cat" is ==3 -> all filtered out
+        assert result == "never_stored"
+
+
+# ============================================================
+# WRAP RETRIEVAL RESULT - NEW FIELDS
+# ============================================================
+
+class TestWrapRetrievalResultNewFields:
+    def setup_method(self):
+        _retrieval_buffer.clear()
+
+    def test_comprehensive_has_quality_class(self):
+        result = wrap_retrieval_result("good query", _fake_merged(6, activation=0.8))
+        assert result.quality_class in ("confident_recall", "partial_recall")
+
+    def test_empty_has_blank_quality(self):
+        result = wrap_retrieval_result("bad query", [])
+        assert result.quality_class == "blank"
+
+    def test_empty_has_failure_diagnosis(self):
+        result = wrap_retrieval_result("bad query", [])
+        assert result.failure_diagnosis == "never_stored"
+
+    def test_comprehensive_no_failure_diagnosis(self):
+        result = wrap_retrieval_result("good query", _fake_merged(5, activation=0.7))
+        assert result.failure_diagnosis == ""
+
+    def test_tip_of_tongue_overrides_quality(self):
+        """When diagnosis is tip_of_tongue, quality_class should be tip_of_tongue."""
+        result = wrap_retrieval_result("sparse query", _fake_merged(1, activation=0.1))
+        if result.failure_diagnosis == "tip_of_tongue":
+            assert result.quality_class == "tip_of_tongue"
+
+    def test_sparse_gets_diagnosis(self):
+        result = wrap_retrieval_result("sparse", _fake_merged(2, activation=0.2))
+        assert result.failure_diagnosis != ""
 
 
 if __name__ == "__main__":

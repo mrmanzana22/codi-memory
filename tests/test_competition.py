@@ -14,10 +14,13 @@ from modules.competition import (
     CompetitionCandidate,
     CompetitionResult,
     run_workspace_competition,
+    apply_recurrent_amplification,
     DEFAULT_WORKSPACE_SLOTS,
     ATTENTION_FOCUS_BONUS,
     IGNITION_THRESHOLD,
     COALITION_TOPIC_BONUS,
+    AMPLIFICATION_GAIN,
+    LATERAL_INHIBITION,
 )
 
 
@@ -37,7 +40,7 @@ def _make_candidate(domain="episodic", activation=0.5, content="test", **kwargs)
 
 class TestBasicCompetition:
     def test_winners_are_highest_activation(self):
-        """Top N by activation should win."""
+        """Top N by activation should win (top winner gets amplified)."""
         candidates = [
             _make_candidate(activation=0.3),
             _make_candidate(activation=0.9),
@@ -47,9 +50,10 @@ class TestBasicCompetition:
         ]
         result = run_workspace_competition(candidates, slots=3)
         assert len(result.winners) == 3
-        assert result.winners[0].activation == 0.9
-        assert result.winners[1].activation == 0.7
-        assert result.winners[2].activation == 0.5
+        # Top winner gets amplified (0.9 + 0.15 = 1.0 capped)
+        assert result.winners[0].activation == pytest.approx(min(1.0, 0.9 + AMPLIFICATION_GAIN))
+        assert result.winners[1].activation == pytest.approx(0.7)
+        assert result.winners[2].activation == pytest.approx(0.5)
 
     def test_losers_are_remaining(self):
         """Everyone below top N is a loser."""
@@ -91,7 +95,7 @@ class TestSlotConfig:
         assert len(result.winners) == 2
 
     def test_slots_one(self):
-        """Single slot = only the absolute winner."""
+        """Single slot = only the absolute winner (amplified)."""
         candidates = [
             _make_candidate(activation=0.3),
             _make_candidate(activation=0.9),
@@ -99,7 +103,7 @@ class TestSlotConfig:
         ]
         result = run_workspace_competition(candidates, slots=1)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == 0.9
+        assert result.winners[0].activation == pytest.approx(min(1.0, 0.9 + AMPLIFICATION_GAIN))
 
 
 # ============================================================
@@ -160,10 +164,11 @@ class TestAttentionBonus:
         assert c.activation <= 1.0
 
     def test_no_focus_no_bonus(self):
-        """Without current_focus, no bonus applied."""
+        """Without current_focus, no attention bonus (but amplification still applies)."""
         c = _make_candidate(activation=0.50, metadata={"topic": "trading"})
         run_workspace_competition([c], slots=1, current_focus=None)
-        assert c.activation == 0.50
+        # No attention bonus, but top winner gets amplification
+        assert c.activation == pytest.approx(0.50 + AMPLIFICATION_GAIN)
 
 
 # ============================================================
@@ -213,14 +218,14 @@ class TestIgnitionThreshold:
         assert len(result.losers) == 3
 
     def test_threshold_boundary(self):
-        """Candidate at exactly IGNITION_THRESHOLD should be a winner."""
+        """Candidate at exactly IGNITION_THRESHOLD should be a winner (amplified)."""
         candidates = [
             _make_candidate(activation=IGNITION_THRESHOLD),
             _make_candidate(activation=0.1),
         ]
         result = run_workspace_competition(candidates, slots=5)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == IGNITION_THRESHOLD
+        assert result.winners[0].activation == pytest.approx(IGNITION_THRESHOLD + AMPLIFICATION_GAIN)
 
     def test_mix_above_below(self):
         """Only above-threshold candidates compete for slots."""
@@ -232,7 +237,7 @@ class TestIgnitionThreshold:
         ]
         result = run_workspace_competition(candidates, slots=1)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == 0.8
+        assert result.winners[0].activation == pytest.approx(0.8 + AMPLIFICATION_GAIN)
         assert len(result.losers) == 3  # 1 above-threshold loser + 2 below
 
     def test_threshold_value(self):
@@ -272,6 +277,137 @@ class TestCoalitionFormation:
     def test_coalition_bonus_value(self):
         """COALITION_TOPIC_BONUS should be 0.10."""
         assert COALITION_TOPIC_BONUS == 0.10
+
+
+# ============================================================
+# RECURRENT AMPLIFICATION (GWT-4)
+# ============================================================
+
+class TestRecurrentAmplification:
+    def test_winner_boosted(self):
+        """Top winner gets AMPLIFICATION_GAIN boost."""
+        winner = _make_candidate(activation=0.5)
+        loser = _make_candidate(activation=0.3)
+        apply_recurrent_amplification([winner], [loser])
+        assert winner.activation == pytest.approx(0.5 + AMPLIFICATION_GAIN)
+
+    def test_losers_suppressed(self):
+        """All losers get LATERAL_INHIBITION penalty."""
+        winner = _make_candidate(activation=0.8)
+        losers = [_make_candidate(activation=0.4), _make_candidate(activation=0.3)]
+        apply_recurrent_amplification([winner], losers)
+        assert losers[0].activation == pytest.approx(0.4 - LATERAL_INHIBITION)
+        assert losers[1].activation == pytest.approx(0.3 - LATERAL_INHIBITION)
+
+    def test_winner_capped_at_one(self):
+        """Winner activation cannot exceed 1.0."""
+        winner = _make_candidate(activation=0.95)
+        apply_recurrent_amplification([winner], [])
+        assert winner.activation <= 1.0
+
+    def test_loser_floor_at_zero(self):
+        """Loser activation cannot go below 0.0."""
+        loser = _make_candidate(activation=0.05)
+        apply_recurrent_amplification([_make_candidate(activation=0.8)], [loser])
+        assert loser.activation >= 0.0
+
+    def test_only_top_winner_amplified(self):
+        """Only winners[0] gets amplified, not other winners."""
+        w1 = _make_candidate(activation=0.8)
+        w2 = _make_candidate(activation=0.7)
+        apply_recurrent_amplification([w1, w2], [])
+        assert w1.activation == pytest.approx(0.8 + AMPLIFICATION_GAIN)
+        assert w2.activation == pytest.approx(0.7)  # Unchanged
+
+    def test_empty_winners_no_crash(self):
+        """No crash with empty winners."""
+        apply_recurrent_amplification([], [_make_candidate()])
+
+    def test_integrated_in_competition(self):
+        """run_workspace_competition() applies amplification automatically."""
+        c1 = _make_candidate(activation=0.8)
+        c2 = _make_candidate(activation=0.5)
+        c3 = _make_candidate(activation=0.3)
+        result = run_workspace_competition([c1, c2, c3], slots=1)
+        # Winner should be boosted above original 0.8
+        assert result.winners[0].activation > 0.8
+        # Losers should be suppressed below original
+        for loser in result.losers:
+            if loser.activation > 0:  # Some may have hit floor
+                assert loser.activation < 0.5
+
+    def test_amplification_constants(self):
+        """Constants should be within expected ranges."""
+        assert 0.1 <= AMPLIFICATION_GAIN <= 0.3
+        assert 0.05 <= LATERAL_INHIBITION <= 0.25
+
+
+# ============================================================
+# CYCLE TRACKING (GWT-6)
+# ============================================================
+
+class TestCycleTracking:
+    def setup_method(self):
+        """Reset workspace state before each test."""
+        from modules.workspace import _global_workspace
+        _global_workspace['cycle_count'] = 0
+        _global_workspace['cycle_history'] = []
+        _global_workspace['last_cycle_timestamp'] = None
+
+    def test_record_increments_count(self):
+        from modules.workspace import record_workspace_cycle, _global_workspace
+        record_workspace_cycle("test_theme", "test content")
+        assert _global_workspace['cycle_count'] == 1
+        record_workspace_cycle("theme2", "content2")
+        assert _global_workspace['cycle_count'] == 2
+
+    def test_record_stores_history(self):
+        from modules.workspace import record_workspace_cycle, _global_workspace
+        record_workspace_cycle("trading", "BTC analysis results")
+        assert len(_global_workspace['cycle_history']) == 1
+        entry = _global_workspace['cycle_history'][0]
+        assert entry['theme'] == "trading"
+        assert entry['content'] == "BTC analysis results"
+        assert entry['cycle'] == 1
+        assert entry['timestamp'] is not None
+
+    def test_history_max_10(self):
+        from modules.workspace import record_workspace_cycle, _global_workspace
+        for i in range(15):
+            record_workspace_cycle(f"theme_{i}", f"content_{i}")
+        assert len(_global_workspace['cycle_history']) == 10
+        # Oldest should be trimmed
+        assert _global_workspace['cycle_history'][0]['cycle'] == 6
+
+    def test_content_truncated(self):
+        from modules.workspace import record_workspace_cycle, _global_workspace
+        long_content = "x" * 200
+        record_workspace_cycle("theme", long_content)
+        assert len(_global_workspace['cycle_history'][0]['content']) == 100
+
+    def test_timestamp_set(self):
+        from modules.workspace import record_workspace_cycle, _global_workspace
+        record_workspace_cycle("theme", "content")
+        assert _global_workspace['last_cycle_timestamp'] is not None
+
+
+# ============================================================
+# RECRUITMENT EVENT (GWT-5)
+# ============================================================
+
+class TestRecruitmentEvent:
+    def test_event_constant_exists(self):
+        from modules.events import Events
+        assert hasattr(Events, 'WORKSPACE_RECRUITMENT')
+        assert Events.WORKSPACE_RECRUITMENT == 'workspace_recruitment'
+
+    def test_handler_registered(self):
+        """After wiring, recruitment handler should be registered."""
+        from modules.events import event_bus, Events
+        from modules.wiring import wire_event_bus
+        wire_event_bus()
+        stats = event_bus.get_stats()
+        assert Events.WORKSPACE_RECRUITMENT in stats
 
 
 if __name__ == "__main__":

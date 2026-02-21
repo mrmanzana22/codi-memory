@@ -46,6 +46,7 @@ class Events:
     CONSOLIDATION_COMPLETE = 'consolidation_complete'
     PREDICTION_ERROR = 'prediction_error'
     WORKSPACE_COMPETITION_COMPLETE = 'workspace_competition_complete'  # WIRING-6
+    WORKSPACE_RECRUITMENT = 'workspace_recruitment'                    # GWT-5: modules react to broadcast
     RETRIEVAL_QUALITY = 'retrieval_quality'                            # WIRING-7
     RECONSOLIDATION_TRIGGERED = 'reconsolidation_triggered'            # Phase 4
     CONTRADICTION_DETECTED = 'contradiction_detected'                  # Phase 5

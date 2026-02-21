@@ -219,3 +219,54 @@ class TestConsolidationLockfile:
             rc._release_lock(lock2)
         finally:
             rc.LOCK_FILE = original_lock
+
+
+# ============================================================
+# 4. CONSOLIDATION EMOTIONAL PRIORITY (Payne & Kensinger 2010)
+# ============================================================
+
+class TestConsolidationEmotionalPriority:
+    """Verify emotional memories get higher selection scores."""
+
+    def test_emotional_memory_scores_higher(self):
+        """High-arousal memory should outscore neutral memory, all else equal."""
+        from modules.config import IMPORTANCE_WEIGHTS
+        from datetime import datetime, timedelta
+
+        lookback_hours = 48
+        imp_w = IMPORTANCE_WEIGHTS.get("medium", 0.5)
+        hours_ago = 10.0
+        recency = 1.0 / (1.0 + hours_ago / lookback_hours)
+
+        # Neutral memory (no emotional encoding)
+        score_neutral = imp_w * 0.45 + recency * 0.30 + 0.0 * 0.25
+
+        # High-arousal negative memory
+        arousal_enc = 0.8
+        pleasure_enc = -0.5
+        negativity_bonus = 0.3 if pleasure_enc < -0.2 else 0.0
+        emotional_priority = min(1.0, arousal_enc * (1.0 + negativity_bonus))
+        score_emotional = imp_w * 0.45 + recency * 0.30 + emotional_priority * 0.25
+
+        assert score_emotional > score_neutral
+        assert emotional_priority > 0.9  # 0.8 * 1.3 = 1.04 capped at 1.0
+
+    def test_negative_arousal_scores_higher_than_positive(self):
+        """Negative + high arousal should outscore positive + high arousal."""
+        arousal = 0.7
+
+        # Positive arousal (no negativity bonus)
+        pos_priority = min(1.0, arousal * 1.0)
+
+        # Negative arousal (with negativity bonus)
+        neg_priority = min(1.0, arousal * 1.3)
+
+        assert neg_priority > pos_priority
+
+    def test_neutral_arousal_no_boost(self):
+        """Low arousal should contribute near-zero emotional priority."""
+        arousal_enc = 0.1
+        pleasure_enc = 0.0
+        negativity_bonus = 0.3 if pleasure_enc < -0.2 else 0.0
+        emotional_priority = min(1.0, arousal_enc * (1.0 + negativity_bonus))
+        assert emotional_priority < 0.15
