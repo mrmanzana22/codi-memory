@@ -88,6 +88,7 @@ class TestDetectContradiction:
         assert "keywords" in result["channels"]
         assert "topic_confirmation" in result["channels"]
         assert "negation" in result["channels"]
+        assert "semantic_divergence" in result["channels"]
         assert "shared_entities" in result["channels"]
 
     @patch("modules.reconsolidation._embed_text")
@@ -101,6 +102,37 @@ class TestDetectContradiction:
         )
         # Should detect via canal1 (keywords) + canal2 (topic) + canal3 (negation)
         assert result["prediction_error"] > 0
+
+    @patch("modules.reconsolidation._embed_text")
+    def test_canal4_semantic_divergence(self, mock_embed):
+        """Canal 4: same entities, low cosine sim -> PE from divergence."""
+        from modules.reconsolidation import detect_contradiction
+        # Orthogonal vectors = low cosine similarity (different claims)
+        mock_embed.side_effect = [
+            [1.0, 0.0] + [0.0] * 1534,
+            [0.0, 1.0] + [0.0] * 1534,
+        ]
+        result = detect_contradiction(
+            "Docker container runtime works perfectly in production",
+            "Podman container runtime works perfectly in production"
+        )
+        # Canal 4 should fire: same entities (container, runtime, production)
+        # but different embeddings
+        assert result["channels"]["semantic_divergence"] > 0
+        assert result["prediction_error"] > 0
+
+    @patch("modules.reconsolidation._embed_text")
+    def test_canal4_zero_when_similar_vectors(self, mock_embed):
+        """Canal 4: same entities + high cosine sim -> no divergence (agreement)."""
+        from modules.reconsolidation import detect_contradiction
+        # Nearly identical vectors = agreement, not contradiction
+        mock_embed.return_value = [0.9, 0.1] + [0.0] * 1534
+        result = detect_contradiction(
+            "Docker container runtime is great for production",
+            "Docker container runtime is great for production deployments"
+        )
+        # Canal 4 should be low: high cosine sim means agreement
+        assert result["channels"]["semantic_divergence"] < 0.15
 
 
 class TestCheckReconsolidation:

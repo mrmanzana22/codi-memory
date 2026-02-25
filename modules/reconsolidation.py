@@ -110,11 +110,14 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
     Kumaran & Maguire 2006/2007: CA1 hippocampal comparator uses
     multiple channels for match-mismatch detection, not just one signal.
 
-    3 channels:
-      Canal 1 - Keywords (0.5 raw): Explicit correction patterns
+    4 channels:
+      Canal 1 - Keywords (0.35 raw): Explicit correction patterns
       Canal 2 - Topic confirmation (amplifier): cosine_sim * entity_overlap
-                Amplifies C1+C3 when same topic confirmed (0.4 to 1.0x)
-      Canal 3 - Negation detector (0.5 raw): Same entities + logical inversion
+                Amplifies C1+C3+C4 when same topic confirmed (0.55 to 1.0x)
+      Canal 3 - Negation detector (0.35 raw): Same entities + logical inversion
+      Canal 4 - Semantic divergence (0.30 raw): Same entities but different claims
+                Kumaran & Maguire 2006: CA1 fires when expected input diverges
+                from received input on the same topic (high overlap, low cosine)
 
     Returns:
         {prediction_error: float, detail: str|None, channels: dict}
@@ -156,17 +159,40 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
         if (mem_negations > 0) != (ctx_negations > 0):
             canal3_score = min(1.0, entity_overlap * 1.5)
 
-    # Weighted sum: C2 (topic confirmation) amplifies C1+C3
-    # Floor raised from 0.4→0.55: if keywords+negation fire, that's enough
-    # signal even without strong topic confirmation (diagnostic 2026-02-20)
-    raw_pe = canal1_score * 0.5 + canal3_score * 0.5
-    pe = raw_pe * (0.55 + 0.45 * canal2_score)
+    # Canal 4: Semantic divergence (Kumaran & Maguire 2006)
+    # Same entities (same topic) but low cosine similarity (different claims)
+    # = CA1 mismatch signal. This catches organic contradictions where
+    # the user states something new without explicit correction language.
+    # Note: when shared_entities exist, cosine_sim is always computed
+    # (or fallback 0.5). cosine_sim=0 means orthogonal = max divergence.
+    canal4_score = 0.0
+    if shared_entities:
+        canal4_score = entity_overlap * max(0.0, 1.0 - cosine_sim)
+
+    # Two PE pathways (max of both, not sum, to avoid false inflation):
+    #
+    # Path A - Linguistic: C1 (keywords) + C3 (negation), amplified by C2
+    #   For explicit corrections ("ya no", "correccion:", negation inversion)
+    raw_pe_linguistic = canal1_score * 0.50 + canal3_score * 0.50
+    pe_linguistic = raw_pe_linguistic * (0.55 + 0.45 * canal2_score)
+    #
+    # Path B - Semantic divergence: C4 alone, amplified by entity_overlap
+    #   NOT amplified by C2 (which uses cosine_sim and would penalize
+    #   divergence — the exact signal C4 is designed to detect)
+    #   Kumaran & Maguire 2006: CA1 fires on input mismatch, not similarity
+    pe_divergence = canal4_score * (0.55 + 0.45 * entity_overlap)
+    #
+    # Take stronger signal (avoid double-counting when both fire)
+    pe = max(pe_linguistic, pe_divergence)
 
     channels = {
         "keywords": canal1_score,
         "topic_confirmation": canal2_score,
         "negation": canal3_score,
+        "semantic_divergence": canal4_score,
         "shared_entities": list(shared_entities)[:10],
+        "cosine_sim": round(cosine_sim, 3),
+        "entity_overlap": round(entity_overlap, 3),
     }
 
     detail = None
@@ -178,7 +204,16 @@ def detect_contradiction(memory_text: str, context: str) -> dict:
             parts.append(f"topic_sim={cosine_sim:.2f},overlap={entity_overlap:.2f}")
         if canal3_score > 0:
             parts.append(f"negation_inversion")
+        if canal4_score > 0:
+            parts.append(f"semantic_div={canal4_score:.2f}(cos={cosine_sim:.2f})")
         detail = f"PE channels: {', '.join(parts)}"
+
+    _logger.debug(
+        "detect_contradiction PE=%.3f c1=%.2f c2=%.2f c3=%.2f c4=%.2f "
+        "entities=%d overlap=%.2f cosine=%.3f",
+        pe, canal1_score, canal2_score, canal3_score, canal4_score,
+        len(shared_entities), entity_overlap, cosine_sim,
+    )
 
     return {"prediction_error": pe, "detail": detail, "channels": channels}
 

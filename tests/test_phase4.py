@@ -562,13 +562,18 @@ class TestReembedReconsolidation:
 # ============================================================
 
 class TestMultiCanalContradiction:
-    """Kumaran & Maguire 2007: CA1 comparator with 3 channels."""
+    """Kumaran & Maguire 2007: CA1 comparator with 4 channels."""
 
-    def test_topic_confirmation_amplifies_contradiction(self):
-        """Same topic (high cosine sim) amplifies C1+C3 PE (Kumaran 2006)."""
+    def test_topic_confirmation_amplifies_linguistic_path(self):
+        """Same topic (high cosine sim) amplifies C1+C3 linguistic PE (Kumaran 2006).
+
+        With Canal 4 (semantic divergence), orthogonal vectors produce high
+        divergence PE independently. This test verifies that the linguistic
+        path (C1+C3) is amplified by C2 when topic is confirmed.
+        """
         from modules.consolidation import detect_contradiction
 
-        # High cosine sim (same topic) + negation -> amplified PE
+        # High cosine sim (same topic) + keywords + negation -> amplified linguistic PE
         with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [0.9, 0.1] + [0.0] * 1534,
@@ -579,20 +584,34 @@ class TestMultiCanalContradiction:
                 "en realidad Docker container runtime never works in production"
             )
 
-        # Low cosine sim (different topic) + same correction keyword
+        # C2 should be high when topic matches (high cosine sim)
+        assert same_topic["channels"]["topic_confirmation"] > 0.5
+        # Keywords and negation should both fire
+        assert same_topic["channels"]["keywords"] > 0
+        assert same_topic["channels"]["negation"] > 0
+        # Overall PE should be above ALERT threshold (linguistic path amplified)
+        assert same_topic["prediction_error"] > 0.40
+
+    def test_canal4_divergence_fires_without_keywords(self):
+        """Canal 4 generates PE from semantic divergence alone (no correction keywords).
+
+        This is the core fix for organic contradictions (PR-3).
+        """
+        from modules.consolidation import detect_contradiction
+
         with patch('modules.reconsolidation._embed_text') as mock_embed:
             mock_embed.side_effect = [
                 [1.0] + [0.0] * 1535,
                 [0.0] + [1.0] + [0.0] * 1534,
             ]
-            diff_topic = detect_contradiction(
-                "Docker container runtime works perfectly in production",
-                "en realidad Docker container runtime never works in production"
+            result = detect_contradiction(
+                "Docker container runtime is the standard choice",
+                "Podman container runtime is the standard choice"
             )
 
-        # Same topic should amplify PE relative to different topic
-        assert same_topic["prediction_error"] > diff_topic["prediction_error"]
-        assert same_topic["channels"]["topic_confirmation"] > 0.5
+        assert result["channels"]["keywords"] == 0  # no correction keywords
+        assert result["channels"]["semantic_divergence"] > 0.5  # high divergence
+        assert result["prediction_error"] > 0.20  # above PE_SILENT
 
     def test_contradiction_keywords_boost(self):
         """Correction keywords with entity overlap -> higher PE."""

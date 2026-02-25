@@ -351,10 +351,14 @@ def _inline_contradiction_check(
 
     best_pe = 0.0
     best_match = None
+    candidates_evaluated = 0
+    candidates_skipped_score = 0
+    candidates_skipped_entities = 0
 
     for candidate in candidates:
         score = candidate.get("score", 0)
         if score < CONTRADICTION_SCORE_FLOOR or score >= dedup_threshold:
+            candidates_skipped_score += 1
             continue
 
         memory_text = candidate.get("memory", "")
@@ -369,11 +373,27 @@ def _inline_contradiction_check(
         shared = new_entities & mem_entities
 
         if len(shared) < CONTRADICTION_MIN_ENTITIES:
+            candidates_skipped_entities += 1
             continue
 
-        # Full 3-channel contradiction detection
+        candidates_evaluated += 1
+
+        # Full 4-channel contradiction detection
         result = detect_contradiction(memory_text, new_content)
         pe = result.get("prediction_error", 0.0)
+        channels = result.get("channels", {})
+
+        _logger.info(
+            "contradiction_scan mem=%s score=%.2f PE=%.3f "
+            "c1=%.2f c2=%.2f c3=%.2f c4=%.2f entities=%s",
+            memory_id[:8] if memory_id else "?",
+            score, pe,
+            channels.get("keywords", 0),
+            channels.get("topic_confirmation", 0),
+            channels.get("negation", 0),
+            channels.get("semantic_divergence", 0),
+            ",".join(list(shared)[:5]),
+        )
 
         if pe > best_pe and pe >= CONTRADICTION_PE_SILENT:
             best_pe = pe
@@ -382,9 +402,17 @@ def _inline_contradiction_check(
                 "memory_text": memory_text[:300],
                 "pe": pe,
                 "detail": result.get("detail", ""),
-                "channels": result.get("channels", {}),
+                "channels": channels,
                 "shared_entities": list(shared)[:10],
             }
+
+    _logger.info(
+        "contradiction_check_summary candidates=%d evaluated=%d "
+        "skipped_score=%d skipped_entities=%d best_pe=%.3f detected=%s",
+        len(candidates), candidates_evaluated,
+        candidates_skipped_score, candidates_skipped_entities,
+        best_pe, best_match is not None,
+    )
 
     if not best_match or best_pe < CONTRADICTION_PE_SILENT:
         return {"detected": False, "pe": best_pe}
@@ -396,6 +424,7 @@ def _inline_contradiction_check(
         try:
             last_alert = datetime.fromisoformat(_contradiction_cooldown[topic_key])
             if (now - last_alert).total_seconds() < CONTRADICTION_COOLDOWN_MINUTES * 60:
+                _logger.info("contradiction cooldown active for topic=%s", topic_key)
                 return {"detected": False, "reason": "cooldown", "pe": best_pe}
         except Exception:
             pass
@@ -403,6 +432,13 @@ def _inline_contradiction_check(
     # Detected! Update counters
     _contradiction_cooldown[topic_key] = now.isoformat()
     _contradiction_session_count += 1
+
+    _logger.info(
+        "CONTRADICTION DETECTED pe=%.3f mem=%s entities=%s session_count=%d",
+        best_pe, best_match["memory_id"][:8],
+        ",".join(best_match["shared_entities"][:5]),
+        _contradiction_session_count,
+    )
 
     return {
         "detected": True,
@@ -532,8 +568,11 @@ def add_memory_smart(content: str, category: str = "general",
                     candidates=similar_results["results"],
                     dedup_threshold=dedup_threshold,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning(
+                    "Inline contradiction check failed for content='%s': %s",
+                    content[:80], redact_secrets(str(e)),
+                )
 
             if top_score > relate_threshold:
                 # SIMILAR - guardar pero relacionar
