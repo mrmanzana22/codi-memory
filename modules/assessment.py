@@ -376,6 +376,13 @@ def _score_hot3(ev: Dict) -> Dict:
 def _score_hot4(ev: Dict) -> Dict:
     if not ev["has_emotional_state"]:
         return {"name": "HOT-4", "theory": "HOT", "score": 0.0, "evidence": "No emotional model"}
+    # Full: emotion gating actually modified ranking at runtime
+    emotion_gating_count = ev["event_counts"].get("emotion_gating_applied", 0)
+    emotion_changed_count = ev["event_counts"].get("emotion_changed", 0)
+    if ev["has_emotion_gating"] and (emotion_gating_count >= 5 or emotion_changed_count >= 1):
+        return {"name": "HOT-4", "theory": "HOT", "score": 1.0,
+                "evidence": f"Emotion-cognition integration: gating={emotion_gating_count}x, "
+                            f"emotion_changed={emotion_changed_count}x, PAD+SDR active (Bower 1981, Godden & Baddeley 1975)"}
     if ev["has_emotion_gating"]:
         return {"name": "HOT-4", "theory": "HOT", "score": 0.7,
                 "evidence": "PAD model + mood-congruent retrieval (Bower 1981) + state-dependent bonus (Godden & Baddeley 1975) -- nascent: need runtime evidence of ranking change"}

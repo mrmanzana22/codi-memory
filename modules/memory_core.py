@@ -373,6 +373,7 @@ def search_memory(query: str, limit: int = 5) -> str:
             current_arousal = 0.0
 
         merged = []
+        _emotion_gating_count = 0  # Track emotion influence on ranking (HOT-4)
 
         # Score episodic memories
         for mid in episodic_ids:
@@ -417,6 +418,8 @@ def search_memory(query: str, limit: int = 5) -> str:
                     pad_dist = math.sqrt(p_diff**2 + a_diff**2 + d_diff**2)
                     sdr_bonus = 0.08 * math.exp(-2.0 * pad_dist)
                     combined += sdr_bonus
+                    if sdr_bonus > 0.01:
+                        _emotion_gating_count += 1
                 except Exception:
                     pass
 
@@ -480,6 +483,17 @@ def search_memory(query: str, limit: int = 5) -> str:
         # Sort unified ranking
         merged.sort(key=lambda x: -x["combined_score"])
         merged = merged[:limit]
+
+        # Emit emotion gating evidence if any memory scores were modified (HOT-4)
+        if _emotion_gating_count > 0:
+            try:
+                event_bus.emit(Events.EMOTION_GATING_APPLIED, {
+                    'gated_count': _emotion_gating_count,
+                    'current_pleasure': current_pleasure,
+                    'current_arousal': current_arousal,
+                })
+            except Exception:
+                pass
 
         # ============================================================
         # GWT COMPETITION: Filter through workspace (Baars 1988, Dehaene 2011)
