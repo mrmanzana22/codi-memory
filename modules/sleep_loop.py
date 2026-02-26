@@ -766,6 +766,16 @@ def _tick_health(budget_ms: int) -> dict:
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
 
+    # Neuro invariant check (Feb 26 audit)
+    try:
+        from modules.neuro_invariants import check_all as _check_neuro
+        neuro = _check_neuro()
+        parts.append(neuro["summary"])
+        if neuro["violations"]:
+            result["neuro_violations"] = neuro["violations"]
+    except Exception as e:
+        parts.append(f"neuro: error {str(e)[:40]}")
+
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True
     result["detail"] = "; ".join(parts)
