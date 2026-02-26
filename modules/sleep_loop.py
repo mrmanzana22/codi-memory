@@ -548,6 +548,32 @@ def _tick_backup(budget_ms: int) -> dict:
         except Exception as e:
             parts.append(f"{coll}: error {str(e)[:50]}")
 
+    # Backup SQLite databases (consciousness state)
+    import shutil
+    sqlite_dir = os.path.join(backup_dir, '..', 'sqlite')
+    os.makedirs(sqlite_dir, exist_ok=True)
+    project_root = os.path.join(os.path.dirname(__file__), '..')
+    for db_name in ['memories_fts.db', 'prospective.db']:
+        src = os.path.join(project_root, db_name)
+        if os.path.exists(src):
+            dst = os.path.join(sqlite_dir, f"{db_name.replace('.db', '')}-{window}.db")
+            try:
+                # Use SQLite backup API for consistency (not just file copy)
+                src_conn = sqlite3.connect(src)
+                dst_conn = sqlite3.connect(dst)
+                src_conn.backup(dst_conn)
+                dst_conn.close()
+                src_conn.close()
+                size_kb = round(os.path.getsize(dst) / 1024)
+                parts.append(f"{db_name}: {size_kb}KB")
+                # Keep only last 3 backups
+                existing = sorted(glob_mod.glob(os.path.join(
+                    sqlite_dir, f"{db_name.replace('.db', '')}-*.db")))
+                while len(existing) > 3:
+                    os.remove(existing.pop(0))
+            except Exception as e:
+                parts.append(f"{db_name}: error {str(e)[:40]}")
+
     # Write marker to prevent re-running this window
     with open(marker, 'w') as f:
         f.write(now.isoformat())
