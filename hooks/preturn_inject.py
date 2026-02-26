@@ -362,6 +362,16 @@ def _init_prediction_tables(conn):
             created_at TEXT NOT NULL
         )
     """)
+    # Transition frequency stats for entropy-based precision (Friston 2010, Bogacz 2017)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS transition_stats (
+            from_topic TEXT NOT NULL,
+            to_topic TEXT NOT NULL,
+            count INTEGER DEFAULT 0,
+            last_seen TEXT,
+            PRIMARY KEY (from_topic, to_topic)
+        )
+    """)
     conn.commit()
 
 
@@ -581,6 +591,27 @@ def _compare_prediction(conn, prompt):
         """, (PREDICTION_RESULTS_MAX,))
         conn.commit()
 
+        # Track topic transitions for entropy-based precision (Friston 2010, Bogacz 2017)
+        prev_actual_topic = None
+        try:
+            _prev = conn.execute("""
+                SELECT actual_topic FROM prediction_results
+                WHERE id < (SELECT MAX(id) FROM prediction_results)
+                ORDER BY id DESC LIMIT 1
+            """).fetchone()
+            if _prev:
+                prev_actual_topic = _prev[0]
+                conn.execute("""
+                    INSERT INTO transition_stats (from_topic, to_topic, count, last_seen)
+                    VALUES (?, ?, 1, ?)
+                    ON CONFLICT(from_topic, to_topic) DO UPDATE SET
+                        count = count + 1,
+                        last_seen = excluded.last_seen
+                """, (prev_actual_topic, actual_topic, now))
+                conn.commit()
+        except Exception:
+            pass
+
         # Check against adaptive threshold
         threshold = _get_adaptive_threshold(conn)
 
@@ -612,6 +643,7 @@ def _compare_prediction(conn, prompt):
                 'topic_changed': predicted_topic != actual_topic,
                 'actual_keywords': list(actual_keywords)[:10],
                 'affected_memory_ids': affected_ids,
+                'prev_actual_topic': prev_actual_topic,
             }
 
         return None  # Below threshold, not surprising
@@ -729,6 +761,48 @@ def _emit_prediction_error(surprise_info):
     try:
         affected_ids = surprise_info.get('affected_memory_ids', [])
         pe_magnitude = surprise_info.get('surprise', 0)
+
+        # Entropy-based precision weighting (Friston 2010, Bogacz 2017)
+        # Dampen PE for states with high transition entropy (unpredictable successors)
+        try:
+            _pe_conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+            _from_topic = (surprise_info.get('prev_actual_topic')
+                           or surprise_info.get('predicted_topic', '?'))
+            _rows = _pe_conn.execute(
+                "SELECT to_topic, count FROM transition_stats WHERE from_topic = ?",
+                (_from_topic,)
+            ).fetchall()
+            if _rows:
+                _total = sum(r[1] for r in _rows)
+                if _total >= 5:  # Minimum observations before dampening
+                    _probs = [r[1] / _total for r in _rows]
+                    _entropy = -sum(p * math.log2(p) for p in _probs if p > 0)
+                    _max_ent = math.log2(len(_probs)) if len(_probs) > 1 else 1.0
+                    _norm_ent = _entropy / _max_ent if _max_ent > 0 else 0
+                    # High entropy = uniform successors = low precision = dampen
+                    _precision = 1.0 - _norm_ent
+                    _dampening = 0.2 + 0.8 * _precision  # range [0.2, 1.0]
+
+                    # Volatility safety valve (Behrens et al. 2007, Yu & Dayan 2005)
+                    # If recent accuracy drops sharply → unexpected uncertainty → boost PE
+                    _recent = _pe_conn.execute(
+                        "SELECT hit FROM prediction_results ORDER BY id DESC LIMIT 10"
+                    ).fetchall()
+                    _baseline = _pe_conn.execute(
+                        "SELECT hit FROM prediction_results ORDER BY id DESC LIMIT 50"
+                    ).fetchall()
+                    if len(_recent) >= 10 and len(_baseline) >= 20:
+                        _recent_acc = sum(r[0] for r in _recent) / len(_recent)
+                        _base_acc = sum(r[0] for r in _baseline) / len(_baseline)
+                        if _base_acc - _recent_acc > 0.15:
+                            # Environment changed: boost dampening toward 1.0
+                            _dampening = min(1.0, _dampening * 1.5)
+
+                    pe_magnitude = pe_magnitude * _dampening
+            _pe_conn.close()
+        except Exception:
+            pass  # Fail-open: if precision calc fails, use raw PE
+
         if affected_ids and pe_magnitude > 0.4:
             from datetime import datetime, timedelta
             now = datetime.now()
