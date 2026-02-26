@@ -1,12 +1,18 @@
 """
-Codi Memory - Spreading Activation (Fase 3)
-BFS propagation over outgoing edges with fan-effect, hop decay, and multi-path accumulation.
+Codi Memory - Spreading Activation (Fase 4)
+BFS propagation over bidirectional edges with fan-effect, hop decay,
+multi-path accumulation, and lateral inhibition.
 
-Limitation: Only outgoing edges (from payload). Incoming edges (memories pointing TO you) deferred to Fase 4.
+Fase 4 upgrades (Feb 26, 2026):
+  - Bidirectional edges: outgoing (payload) + incoming (SQLite reverse index)
+  - Lateral inhibition: k-WTA competitive selection (Desimone & Duncan 1995)
+
 Field: attention_salience (float, default 0.5, clamped to [FLOOR..CAP]).
 """
 
 import json
+import os
+import sqlite3
 from modules.config import (
     qdrant, memory, COLLECTION_NAME, USER_ID,
     now_iso,
@@ -16,6 +22,63 @@ from modules.config import (
 )
 from modules.utils import resolve_memory_id
 from modules.secret_redact import redact_secrets
+
+# SQLite edge index for bidirectional lookup
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_EDGE_DB = os.path.join(_BASE_DIR, "memories_fts.db")
+
+# Lateral inhibition parameters (Desimone & Duncan 1995)
+_INHIBITION_K = 5            # Top-k winners retain full activation
+_INHIBITION_FACTOR = 0.3     # Losers get delta * this factor
+
+
+# ============================================================
+# EDGE INDEX (SQLite reverse index for incoming edges)
+# ============================================================
+
+def _init_edge_table(conn):
+    """Ensure spreading_edges table exists."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS spreading_edges (
+            from_id TEXT NOT NULL,
+            to_id TEXT NOT NULL,
+            edge_type TEXT DEFAULT 'outgoing',
+            last_seen TEXT,
+            PRIMARY KEY (from_id, to_id)
+        )
+    """)
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_to ON spreading_edges(to_id)")
+    except sqlite3.OperationalError:
+        pass
+    conn.commit()
+
+
+def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str):
+    """Record outgoing edges in SQLite for reverse lookup."""
+    for to_id in neighbor_ids:
+        conn.execute("""
+            INSERT INTO spreading_edges (from_id, to_id, edge_type, last_seen)
+            VALUES (?, ?, 'outgoing', ?)
+            ON CONFLICT(from_id, to_id) DO UPDATE SET last_seen = excluded.last_seen
+        """, (from_id, to_id, ts))
+    conn.commit()
+
+
+def _get_incoming_neighbors(conn, point_id: str, limit: int = None) -> list:
+    """Find memories that point TO this node (reverse direction).
+
+    Collins & Loftus 1975: activation spreads bidirectionally along
+    associative links. Incoming edges represent memories that reference
+    this node but aren't captured by outgoing payload fields.
+    """
+    if limit is None:
+        limit = SPREAD_MAX_NEIGHBORS
+    rows = conn.execute(
+        "SELECT from_id FROM spreading_edges WHERE to_id = ? LIMIT ?",
+        (point_id, limit)
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 # ============================================================
@@ -111,9 +174,20 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
         for sid in valid_seeds:
             delta_map[sid] = delta_map.get(sid, 0) + seed_boost
 
-    # 3. BFS propagation
+    # 3. BFS propagation (bidirectional: outgoing + incoming edges)
     frontier = set(valid_seeds)
     max_depth_reached = 0
+
+    # Open SQLite connection for edge index (bidirectional lookup)
+    edge_conn = None
+    try:
+        if os.path.exists(_EDGE_DB):
+            edge_conn = sqlite3.connect(_EDGE_DB, timeout=3)
+            _init_edge_table(edge_conn)
+    except Exception:
+        pass
+
+    ts = now_iso()
 
     for hop in range(1, depth + 1):
         hop_delta[hop] = {}
@@ -133,7 +207,26 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
                 if node_energy <= 0:
                     continue
 
-            neighbors = _get_neighbors(node, payload_cache.get(node, {}))
+            # Bidirectional neighbors: outgoing (payload) + incoming (SQLite)
+            outgoing = _get_neighbors(node, payload_cache.get(node, {}))
+            incoming = []
+            if edge_conn:
+                try:
+                    incoming = _get_incoming_neighbors(edge_conn, node)
+                    # Record outgoing edges for future reverse lookups
+                    if outgoing:
+                        _record_edges(edge_conn, node, outgoing, ts)
+                except Exception:
+                    pass
+
+            # Merge and deduplicate (outgoing have priority)
+            seen_nb = set(outgoing)
+            for inc_id in incoming:
+                if inc_id not in seen_nb and inc_id != node:
+                    outgoing.append(inc_id)
+                    seen_nb.add(inc_id)
+            neighbors = outgoing[:SPREAD_MAX_NEIGHBORS]
+
             fan = len(neighbors)
             if fan == 0:
                 continue
@@ -180,7 +273,29 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
         if abs(new_sal - old_sal) >= 0.01:
             updates[mid] = new_sal
 
-    # 5. Batch update Qdrant (via access_tracking aggregator)
+    # 4b. Lateral inhibition (Desimone & Duncan 1995)
+    # k-WTA: top-k nodes retain full activation, rest get suppressed
+    if len(updates) > _INHIBITION_K:
+        sorted_nodes = sorted(updates.items(), key=lambda x: -x[1])
+        inhibited = {}
+        for i, (nid, sal) in enumerate(sorted_nodes):
+            if i < _INHIBITION_K:
+                inhibited[nid] = sal  # Winner: full
+            else:
+                # Suppress by pulling delta toward old salience
+                old_sal = payload_cache.get(nid, {}).get('attention_salience', 0.5)
+                inhibited[nid] = old_sal + (sal - old_sal) * _INHIBITION_FACTOR
+        updates = {k: v for k, v in inhibited.items()
+                   if abs(v - payload_cache.get(k, {}).get('attention_salience', 0.5)) >= 0.01}
+
+    # 5. Close edge index connection
+    if edge_conn:
+        try:
+            edge_conn.close()
+        except Exception:
+            pass
+
+    # 6. Batch update Qdrant (via access_tracking aggregator)
     from modules.access_tracking import record_spreading
     record_spreading(COLLECTION_NAME, updates, last_accessed=now_iso())
 

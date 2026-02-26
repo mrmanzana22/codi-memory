@@ -2,15 +2,18 @@
 Codi Memory - Self-model module.
 Reflect, assess confidence, knowledge gaps, Butlin indicators, self-model CRUD.
 Bidirectional: monitor + control (Nelson & Narens 1990).
+Self-discrepancy detection (Higgins 1987).
 """
 
 import inspect
+import os
+import sqlite3
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME,
-    now_iso, now_short,
+    now_iso, now_short, FTS_DB_PATH,
 )
 from modules.secret_redact import redact_secrets
 from modules.access_tracking import record_access
@@ -759,6 +762,178 @@ def get_self_model_summary() -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error obteniendo self-model: {redact_secrets(str(e))}"
+
+
+# ============================================================
+# SELF-DISCREPANCY DETECTION (Higgins 1987)
+# ============================================================
+
+def _init_discrepancy_table(conn):
+    """Ensure self_discrepancies table exists."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS self_discrepancies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            expected TEXT,
+            actual TEXT,
+            discrepancy_type TEXT,
+            magnitude REAL DEFAULT 0.0,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+
+
+def detect_self_discrepancies() -> dict:
+    """Detect discrepancies between self-model claims and actual performance.
+
+    Higgins 1987: discrepancy between actual-self and ideal-self drives
+    emotional and motivational responses. Three types:
+      - actual/ideal: what I am vs what I want to be → dejection
+      - actual/ought: what I am vs what I should be → agitation
+      - overconfidence: self-assessment > actual metrics → calibration error
+
+    Checks:
+      1. FOK calibration bias (over/under-confident)
+      2. Prediction accuracy trends (improving or degrading)
+      3. Knowledge gaps vs self-model claims
+
+    Returns:
+        dict with discrepancies list, summary, count
+    """
+    discrepancies = []
+
+    if not os.path.exists(FTS_DB_PATH):
+        return {"discrepancies": [], "count": 0, "summary": "no data"}
+
+    try:
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        _init_discrepancy_table(conn)
+
+        # 1. FOK Calibration discrepancy (Nelson & Narens 1990)
+        try:
+            from modules.retrieval_metadata import get_fok_calibration
+            cal = get_fok_calibration(fts_db_path=FTS_DB_PATH)
+            if cal["n_records"] >= 10:
+                bias = cal["overconfidence_bias"]
+                mae = cal["mean_absolute_error"]
+                if abs(bias) > 0.15:
+                    disc_type = "overconfident" if bias > 0 else "underconfident"
+                    discrepancies.append({
+                        "domain": "metacognition",
+                        "expected": "calibrated FOK (bias ~0)",
+                        "actual": f"bias={bias:.3f}, MAE={mae:.3f}",
+                        "discrepancy_type": f"actual/ideal ({disc_type})",
+                        "magnitude": abs(bias),
+                    })
+        except Exception:
+            pass
+
+        # 2. Prediction accuracy trend (Clark 2013)
+        try:
+            rows = conn.execute("""
+                SELECT hit FROM prediction_results
+                WHERE source != 'sleep_loop'
+                ORDER BY id DESC LIMIT 30
+            """).fetchall()
+            if len(rows) >= 20:
+                recent = [r[0] for r in rows[:10]]
+                older = [r[0] for r in rows[10:20]]
+                recent_acc = sum(recent) / len(recent)
+                older_acc = sum(older) / len(older)
+                trend = recent_acc - older_acc
+                if abs(trend) > 0.15:
+                    direction = "improving" if trend > 0 else "degrading"
+                    discrepancies.append({
+                        "domain": "prediction",
+                        "expected": "stable or improving accuracy",
+                        "actual": f"trend={trend:+.2f} ({direction}): {older_acc:.0%}→{recent_acc:.0%}",
+                        "discrepancy_type": "actual/ought" if trend < 0 else "positive",
+                        "magnitude": abs(trend),
+                    })
+        except Exception:
+            pass
+
+        # 3. Self-model claims vs knowledge gap reality
+        try:
+            # Get self-model "capacidad" claims
+            cap_points = scroll_all(Filter(must=[
+                FieldCondition(key='self_model_aspect', match=MatchValue(value='capacidad'))
+            ]), max_results=20)
+            if cap_points:
+                cap_themes = set()
+                for p in cap_points:
+                    for t in (p.payload or {}).get('narrative_themes', []):
+                        cap_themes.add(t.lower())
+
+                # Check if claimed capabilities actually have good knowledge
+                for theme in list(cap_themes)[:5]:
+                    theme_pts = scroll_all(Filter(must=[
+                        FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
+                    ]), max_results=50)
+                    if theme_pts:
+                        conf = calculate_confidence_score(theme_pts)
+                        if conf['score'] < 0.4:
+                            discrepancies.append({
+                                "domain": theme,
+                                "expected": f"high confidence (claimed capability)",
+                                "actual": f"confidence={conf['score']:.2f} ({conf['level']})",
+                                "discrepancy_type": "actual/ideal",
+                                "magnitude": 0.4 - conf['score'],
+                            })
+        except Exception:
+            pass
+
+        # Record discrepancies to SQLite for trend analysis
+        ts = now_iso()
+        for d in discrepancies:
+            try:
+                conn.execute(
+                    "INSERT INTO self_discrepancies (domain, expected, actual, discrepancy_type, magnitude, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (d["domain"], d["expected"], d["actual"], d["discrepancy_type"], d["magnitude"], ts)
+                )
+            except Exception:
+                pass
+        conn.commit()
+
+        # Emit event for cross-module awareness
+        if discrepancies:
+            try:
+                from modules.events import event_bus, Events
+                event_bus.emit(Events.SELF_MODEL_REFRESHED, {
+                    "source": "discrepancy_detection",
+                    "discrepancy_count": len(discrepancies),
+                    "domains": [d["domain"] for d in discrepancies],
+                })
+            except Exception:
+                pass
+
+        # FIFO cleanup: keep max 200
+        try:
+            conn.execute("""
+                DELETE FROM self_discrepancies WHERE id NOT IN (
+                    SELECT id FROM self_discrepancies ORDER BY created_at DESC LIMIT 200
+                )
+            """)
+            conn.commit()
+        except Exception:
+            pass
+
+        conn.close()
+
+    except Exception:
+        pass
+
+    summary_parts = []
+    for d in discrepancies[:3]:
+        summary_parts.append(f"{d['domain']}({d['discrepancy_type']})")
+    summary = ", ".join(summary_parts) if summary_parts else "aligned"
+
+    return {
+        "discrepancies": discrepancies,
+        "count": len(discrepancies),
+        "summary": summary,
+    }
 
 
 def register_tools(mcp):

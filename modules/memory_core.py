@@ -27,7 +27,7 @@ from modules.destructive_guard import (
 )
 from modules.retrieval_metadata import (
     wrap_retrieval_result, init_failed_searches_table, log_failed_search,
-    metacognitive_control,
+    metacognitive_control, compute_memory_confidence,
 )
 
 
@@ -545,11 +545,22 @@ def search_memory(query: str, limit: int = 5) -> str:
                     access_ts.append(ts)
                     access_ts = access_ts[-20:]  # Keep last 20
 
-                    record_access(COLLECTION_NAME, mid, {
+                    # EPI-1: Persist per-memory confidence (Koriat 1997)
+                    # Bridges transient compute_memory_confidence → persistent field
+                    try:
+                        mem_conf = compute_memory_confidence(payload, activation=item["activation"])
+                    except Exception:
+                        mem_conf = None
+
+                    update_fields = {
                         'attention_access_count': access_count + 1,
                         'attention_last_accessed': ts,
                         'access_timestamps': access_ts,
-                    })
+                    }
+                    if mem_conf is not None:
+                        update_fields['memory_confidence'] = mem_conf
+
+                    record_access(COLLECTION_NAME, mid, update_fields)
                 else:
                     # Semantic: update last_observed in codi_semantic
                     record_access(SEMANTIC_COLLECTION, mid, {

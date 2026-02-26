@@ -400,14 +400,21 @@ def _tick_self_model(budget_ms: int) -> dict:
     result = {"tick": "self_model", "ok": False, "detail": ""}
 
     try:
-        from modules.self_model import reflect_on_self
+        from modules.self_model import reflect_on_self, detect_self_discrepancies
         summary = reflect_on_self()
+
+        # Self-discrepancy detection (Higgins 1987)
+        disc = detect_self_discrepancies()
+        disc_detail = ""
+        if disc["count"] > 0:
+            disc_detail = f", {disc['count']} discrepancies: {disc['summary']}"
 
         if summary and "Error" not in summary[:20]:
             # Emit event (EventBus flush works in venv python3)
             event_bus.emit(Events.SELF_MODEL_REFRESHED, {
                 "source": "sleep_loop",
                 "summary_len": len(summary),
+                "discrepancy_count": disc["count"],
             })
             # Belt-and-suspenders: direct SQLite write to event_counts
             try:
@@ -425,7 +432,7 @@ def _tick_self_model(budget_ms: int) -> dict:
                 pass  # EventBus emit is primary; this is backup
             elapsed = (time.monotonic() - start) * 1000
             result["ok"] = True
-            result["detail"] = f"refreshed ({len(summary)} chars)"
+            result["detail"] = f"refreshed ({len(summary)} chars){disc_detail}"
             result["elapsed_ms"] = round(elapsed)
         else:
             elapsed = (time.monotonic() - start) * 1000

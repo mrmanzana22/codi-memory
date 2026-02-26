@@ -65,8 +65,11 @@ def temporal_narrative(period: str = "last_week", focus: str = None) -> dict:
     # 4. Identify key events (high importance + high access)
     key_events = _identify_key_events(memories, top_k=7)
 
-    # 5. Generate narrative
-    narrative = _generate_narrative(daily_data, top_themes, key_events, days)
+    # 4b. Construct scenes (Hassabis & Maguire 2007)
+    scenes = _construct_scenes(daily_data)
+
+    # 5. Generate narrative with scene construction
+    narrative = _generate_narrative(daily_data, top_themes, key_events, days, scenes=scenes)
 
     # 6. Project future based on patterns
     projections = _project_future(daily_data, top_themes)
@@ -81,6 +84,8 @@ def temporal_narrative(period: str = "last_week", focus: str = None) -> dict:
         "days_with_activity": len(daily_data),
         "themes": [t for t, _ in top_themes],
         "key_events": key_events,
+        "scenes": scenes,
+        "scene_count": len(scenes),
         "projections": projections,
         "coherence_score": round(coherence, 3),
     }
@@ -160,11 +165,81 @@ def _identify_key_events(memories: list, top_k: int = 7) -> list:
     return scored[:top_k]
 
 
-def _generate_narrative(daily_data: dict, top_themes: list,
-                        key_events: list, period_days: int) -> str:
-    """Generate first-person autobiographical narrative (template-based).
+def _construct_scenes(daily_data: dict) -> list:
+    """Construct coherent scenes from memory fragments (Hassabis & Maguire 2007).
 
-    Level 1: Template. Could be upgraded to LLM-enhanced (Level 2) later.
+    The hippocampus constructs SCENES by binding multimodal elements:
+    temporal context, spatial/topic context, emotional tone, and key actions.
+    Memories from the same day with overlapping themes form a scene.
+
+    Returns list of scene dicts with: date, theme, emotional_tone, memories, summary
+    """
+    scenes = []
+
+    for day, memories in sorted(daily_data.items()):
+        # Group memories by dominant theme
+        theme_groups = defaultdict(list)
+        for m in memories:
+            themes = (m.payload or {}).get("narrative_themes", [])
+            primary_theme = themes[0] if themes else "general"
+            theme_groups[primary_theme].append(m)
+
+        for theme, mems in theme_groups.items():
+            if len(mems) < 1:
+                continue
+
+            # Emotional tone: aggregate PAD values
+            pleasures = []
+            for m in mems:
+                p = (m.payload or {}).get("pad_pleasure", 0)
+                if p and isinstance(p, (int, float)):
+                    pleasures.append(p)
+            avg_pleasure = sum(pleasures) / len(pleasures) if pleasures else 0.0
+
+            if avg_pleasure > 0.2:
+                tone = "positive"
+            elif avg_pleasure < -0.2:
+                tone = "negative"
+            else:
+                tone = "neutral"
+
+            # Key content: most important memory in this scene
+            key_mem = max(mems, key=lambda m: {
+                "critical": 4, "high": 3, "medium": 2, "low": 1
+            }.get((m.payload or {}).get("narrative_importance", "medium"), 2))
+            key_text = ((key_mem.payload or {}).get("data", "") or "")[:100]
+
+            # Time span
+            times = []
+            for m in mems:
+                created = (m.payload or {}).get("created_at", "")
+                if created and "T" in str(created):
+                    times.append(str(created)[11:16])
+            time_span = f"{min(times)}-{max(times)}" if len(times) >= 2 else (times[0] if times else "")
+
+            scenes.append({
+                "date": day,
+                "theme": theme,
+                "emotional_tone": tone,
+                "memory_count": len(mems),
+                "time_span": time_span,
+                "key_content": key_text,
+                "sub_themes": list(set(
+                    t for m in mems
+                    for t in ((m.payload or {}).get("narrative_themes", []))[1:]
+                ))[:3],
+            })
+
+    return scenes
+
+
+def _generate_narrative(daily_data: dict, top_themes: list,
+                        key_events: list, period_days: int,
+                        scenes: list = None) -> str:
+    """Generate first-person autobiographical narrative with scene construction.
+
+    Level 2: Template + Scene Construction (Hassabis & Maguire 2007).
+    Scenes bind memory fragments into coherent episodes.
     """
     total_memories = sum(len(v) for v in daily_data.values())
     active_days = len(daily_data)
@@ -193,6 +268,20 @@ def _generate_narrative(daily_data: dict, top_themes: list,
         f"Eventos clave:",
     ]
     lines.extend(event_lines)
+
+    # Scene construction (Hassabis & Maguire 2007)
+    if scenes:
+        lines.append(f"")
+        lines.append(f"Escenas reconstruidas ({len(scenes)}):")
+        tone_emoji = {"positive": "+", "negative": "-", "neutral": "~"}
+        for sc in scenes[:8]:  # Limit to 8 most relevant scenes
+            tone = tone_emoji.get(sc["emotional_tone"], "~")
+            sub = f" [{', '.join(sc['sub_themes'])}]" if sc.get("sub_themes") else ""
+            time_str = f" {sc['time_span']}" if sc.get("time_span") else ""
+            lines.append(
+                f"  [{sc['date']}{time_str}] ({tone}) {sc['theme']}{sub}: "
+                f"{sc['key_content'][:80]}"
+            )
 
     # Add temporal arc
     if active_days >= 3:

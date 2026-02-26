@@ -514,7 +514,8 @@ def infer_emotion_from_text(text: str) -> dict:
     Kuppens et al. 2010: Ornstein-Uhlenbeck mean-reverting process.
     """
     if not text or len(text) < 3:
-        return {"pleasure_delta": 0.0, "arousal_delta": 0.0, "dominance_delta": 0.0}
+        return {"pleasure_delta": 0.0, "arousal_delta": 0.0, "dominance_delta": 0.0,
+                "appraisal": {"novelty": 0.0, "goal_relevance": 0.0, "coping": 0.5}}
 
     text_lower = text.lower()
     words = set(text_lower.split())
@@ -554,6 +555,57 @@ def infer_emotion_from_text(text: str) -> dict:
     low_d = len(words & _LOW_DOMINANCE_CUES)
     raw_d = (high_d - low_d) * 0.04
 
+    # ============================================================
+    # SCHERER 2001 CPM: Stimulus Evaluation Checks (SECs)
+    # Sequential appraisal modulates raw keyword deltas.
+    # SEC order: Novelty → Pleasantness (already done) → Goal Relevance → Coping
+    # ============================================================
+
+    # SEC-1: Novelty detection (boosts arousal, opens deeper processing)
+    novelty = 0.0
+    if "?" in text or "!" in text:
+        novelty += 0.3
+    if len(text) > 200:
+        novelty += 0.2  # Longer = more complex content
+    _NOVELTY_CUES = {"nuevo", "nueva", "primera", "nunca", "jamas",
+                     "wow", "descubri", "found", "new", "diferente"}
+    novelty += min(0.5, len(words & _NOVELTY_CUES) * 0.25)
+    novelty = min(1.0, novelty)
+
+    # SEC-3: Goal/project relevance (amplifies valence signal)
+    _GOAL_TOPICS = {"trading", "kraken", "fullempaques", "consciencia", "memoria",
+                    "n8n", "workflow", "telegram", "daemon", "codi", "proyecto"}
+    goal_relevance = min(1.0, len(words & _GOAL_TOPICS) * 0.4)
+
+    # SEC-4: Coping potential (modulates dominance + arousal)
+    _HIGH_COPING = {"puedo", "facil", "resuelto", "listo", "funciona",
+                    "solved", "fixed", "done", "logre", "terminado"}
+    _LOW_COPING = {"dificil", "complejo", "imposible", "stuck", "blocked",
+                   "roto", "broken", "confuso", "no entiendo"}
+    coping = 0.5  # neutral baseline
+    coping += len(words & _HIGH_COPING) * 0.2
+    coping -= len(words & _LOW_COPING) * 0.2
+    coping = max(0.0, min(1.0, coping))
+
+    # SEC interaction rules (Scherer 2001 CPM)
+    # Novelty → boosts arousal (novel stimuli increase alertness)
+    raw_a += novelty * 0.04
+
+    # Goal relevance → amplifies valence (relevant events matter more)
+    if goal_relevance > 0:
+        raw_p *= (1.0 + goal_relevance * 0.5)
+
+    # Coping → modulates dominance (high coping = control, low = vulnerability)
+    raw_d += (coping - 0.5) * 0.06
+
+    # Interaction: low coping + negative valence → anxiety (arousal spike)
+    if coping < 0.4 and raw_p < 0:
+        raw_a += 0.03
+
+    # Interaction: high coping + positive valence → elation (pleasure boost)
+    if coping > 0.6 and raw_p > 0:
+        raw_p *= 1.2
+
     # Apply magnitude and clamp
     p_delta = max(-_DRIFT_MAX_PLEASURE, min(_DRIFT_MAX_PLEASURE, raw_p * magnitude))
     a_delta = max(-_DRIFT_MAX_AROUSAL, min(_DRIFT_MAX_AROUSAL, raw_a * magnitude))
@@ -563,6 +615,11 @@ def infer_emotion_from_text(text: str) -> dict:
         "pleasure_delta": round(p_delta, 4),
         "arousal_delta": round(a_delta, 4),
         "dominance_delta": round(d_delta, 4),
+        "appraisal": {
+            "novelty": round(novelty, 2),
+            "goal_relevance": round(goal_relevance, 2),
+            "coping": round(coping, 2),
+        },
     }
 
 
@@ -576,8 +633,9 @@ def evolve_pad_from_text(text: str) -> dict:
     """
     deltas = infer_emotion_from_text(text)
 
-    # Skip if all deltas are zero
-    if all(abs(v) < 0.001 for v in deltas.values()):
+    # Skip if all PAD deltas are zero
+    pad_deltas = {k: v for k, v in deltas.items() if k.endswith("_delta")}
+    if all(abs(v) < 0.001 for v in pad_deltas.values()):
         return {"changed": False, "deltas": deltas}
 
     global _emotional_state

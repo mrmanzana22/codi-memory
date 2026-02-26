@@ -149,6 +149,31 @@ def check_static_invariants() -> list:
     except ImportError:
         pass
 
+    # --- Emotion Appraisal (Scherer 2001 CPM) ---
+    try:
+        from modules.emotion import infer_emotion_from_text
+        test_result = infer_emotion_from_text("esto es increible, funciona perfecto!")
+        if "appraisal" not in test_result:
+            violations.append({
+                "type": "static", "module": "emotion",
+                "name": "missing_appraisal_secs",
+                "expected": "appraisal dict with novelty, goal_relevance, coping",
+                "actual": "no appraisal field",
+                "theory": "Scherer 2001 CPM: SECs required",
+            })
+    except ImportError:
+        pass
+
+    # --- Spreading Activation (Collins & Loftus 1975, Desimone & Duncan 1995) ---
+    try:
+        from modules.spreading import _INHIBITION_K, _INHIBITION_FACTOR
+        _r("spreading", "_INHIBITION_K", 3, 10, _INHIBITION_K,
+           "Desimone & Duncan 1995: k-WTA winners")
+        _r("spreading", "_INHIBITION_FACTOR", 0.1, 0.5, _INHIBITION_FACTOR,
+           "Desimone & Duncan 1995: suppression strength")
+    except ImportError:
+        pass
+
     # --- Sleep Loop Architecture (Diekelmann & Born 2010) ---
     try:
         from modules.sleep_loop import TICK_ORDER
