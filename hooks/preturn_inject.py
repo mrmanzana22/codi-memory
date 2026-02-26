@@ -737,7 +737,29 @@ def _emit_prediction_error(surprise_info):
             trigger_ctx = (f"Topic PE: predicted={surprise_info.get('predicted_topic', '?')}, "
                           f"actual={surprise_info.get('actual_topic', '?')}")
             conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+
+            # Importance guard: check Qdrant before marking labile (Alberini 2005)
+            try:
+                sys.path.insert(0, BASE_DIR)
+                from qdrant_client import QdrantClient
+                _qdrant = QdrantClient(host='localhost', port=6333)
+                _COLL = 'codi_memories'
+            except Exception:
+                _qdrant = None
+
             for mem_id in affected_ids[:2]:  # Max 2 memories per PE event
+                # Skip protected memories (critical/high importance or heavily accessed)
+                if _qdrant:
+                    try:
+                        pts = _qdrant.retrieve(_COLL, [mem_id], with_payload=True)
+                        if pts:
+                            _imp = pts[0].payload.get('narrative_importance', 'normal')
+                            _acc = pts[0].payload.get('attention_access_count', 0)
+                            if _imp in ('critical', 'high') or _acc >= 10:
+                                continue  # PROTECTED
+                    except Exception:
+                        pass
+
                 conn.execute("""
                     INSERT OR REPLACE INTO labile_memories
                     (memory_id, marked_at, window_expires, prediction_error, trigger_context)

@@ -276,6 +276,16 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 payload = points[0].payload
                 old_confidence = payload.get("confidence", 0.8)
 
+                # Importance guard: skip reconsolidation for protected memories (Alberini 2005)
+                importance = payload.get("narrative_importance", "normal")
+                access_count = payload.get("attention_access_count", 0)
+                if importance in ("critical", "high") or access_count >= 10:
+                    conn.execute(
+                        "DELETE FROM labile_memories WHERE memory_id = ?",
+                        (memory_id,)
+                    )
+                    continue
+
                 # Lower confidence proportional to PE magnitude
                 confidence_reduction = min(0.2, pe * 0.3)
                 new_confidence = max(0.1, old_confidence - confidence_reduction)
