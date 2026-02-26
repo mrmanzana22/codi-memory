@@ -574,6 +574,72 @@ def _tick_backup(budget_ms: int) -> dict:
             except Exception as e:
                 parts.append(f"{db_name}: error {str(e)[:40]}")
 
+    # Upload to Supabase Storage (off-site backup)
+    try:
+        import gzip
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(project_root, '.env'))
+        sb_url = os.environ.get('SUPABASE_URL')
+        sb_key = os.environ.get('SUPABASE_KEY')
+        if sb_url and sb_key:
+            headers = {
+                'Authorization': f'Bearer {sb_key}',
+                'apikey': sb_key,
+                'Content-Type': 'application/gzip',
+            }
+            # Upload all local backup files (gzipped)
+            for bdir, prefix in [(os.path.join(backup_dir), 'qdrant'),
+                                 (sqlite_dir, 'sqlite')]:
+                for fpath in glob_mod.glob(os.path.join(bdir, f'*-{window}*')):
+                    fname = os.path.basename(fpath)
+                    with open(fpath, 'rb') as f:
+                        raw = f.read()
+                    compressed = gzip.compress(raw)
+                    obj_path = f"{prefix}/{fname}.gz"
+                    resp = requests.post(
+                        f"{sb_url}/storage/v1/object/codi-backups/{obj_path}",
+                        headers=headers,
+                        data=compressed,
+                        timeout=120,
+                    )
+                    if resp.status_code == 200:
+                        sz = round(len(compressed) / 1024 / 1024, 1)
+                        parts.append(f"cloud:{fname}={sz}MB")
+                    else:
+                        parts.append(f"cloud:{fname}=err{resp.status_code}")
+
+            # Cleanup old cloud backups: list and delete beyond last 3 per prefix
+            for prefix in ['qdrant', 'sqlite']:
+                try:
+                    list_resp = requests.post(
+                        f"{sb_url}/storage/v1/object/list/codi-backups",
+                        headers={**headers, 'Content-Type': 'application/json'},
+                        json={"prefix": prefix, "limit": 100},
+                        timeout=15,
+                    )
+                    if list_resp.status_code == 200:
+                        files = sorted(list_resp.json(), key=lambda x: x.get('name', ''))
+                        # Group by collection name (e.g. codi_memories, memories_fts)
+                        from collections import defaultdict as _dd
+                        groups = _dd(list)
+                        for f in files:
+                            # Extract collection name from filename
+                            name = f.get('name', '')
+                            coll_key = name.rsplit('-', 2)[0] if '-' in name else name
+                            groups[coll_key].append(f)
+                        for coll_key, group_files in groups.items():
+                            while len(group_files) > 3:
+                                old = group_files.pop(0)
+                                requests.delete(
+                                    f"{sb_url}/storage/v1/object/codi-backups/{prefix}/{old['name']}",
+                                    headers=headers,
+                                    timeout=10,
+                                )
+                except Exception:
+                    pass
+    except Exception as e:
+        parts.append(f"cloud: error {str(e)[:50]}")
+
     # Write marker to prevent re-running this window
     with open(marker, 'w') as f:
         f.write(now.isoformat())
