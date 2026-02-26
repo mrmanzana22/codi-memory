@@ -153,7 +153,7 @@ def check_static_invariants() -> list:
     try:
         from modules.sleep_loop import TICK_ORDER
         expected_ticks = {"prospective", "health", "self_model", "reconsolidation",
-                          "consolidation", "homeostasis", "backup"}
+                          "consolidation", "homeostasis", "curiosity", "backup"}
         actual_ticks = set(TICK_ORDER)
         missing = expected_ticks - actual_ticks
         if missing:

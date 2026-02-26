@@ -1,12 +1,23 @@
 """
 Codi Memory - Curiosity module.
 Curiosidad proactiva, patrones de trabajo, deteccion de novedad.
+
+Neuroscience basis:
+  - Loewenstein 1994: information gap theory (curiosity = gap between
+    what you know and what you want to know)
+  - Kidd & Hayden 2015: curiosity peaks at intermediate uncertainty
+  - Schmidhuber 2010: learning progress as intrinsic reward
+  - Connected to prediction loop (Clark 2013): high PE domains
+    automatically generate curiosity targets
+
 detectar_sorpresa is a thin wrapper that calls prediction.record_surprise
 (conceptually "curiosity" = novelty detection; PE mechanics in prediction).
 """
 
+import math
 import os
 import json
+import sqlite3
 from datetime import datetime
 
 from modules.config import (
@@ -26,8 +37,13 @@ __all__ = [
     "_guardar_curiosidades",
     "push_curiosidad",
     "get_curiosidades",
+    "auto_curiosity_tick",
     "register_tools",
 ]
+
+# FTS DB for prediction data access
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FTS_DB = os.path.join(_BASE_DIR, "memories_fts.db")
 
 
 def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> str:
@@ -207,10 +223,38 @@ def generar_curiosidad() -> str:
 
         preguntas.append("Que es lo mas importante que deberiamos estar haciendo ahora mismo?")
 
-        resultado = "# CURIOSIDAD GENERADA\n\nEstas son preguntas que deberia estar haciendo proactivamente:\n\n"
+        # PE-driven curiosity (Loewenstein 1994 + Kidd & Hayden 2015)
+        pe_preguntas = []
+        pe_domains = _get_high_surprise_domains()
+        for domain in pe_domains[:3]:
+            pe_preguntas.append(
+                f"[PE] Mi modelo falla en '{domain['topic']}' "
+                f"(accuracy {domain['accuracy']:.0%}, curiosity={domain['curiosity_score']:.2f})"
+            )
+
+        # Knowledge gap curiosity
+        gap_preguntas = []
+        for gap in _get_knowledge_gaps()[:3]:
+            gap_preguntas.append(f"[GAP] Baja confianza en '{gap}' — deberia investigar")
+
+        resultado = "# CURIOSIDAD GENERADA\n\n"
+
+        if pe_preguntas:
+            resultado += "## Curiosidad por Prediction Error (dominios poco predecibles)\n\n"
+            for i, p in enumerate(pe_preguntas, 1):
+                resultado += f"{i}. {p}\n"
+            resultado += "\n"
+
+        if gap_preguntas:
+            resultado += "## Curiosidad por Knowledge Gaps (baja confianza)\n\n"
+            for i, p in enumerate(gap_preguntas, 1):
+                resultado += f"{i}. {p}\n"
+            resultado += "\n"
+
+        resultado += "## Proyectos Sin Tocar (stale detection)\n\n"
         for i, p in enumerate(preguntas, 1):
             resultado += f"{i}. {p}\n\n"
-        resultado += "---\n*Generado por mi sistema de curiosidad proactiva*\n"
+        resultado += "---\n*Generado por curiosidad proactiva (PE + gaps + stale)*\n"
         return resultado
     except Exception as e:
         return f"Error generando curiosidad: {redact_secrets(str(e))}"
@@ -311,6 +355,198 @@ def get_curiosidades(incluir_exploradas: bool = False) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error leyendo curiosidades: {redact_secrets(str(e))}"
+
+
+def _get_high_surprise_domains(min_observations: int = 3, window: int = 50) -> list:
+    """Find domains with persistently high prediction error.
+
+    Queries prediction_results for topics where surprise is consistently
+    above average. These are domains where the system's model is weak
+    and curiosity should drive information-seeking (Loewenstein 1994).
+
+    Returns list of dicts: [{topic, avg_surprise, count, curiosity_score}]
+    """
+    if not os.path.exists(_FTS_DB):
+        return []
+    try:
+        conn = sqlite3.connect(_FTS_DB, timeout=3)
+        # Get per-topic surprise stats from recent predictions
+        rows = conn.execute("""
+            SELECT actual_topic,
+                   AVG(surprise_score) AS avg_surprise,
+                   COUNT(*) AS cnt,
+                   AVG(hit) AS accuracy
+            FROM (
+                SELECT actual_topic, surprise_score, hit
+                FROM prediction_results
+                WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                ORDER BY id DESC LIMIT ?
+            )
+            GROUP BY actual_topic
+            HAVING cnt >= ?
+            ORDER BY avg_surprise DESC
+        """, (window, min_observations)).fetchall()
+
+        # Global average surprise for comparison
+        global_avg = conn.execute("""
+            SELECT AVG(surprise_score) FROM (
+                SELECT surprise_score FROM prediction_results
+                WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                ORDER BY id DESC LIMIT ?
+            )
+        """, (window,)).fetchone()
+        baseline = global_avg[0] if global_avg and global_avg[0] else 0.5
+
+        conn.close()
+
+        results = []
+        for topic, avg_s, cnt, acc in rows:
+            if avg_s <= baseline:
+                continue  # Below average surprise, not curious
+            # Kidd & Hayden 2015: curiosity peaks at INTERMEDIATE uncertainty
+            # Very high uncertainty (acc ~0) = too hard, very low (acc ~1) = too easy
+            # Peak curiosity at acc ~0.3-0.5 (some knowledge, wants more)
+            if acc is not None:
+                curiosity_curve = math.exp(-((acc - 0.4) ** 2) / 0.18)
+            else:
+                curiosity_curve = 0.5
+            curiosity_score = (avg_s - baseline) * curiosity_curve
+            if curiosity_score > 0.05:
+                results.append({
+                    "topic": topic,
+                    "avg_surprise": round(avg_s, 3),
+                    "accuracy": round(acc, 3) if acc else 0,
+                    "count": cnt,
+                    "curiosity_score": round(curiosity_score, 3),
+                })
+        return sorted(results, key=lambda x: -x["curiosity_score"])
+    except Exception:
+        return []
+
+
+def _get_knowledge_gaps() -> list:
+    """Find domains where the system has low confidence.
+
+    Uses self_model.identify_knowledge_gaps() to find areas where
+    retrieval has been weak or searches have failed.
+
+    Returns list of topic strings.
+    """
+    try:
+        from modules.self_model import identify_knowledge_gaps
+        gaps = identify_knowledge_gaps()
+        if isinstance(gaps, str):
+            # Parse the text output for topic names
+            topics = []
+            for line in gaps.split('\n'):
+                line = line.strip()
+                if line.startswith('- ') and ':' in line:
+                    topic = line.split(':')[0].replace('- ', '').strip()
+                    if topic and len(topic) > 2:
+                        topics.append(topic)
+            return topics[:5]
+        return []
+    except Exception:
+        return []
+
+
+def auto_curiosity_tick() -> dict:
+    """Background tick: auto-generate curiosity from prediction errors + knowledge gaps.
+
+    Called by sleep_loop to maintain a fresh curiosity queue.
+    Implements Loewenstein 1994: curiosity driven by information gaps.
+    Implements Kidd & Hayden 2015: peak curiosity at intermediate uncertainty.
+
+    Returns dict with counts of generated items.
+    """
+    result = {"generated": 0, "pe_driven": 0, "gap_driven": 0}
+
+    try:
+        data = _cargar_curiosidades()
+        existing_questions = {item.get("pregunta", "").lower() for item in data.get("pendientes", [])}
+
+        max_id = 0
+        for item in data.get("pendientes", []) + data.get("exploradas", []):
+            item_id = item.get("id", 0)
+            if item_id > max_id:
+                max_id = item_id
+
+        # 1. PE-driven curiosity: high-surprise domains
+        pe_domains = _get_high_surprise_domains()
+        for domain in pe_domains[:3]:
+            topic = domain["topic"]
+            question = (f"Mi prediccion falla en '{topic}' "
+                        f"(accuracy {domain['accuracy']:.0%}, surprise {domain['avg_surprise']:.2f}). "
+                        f"Que patrones me estoy perdiendo?")
+            if question.lower() not in existing_questions:
+                max_id += 1
+                data["pendientes"].append({
+                    "id": max_id,
+                    "pregunta": question,
+                    "categoria": topic,
+                    "agregada": now_short(),
+                    "prioridad": "alta" if domain["curiosity_score"] > 0.15 else "media",
+                    "source": "prediction_error",
+                    "curiosity_score": domain["curiosity_score"],
+                })
+                result["pe_driven"] += 1
+                result["generated"] += 1
+
+        # 2. Knowledge gap curiosity
+        gaps = _get_knowledge_gaps()
+        for gap_topic in gaps[:2]:
+            question = f"Tengo poca confianza en '{gap_topic}'. Que deberia aprender?"
+            if question.lower() not in existing_questions:
+                max_id += 1
+                data["pendientes"].append({
+                    "id": max_id,
+                    "pregunta": question,
+                    "categoria": gap_topic,
+                    "agregada": now_short(),
+                    "prioridad": "media",
+                    "source": "knowledge_gap",
+                })
+                result["gap_driven"] += 1
+                result["generated"] += 1
+
+        # 3. Prune resolved curiosities: if a PE-driven item's domain now has
+        # low surprise, move it to exploradas
+        if pe_domains:
+            low_surprise_topics = set()
+            try:
+                conn = sqlite3.connect(_FTS_DB, timeout=3)
+                rows = conn.execute("""
+                    SELECT actual_topic, AVG(surprise_score) AS avg_s
+                    FROM (SELECT actual_topic, surprise_score FROM prediction_results
+                          WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                          ORDER BY id DESC LIMIT 20)
+                    GROUP BY actual_topic
+                    HAVING avg_s < 0.3
+                """).fetchall()
+                low_surprise_topics = {r[0] for r in rows}
+                conn.close()
+            except Exception:
+                pass
+
+            if low_surprise_topics:
+                still_pending = []
+                for item in data.get("pendientes", []):
+                    if (item.get("source") == "prediction_error"
+                            and item.get("categoria") in low_surprise_topics):
+                        item["resuelto"] = now_short()
+                        item["razon"] = "surprise decreased below 0.3"
+                        data.setdefault("exploradas", []).append(item)
+                    else:
+                        still_pending.append(item)
+                data["pendientes"] = still_pending
+
+        if result["generated"] > 0:
+            _guardar_curiosidades(data)
+
+    except Exception:
+        pass
+
+    return result
 
 
 def register_tools(mcp):

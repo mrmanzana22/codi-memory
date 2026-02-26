@@ -81,7 +81,7 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "backup"]
+TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "backup"]
 
 # Minimum ms required to even attempt a tick (below this, skip)
 TICK_MIN_MS = {
@@ -91,6 +91,7 @@ TICK_MIN_MS = {
     "reconsolidation": 300,
     "consolidation": 1500,
     "homeostasis": 200,
+    "curiosity": 200,
 }
 
 
@@ -467,6 +468,31 @@ def _tick_homeostasis(budget_ms: int) -> dict:
     return result
 
 
+def _tick_curiosity(budget_ms: int) -> dict:
+    """Tick: Auto-generate curiosity from prediction errors + knowledge gaps.
+
+    Implements Loewenstein 1994 (information gap) + Kidd & Hayden 2015
+    (intermediate uncertainty peaks curiosity).
+    Lightweight: only SQLite queries + JSON file write.
+    """
+    start = time.monotonic()
+    result = {"tick": "curiosity", "ok": False, "detail": ""}
+    try:
+        from modules.curiosity import auto_curiosity_tick
+        r = auto_curiosity_tick()
+        parts = []
+        if r["generated"] > 0:
+            parts.append(f"generated {r['generated']} ({r['pe_driven']} PE, {r['gap_driven']} gap)")
+        else:
+            parts.append("no new curiosity items")
+        result["ok"] = True
+        result["detail"] = "; ".join(parts)
+    except Exception as e:
+        result["detail"] = f"error: {str(e)[:50]}"
+    result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+    return result
+
+
 def _tick_backup(budget_ms: int) -> dict:
     """Tick: Qdrant snapshot backup. Runs 3x/day (morning, afternoon, night).
 
@@ -826,6 +852,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "reconsolidation": _tick_reconsolidation,
         "consolidation": _tick_consolidation,
         "homeostasis": _tick_homeostasis,
+        "curiosity": _tick_curiosity,
         "backup": _tick_backup,
     }
 
