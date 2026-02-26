@@ -160,6 +160,12 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     result["episodes_compressed"] = compression_result.get("episodes_archived", 0)
     result["compression_summaries"] = compression_result.get("summaries_created", 0)
 
+    # Phase 7: Checkpoint Compression (full scope only)
+    result_checkpoint = _phase_checkpoint_compression(scope)
+    result["checkpoints_deleted"] = result_checkpoint.get("trivial_deleted", 0)
+    result["checkpoints_compressed"] = result_checkpoint.get("progress_compressed", 0)
+    result["checkpoint_summaries"] = result_checkpoint.get("summaries_created", 0)
+
     # Housekeeping: expire stale correction suggestions
     try:
         expired = expire_stale_corrections()
@@ -880,6 +886,195 @@ def _phase_compression(scope: str = "full") -> dict:
     }
     _logger.info("Compression complete: %s", result)
     return result
+
+
+CHECKPOINT_COMPRESSION_PROMPT = """Eres un sistema de compresion de memoria. Estos son {n} checkpoints del dia {date}.
+Genera UN resumen que capture:
+- Que se hizo ese dia
+- Decisiones tomadas
+- Progreso logrado
+- Problemas encontrados
+
+Maximo 200 palabras. En español. Primera persona.
+
+CHECKPOINTS:
+{checkpoints}
+
+RESUMEN:"""
+
+
+def _phase_checkpoint_compression(scope: str = "full") -> dict:
+    """Phase 7: Compress checkpoint memories.
+
+    Three-tier approach:
+    1. DELETE trivial (date stamps, <30 chars)
+    2. COMPRESS progress notes into daily summaries
+    3. PRESERVE insights (high importance or frequently accessed)
+
+    Only runs in 'full' scope.
+    """
+    from modules.config import (
+        COMPRESSION_MIN_GROUP_SIZE, COMPRESSION_ENABLED,
+    )
+
+    empty = {"trivial_deleted": 0, "progress_compressed": 0, "insights_preserved": 0, "summaries_created": 0}
+    if not COMPRESSION_ENABLED or scope != "full":
+        return empty
+
+    now = now_iso()
+
+    # Step 1: Scroll ALL uncompressed checkpoints
+    scroll_filter = Filter(
+        must=[
+            FieldCondition(key="category", match=MatchValue(value="checkpoint")),
+        ],
+        must_not=[
+            FieldCondition(key="consolidated_compressed", match=MatchValue(value=True)),
+        ]
+    )
+
+    from modules.qdrant_utils import scroll_all
+    points = scroll_all(
+        scroll_filter=scroll_filter,
+        max_results=2000,
+        with_payload=True,
+        with_vectors=False,
+        batch_size=200,
+    )
+
+    if not points:
+        return empty
+
+    # Step 2: Classify
+    trivial_ids = []
+    progress_by_day = defaultdict(list)
+    insight_count = 0
+
+    for p in points:
+        text = str(p.payload.get("data", "")).strip()
+        imp = p.payload.get("narrative_importance", "medium")
+        attn = int(p.payload.get("attention_access_count", 0) or 0)
+        date = str(p.payload.get("created_at", ""))[:10]
+
+        # Tier 1: TRIVIAL — delete
+        if (len(text) < 30 or text.lower().startswith("fecha")
+                or text.lower().startswith("date ")
+                or "date of decision" in text.lower()
+                or "date of importance" in text.lower()):
+            trivial_ids.append(str(p.id))
+            continue
+
+        # Tier 3: INSIGHT — preserve
+        if imp in ("critical", "high") or attn >= 3:
+            insight_count += 1
+            continue
+
+        # Tier 2: PROGRESS — compress by day
+        progress_by_day[date].append({
+            "id": str(p.id),
+            "data": text,
+        })
+
+    # Step 3: Delete trivial (batch)
+    trivial_deleted = 0
+    batch_sz = 100
+    for i in range(0, len(trivial_ids), batch_sz):
+        batch = trivial_ids[i:i + batch_sz]
+        try:
+            qdrant.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=batch,
+            )
+            trivial_deleted += len(batch)
+        except Exception as e:
+            _logger.error("Checkpoint compression: delete batch failed: %s", e)
+
+    # Step 4: Compress progress by day
+    summaries_created = 0
+    progress_compressed = 0
+    oai = _get_oai()
+
+    for date, members in sorted(progress_by_day.items()):
+        if len(members) < COMPRESSION_MIN_GROUP_SIZE:
+            continue
+
+        checkpoints_block = "\n".join(
+            f"- {m['data']}" for m in members[:30]
+        )
+        prompt = CHECKPOINT_COMPRESSION_PROMPT.format(
+            n=len(members), date=date, checkpoints=checkpoints_block
+        )
+
+        try:
+            resp = oai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.3,
+            )
+            summary_text = resp.choices[0].message.content.strip()
+        except Exception as e:
+            _logger.error("Checkpoint compression LLM failed for %s: %s", date, e)
+            continue
+
+        summary_id = str(uuid.uuid4())
+        original_ids = [m["id"] for m in members]
+
+        summary_vec = _embed_text(summary_text)
+        if not summary_vec:
+            continue
+
+        summary_point = PointStruct(
+            id=summary_id,
+            vector=summary_vec,
+            payload={
+                "data": summary_text,
+                "user_id": USER_ID,
+                "memory_type": "checkpoint_summary",
+                "category": "checkpoint",
+                "topic": "checkpoint",
+                "narrative_importance": "medium",
+                "compressed_from": original_ids,
+                "compression_ratio": f"{len(original_ids)}:1",
+                "summary_date": date,
+                "created_at": now,
+                "consolidation_status": "consolidated",
+                "consolidated_compressed": False,
+                "attention_access_count": 0,
+                "_v": 4.1,
+            }
+        )
+
+        qdrant.upsert(
+            collection_name=COLLECTION_NAME,
+            points=[summary_point],
+        )
+        summaries_created += 1
+
+        # Mark originals as compressed
+        for oid in original_ids:
+            try:
+                qdrant.set_payload(
+                    collection_name=COLLECTION_NAME,
+                    payload={"consolidated_compressed": True, "compressed_into": summary_id},
+                    points=[oid],
+                )
+            except Exception:
+                pass
+
+        progress_compressed += len(original_ids)
+
+    _logger.info(
+        "Checkpoint compression: %d trivial deleted, %d progress compressed into %d summaries, %d insights preserved",
+        trivial_deleted, progress_compressed, summaries_created, insight_count,
+    )
+
+    return {
+        "trivial_deleted": trivial_deleted,
+        "progress_compressed": progress_compressed,
+        "summaries_created": summaries_created,
+        "insights_preserved": insight_count,
+    }
 
 
 def _log_consolidation_run(result: dict):
