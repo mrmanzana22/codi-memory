@@ -81,7 +81,7 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis"]
+TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "backup"]
 
 # Minimum ms required to even attempt a tick (below this, skip)
 TICK_MIN_MS = {
@@ -467,6 +467,108 @@ def _tick_homeostasis(budget_ms: int) -> dict:
     return result
 
 
+def _tick_backup(budget_ms: int) -> dict:
+    """Tick: Qdrant snapshot backup. Runs 3x/day (morning, afternoon, night).
+
+    Creates snapshots of codi_memories + codi_semantic, downloads to local
+    backups/ directory, keeps last 3 snapshots per collection.
+    """
+    import glob as glob_mod
+    import requests
+    from datetime import datetime
+    import pytz
+
+    start = time.monotonic()
+    result = {"tick": "backup", "ok": False, "detail": ""}
+    _tz = pytz.timezone("America/Bogota")
+    now = datetime.now(_tz)
+    hour = now.hour
+
+    # Run 3x/day: 8am, 14pm, 22pm (morning, afternoon, night)
+    backup_hours = {8, 14, 22}
+    # Only run if current hour matches AND we haven't backed up this window yet
+    if hour not in backup_hours:
+        result["ok"] = True
+        result["detail"] = f"skip (hour={hour}, next at {min(h for h in backup_hours if h > hour) if any(h > hour for h in backup_hours) else min(backup_hours)})"
+        result["elapsed_ms"] = 0
+        return result
+
+    backup_dir = os.path.join(os.path.dirname(__file__), '..', 'backups', 'qdrant')
+    os.makedirs(backup_dir, exist_ok=True)
+
+    # Check if we already backed up in this window (same date + hour bucket)
+    date_str = now.strftime("%Y-%m-%d")
+    window = f"{date_str}-{hour:02d}"
+    marker = os.path.join(backup_dir, f".backup-{window}.done")
+    if os.path.exists(marker):
+        result["ok"] = True
+        result["detail"] = f"already done for {window}"
+        result["elapsed_ms"] = 0
+        return result
+
+    parts = []
+    collections = ["codi_memories", "codi_semantic"]
+    qdrant_url = "http://localhost:6333"
+
+    for coll in collections:
+        try:
+            # Create snapshot
+            resp = requests.post(f"{qdrant_url}/collections/{coll}/snapshots", timeout=30)
+            resp.raise_for_status()
+            snap_info = resp.json()["result"]
+            snap_name = snap_info["name"]
+            snap_size = snap_info["size"]
+
+            # Download snapshot
+            filename = f"{coll}-{window}.snapshot"
+            filepath = os.path.join(backup_dir, filename)
+            dl_resp = requests.get(
+                f"{qdrant_url}/collections/{coll}/snapshots/{snap_name}",
+                stream=True, timeout=60
+            )
+            dl_resp.raise_for_status()
+            with open(filepath, 'wb') as f:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            size_mb = round(snap_size / 1024 / 1024, 1)
+            parts.append(f"{coll}: {size_mb}MB")
+
+            # Cleanup: keep only last 3 snapshots per collection
+            existing = sorted(glob_mod.glob(os.path.join(backup_dir, f"{coll}-*.snapshot")))
+            while len(existing) > 3:
+                os.remove(existing.pop(0))
+
+            # Delete snapshot from Qdrant server (save disk space)
+            requests.delete(
+                f"{qdrant_url}/collections/{coll}/snapshots/{snap_name}",
+                timeout=10
+            )
+
+        except Exception as e:
+            parts.append(f"{coll}: error {str(e)[:50]}")
+
+    # Write marker to prevent re-running this window
+    with open(marker, 'w') as f:
+        f.write(now.isoformat())
+
+    # Cleanup old markers (keep last 7 days)
+    for old_marker in glob_mod.glob(os.path.join(backup_dir, ".backup-*.done")):
+        try:
+            mtime = os.path.getmtime(old_marker)
+            age_days = (time.time() - mtime) / 86400
+            if age_days > 7:
+                os.remove(old_marker)
+        except Exception:
+            pass
+
+    elapsed = (time.monotonic() - start) * 1000
+    result["ok"] = True
+    result["detail"] = "; ".join(parts) if parts else "no collections"
+    result["elapsed_ms"] = round(elapsed)
+    return result
+
+
 def _tick_prospective(budget_ms: int) -> dict:
     """Tick 3: Prospective memory -- intention decay + maintenance."""
     start = time.monotonic()
@@ -622,6 +724,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "reconsolidation": _tick_reconsolidation,
         "consolidation": _tick_consolidation,
         "homeostasis": _tick_homeostasis,
+        "backup": _tick_backup,
     }
 
     tick_results = []
