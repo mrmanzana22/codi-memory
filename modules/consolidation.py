@@ -118,12 +118,16 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     # Phase 2: Clustering
     clusters = _phase_clustering(candidates)
 
+    # Phase 2.5: Graph Edge Creation (densify spreading activation network)
+    edges_created = _phase_graph_edges(clusters)
+
     result = {
         "batch_id": batch_id,
         "scope": scope,
         "lookback_hours": lookback_hours,
         "episodes_scanned": len(candidates),
         "clusters_found": len(clusters),
+        "edges_created": edges_created,
         "facts_extracted": 0,
         "facts_created": 0,
         "facts_updated": 0,
@@ -452,6 +456,40 @@ IGNORAR y NO extraer:
 
 Responde SOLO con un array JSON (sin markdown, sin explicacion):
 [{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL", "confidence": 0.85, "specificity": "high"}}]"""
+
+
+def _phase_graph_edges(clusters: list) -> int:
+    """Phase 2.5: Create consolidated_with edges within clusters.
+
+    Neuroscience basis: Consolidation creates and strengthens synaptic
+    connections between co-activated memories (Rasch & Born 2013).
+    Uses 'consolidated_with' field which spreading.py already reads.
+    """
+    from modules.config import GRAPH_AUTO_CONNECT_MAX
+
+    total_edges = 0
+    for cluster in clusters:
+        ids = cluster.get("episode_ids", [])
+        if len(ids) < 2:
+            continue
+
+        for i, mid in enumerate(ids):
+            neighbors = [oid for j, oid in enumerate(ids) if j != i]
+            neighbors = neighbors[:GRAPH_AUTO_CONNECT_MAX]
+
+            if neighbors:
+                try:
+                    record_access(COLLECTION_NAME, mid, {
+                        'consolidated_with': neighbors,
+                    })
+                    total_edges += len(neighbors)
+                except Exception:
+                    pass
+
+    if total_edges > 0:
+        _logger.info("Graph edges: %d edges created across %d clusters",
+                     total_edges, len(clusters))
+    return total_edges
 
 
 def _phase_extraction(clusters: list) -> list:

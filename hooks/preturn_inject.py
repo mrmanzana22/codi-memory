@@ -545,18 +545,31 @@ def _compare_prediction(conn, prompt):
         # Is it a hit?
         hit = 1 if predicted_topic == actual_topic else 0
 
-        # Record result
+        # Record result with source tagging (Proposal #42: PCI fix)
         from datetime import datetime
         now = datetime.now().isoformat()
+
+        # Detect source: sleep_loop ticks have predictable patterns
+        source = 'interactive'
+        if predicted_topic == actual_topic == 'codigo':
+            last_row = conn.execute(
+                "SELECT created_at FROM prediction_results ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if last_row:
+                last_time = datetime.fromisoformat(last_row[0])
+                gap_min = (datetime.now() - last_time).total_seconds() / 60
+                if 25 <= gap_min <= 35:
+                    source = 'sleep_loop'
+
         conn.execute("""
             INSERT INTO prediction_results
             (predicted_topic, actual_topic, predicted_keywords, actual_keywords,
-             surprise_score, precision_weight, weighted_surprise, hit, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             surprise_score, precision_weight, weighted_surprise, hit, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             predicted_topic, actual_topic,
             predicted_keywords, json.dumps(list(actual_keywords)[:20]),
-            surprise, precision, weighted_surprise, hit, now
+            surprise, precision, weighted_surprise, hit, source, now
         ))
 
         # Cleanup old results
@@ -617,23 +630,36 @@ def _generate_prediction(conn, prompt, wm_topics=None):
         current_keywords = _extract_keywords(prompt)
         current_action = _classify_action(prompt)
 
-        # Build topic distribution from recent 20 results
-        # Subquery needed: LIMIT on GROUP BY limits groups, not input rows
+        # Markov transition model: P(next_topic | current_topic)
+        # Only use interactive predictions (exclude sleep_loop contamination — Proposal #42)
         rows = conn.execute("""
-            SELECT actual_topic, COUNT(*) as cnt
-            FROM (
-                SELECT actual_topic FROM prediction_results
-                ORDER BY id DESC LIMIT 20
-            )
-            GROUP BY actual_topic
+            SELECT
+                p1.actual_topic AS from_topic,
+                p2.actual_topic AS to_topic,
+                COUNT(*) AS cnt
+            FROM prediction_results p1
+            JOIN prediction_results p2 ON p2.id = p1.id + 1
+            WHERE COALESCE(p1.source, 'interactive') != 'sleep_loop'
+              AND COALESCE(p2.source, 'interactive') != 'sleep_loop'
+            GROUP BY from_topic, to_topic
         """).fetchall()
 
+        # Build transition counts from current_topic
         topic_counts = {}
-        for topic, cnt in rows:
-            topic_counts[topic] = topic_counts.get(topic, 0) + cnt
+        for from_t, to_t, cnt in rows:
+            if from_t == current_topic:
+                topic_counts[to_t] = topic_counts.get(to_t, 0) + cnt
 
-        # Current topic gets a strong recency boost (people tend to stay on topic)
-        topic_counts[current_topic] = topic_counts.get(current_topic, 0) + 5
+        # Fallback: if no transitions from current_topic, use overall frequency
+        if not topic_counts:
+            freq_rows = conn.execute("""
+                SELECT actual_topic, COUNT(*) as cnt
+                FROM prediction_results
+                WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                GROUP BY actual_topic
+            """).fetchall()
+            for topic, cnt in freq_rows:
+                topic_counts[topic] = cnt
 
         # WM topics get a small boost
         if wm_topics:
@@ -745,6 +771,7 @@ def _load_attention_state():
     Without this, _attention_schema resets each hook invocation and
     the predictor has no history to achieve pred_prob >= 0.5.
     """
+    last_focus = None
     try:
         conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
         conn.execute("""
@@ -760,13 +787,24 @@ def _load_attention_state():
             "SELECT from_topic, to_topic, driver, created_at "
             "FROM attention_transitions ORDER BY id DESC LIMIT 30"
         ).fetchall()
-        conn.close()
 
         transitions = [
             {"from": r[0], "to": r[1], "driver": r[2], "at": r[3]}
             for r in reversed(rows)
         ]
-        last_focus = rows[0][1] if rows else None  # Most recent to_topic
+        last_focus = rows[0][1] if rows else None
+
+        # Bootstrap: load saved focus when no transitions exist yet
+        if not last_focus:
+            try:
+                row = conn.execute(
+                    "SELECT value FROM attention_state WHERE key = 'current_focus'"
+                ).fetchone()
+                last_focus = row[0] if row else None
+            except Exception:
+                pass
+
+        conn.close()
         return transitions, last_focus
     except Exception:
         return [], None
@@ -902,6 +940,29 @@ def _update_attention_from_prompt(prompt: str):
                 conn.close()
             except Exception:
                 pass
+
+        # --- Save current focus for next process bootstrap ---
+        try:
+            conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS attention_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            from datetime import datetime
+            conn.execute("""
+                INSERT INTO attention_state (key, value, updated_at)
+                VALUES ('current_focus', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+            """, (topic, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     except Exception:
         pass

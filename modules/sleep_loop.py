@@ -508,7 +508,8 @@ def _tick_health(budget_ms: int) -> dict:
 
     # Incremental FTS sync: index Qdrant memories not yet in FTS
     try:
-        from qdrant_client import QdrantClient
+        from modules.qdrant_utils import scroll_all
+        from modules.config import qdrant as _qdrant, COLLECTION_NAME as _COLL
 
         fts_db_path = os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db')
         fts_conn = sqlite3.connect(fts_db_path)
@@ -519,38 +520,45 @@ def _tick_health(budget_ms: int) -> dict:
             fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
         )
 
-        # Scroll recent Qdrant memories (no Range filter — created_at is string, not indexed)
-        client = QdrantClient(host='localhost', port=6333)
-        points, _ = client.scroll(
-            collection_name='codi_memories',
-            limit=100,
-            with_payload=['data', 'category', 'narrative_importance', 'ownership_source'],
-            with_vectors=False,
-        )
+        # Quick check: skip if already in sync
+        qdrant_count = _qdrant.count(collection_name=_COLL).count
+        if len(fts_ids) >= qdrant_count:
+            parts.append(f"fts_sync: in sync ({len(fts_ids)})")
+            fts_conn.close()
+        else:
+            # Paginated scroll through ALL Qdrant memories
+            points = scroll_all(
+                max_results=5000,
+                with_payload=['data', 'category', 'narrative_importance', 'ownership_source'],
+                with_vectors=False,
+                batch_size=200,
+            )
 
-        synced = 0
-        for p in points:
-            mid = str(p.id)
-            if mid not in fts_ids:
-                content = p.payload.get('data', '')
-                if not content:
-                    continue
-                category = p.payload.get('category', 'general')
-                source = p.payload.get('ownership_source', 'experienced')
-                importance = p.payload.get('narrative_importance', 'medium')
-                fts_conn.execute("""
-                    INSERT OR REPLACE INTO memories_text
-                    (memory_id, content, category, source, importance, created_at)
-                    VALUES (?, ?, ?, ?, ?, datetime('now'))
-                """, (mid, content, category, source, importance))
-                synced += 1
+            synced = 0
+            for p in points:
+                mid = str(p.id)
+                if mid not in fts_ids:
+                    content = p.payload.get('data', '')
+                    if not content:
+                        continue
+                    category = p.payload.get('category', 'general')
+                    source = p.payload.get('ownership_source', 'experienced')
+                    importance = p.payload.get('narrative_importance', 'medium')
+                    fts_conn.execute("""
+                        INSERT OR REPLACE INTO memories_text
+                        (memory_id, content, category, source, importance, created_at)
+                        VALUES (?, ?, ?, ?, ?, datetime('now'))
+                    """, (mid, content, category, source, importance))
+                    synced += 1
 
-        if synced > 0:
-            fts_conn.commit()
-        fts_conn.close()
+            if synced > 0:
+                fts_conn.commit()
+            fts_conn.close()
 
-        if synced > 0:
-            parts.append(f"fts_sync: {synced} new")
+            if synced > 0:
+                parts.append(f"fts_sync: {synced} new (total: {len(fts_ids) + synced})")
+            else:
+                parts.append("fts_sync: 0 new")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
 

@@ -24,6 +24,7 @@ Usage:
   event_bus.emit(Events.MEMORY_STORED, {'memory_id': '...', 'content': '...'})
 """
 
+import atexit
 import logging
 import os
 import sqlite3
@@ -57,6 +58,7 @@ class Events:
     SESSION_CLOSE = 'session_close'                                       # Session bridge: checkpoint saved
     SESSION_OPEN = 'session_open'                                         # Session bridge: bridge loaded at wake
     SLEEP_LOOP_COMPLETE = 'sleep_loop_complete'                             # Sleep loop: background maintenance done
+    EMOTION_GATING_APPLIED = 'emotion_gating_applied'                        # HOT-4 runtime evidence (Bower 1981)
 
 
 class EventBus:
@@ -78,6 +80,7 @@ class EventBus:
         self._dirty_counts = defaultdict(int)  # event -> pending increment
         self._dirty_total = 0
         self._last_flush = time.monotonic()
+        atexit.register(self._flush_counts)
 
     def on(self, event_name: str, handler: callable):
         """Register a handler for an event.
@@ -160,7 +163,8 @@ class EventBus:
     @staticmethod
     def _get_db_path() -> str:
         """Get SQLite path for event_counts (reuses FTS DB)."""
-        return os.environ.get("FTS_DB_PATH", "memories_fts.db")
+        from modules.config import FTS_DB_PATH
+        return os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
 
     _event_tables_validated = False
 

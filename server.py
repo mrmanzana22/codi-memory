@@ -64,6 +64,7 @@ from modules import assessment
 from modules import session_bridge
 from modules import sleep_loop
 from modules import write_queue
+from modules import narrative
 from modules import tool_governance
 
 # ============================================================
@@ -95,6 +96,7 @@ assessment.register_assessment_tools(mcp)
 session_bridge.register_tools(mcp)
 sleep_loop.register_tools(mcp)
 write_queue.register_tools(mcp)
+narrative.register_tools(mcp)
 tool_governance.register_governance_tool(mcp)
 
 # ============================================================

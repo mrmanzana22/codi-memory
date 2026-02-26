@@ -545,7 +545,8 @@ def record_rcj(query: str, fok_predicted: float, actual_coverage: str,
     from modules.db_pool import get_conn
 
     if not fts_db_path:
-        fts_db_path = os.environ.get("FTS_DB_PATH", "memories_fts.db")
+        from modules.config import FTS_DB_PATH as _default_path
+        fts_db_path = os.environ.get("FTS_DB_PATH", _default_path)
 
     try:
         conn = get_conn(fts_db_path)
@@ -579,7 +580,8 @@ def get_fok_calibration(lookback: int = 100, fts_db_path: str = None) -> dict:
     from modules.db_pool import get_conn
 
     if not fts_db_path:
-        fts_db_path = os.environ.get("FTS_DB_PATH", "memories_fts.db")
+        from modules.config import FTS_DB_PATH as _default_path
+        fts_db_path = os.environ.get("FTS_DB_PATH", _default_path)
 
     try:
         conn = get_conn(fts_db_path)
