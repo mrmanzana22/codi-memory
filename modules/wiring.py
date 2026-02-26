@@ -421,12 +421,18 @@ def _on_prediction_error(event_name: str, data: dict):
     (Schultz 1997) enhance hippocampal encoding. Surprise increases
     memory formation via locus coeruleus-norepinephrine system.
     """
-    error_magnitude = data.get("error_magnitude", 0.5)
+    # Normalize across emitters: preturn_inject uses error_magnitude,
+    # record_surprise uses confidence/intensity
+    error_magnitude = data.get("error_magnitude") or data.get("confidence") or 0.5
     topic = data.get("topic", "unknown")
+    # Build keywords from available data
     actual_keywords = data.get("actual_keywords", [])
+    if not actual_keywords:
+        actual_text = data.get("actual", "")
+        if actual_text:
+            actual_keywords = [w for w in actual_text.split()[:5] if len(w) > 3]
 
     # Effect 1: Push surprise to working memory (Schultz 1997)
-    # Note: preturn_inject doesn't emit memory_id, so we use actual_keywords
     if error_magnitude > 0.3 and actual_keywords:
         try:
             from modules.working_memory import push_to_working_memory
@@ -451,9 +457,28 @@ def _on_prediction_error(event_name: str, data: dict):
             _logger.error("_on_prediction_error attention error: %s", redact_secrets(str(e)))
 
     # Effect 3: PE-driven reconsolidation (Nader 2000, Lee 2009)
-    # DEFERRED: preturn_inject doesn't emit memory_id (PE is topic-level,
-    # not memory-specific). To enable: preturn would need to identify which
-    # stored memory generated the wrong prediction, then emit its ID.
+    affected_ids = data.get('affected_memory_ids', [])
+    if affected_ids and error_magnitude > 0.4:
+        try:
+            from modules.reconsolidation import mark_as_labile
+            for mem_id in affected_ids[:2]:
+                mark_as_labile(
+                    memory_id=mem_id,
+                    prediction_error=error_magnitude,
+                    trigger_context=(
+                        f"Topic PE: predicted={data.get('predicted_topic', '?')}, "
+                        f"actual={topic}"
+                    ),
+                )
+            _logger.info(
+                "PE reconsolidation: marked %d memories labile (PE=%.2f)",
+                len(affected_ids[:2]), error_magnitude,
+            )
+        except Exception as e:
+            _logger.error(
+                "_on_prediction_error reconsolidation: %s",
+                redact_secrets(str(e)),
+            )
 
 
 # ============================================================
@@ -640,17 +665,8 @@ def _on_workspace_recruitment(event_name: str, data: dict):
         if not content:
             return
 
-        # Module 1: Push broadcast to working memory as high-relevance context
-        try:
-            from modules.working_memory import push_to_working_memory
-            push_to_working_memory(
-                content=f"[BROADCAST] {content[:150]}",
-                topic=theme,
-                relevance=0.85,
-                source="workspace_recruitment",
-            )
-        except Exception:
-            pass
+        # WM push removed: _on_workspace_broadcast already pushes [BROADCAST] content
+        # to working memory with 200 chars. This avoids duplicate WM entries.
 
         _logger.debug("Workspace recruitment: theme=%s", theme)
     except Exception as e:

@@ -242,22 +242,17 @@ def dream_consolidation() -> str:
                     connections_made += 1
         lines.append(f"- Conexiones establecidas: {connections_made}")
 
-        lines.append("\n## Fase 4: Decay de memorias no accedidas")
-        all_points, _ = qdrant.scroll(collection_name=COLLECTION_NAME, limit=200, with_payload=True)
-        decayed = 0
-        for p in (all_points or []):
-            salience = p.payload.get('attention_salience', 0.5)
-            access_count = p.payload.get('attention_access_count', 0)
-            if access_count == 0 and salience > 0.2:
-                record_access(COLLECTION_NAME, p.id, {'attention_salience': max(salience - 0.05, 0.2)})
-                decayed += 1
-        lines.append(f"- Memorias con salience reducida: {decayed}")
+        lines.append("\n## Fase 4: Decay de memorias no accedidas (FadeMem)")
+        try:
+            from modules.workspace import apply_salience_decay
+            decay_result = apply_salience_decay(decay_rate=0.04)
+            lines.append(f"- FadeMem decay aplicado: {str(decay_result)[:120]}")
+        except Exception as e:
+            lines.append(f"- FadeMem decay: error ({type(e).__name__})")
 
         lines.append("\n## Resumen de Dream Consolidation")
-        lines.append(f"- Total memorias procesadas: {len(all_points or [])}")
         lines.append(f"- Memorias recientes consolidadas: {recent_count}")
         lines.append(f"- Conexiones criticas establecidas: {connections_made}")
-        lines.append(f"- Decay aplicado a: {decayed} memorias")
         maybe_backup(reason="dream_consolidation", force=True)
         lines.append("\n*Backup guardado. Dream consolidation completada.*")
         return "\n".join(lines)
@@ -531,8 +526,6 @@ def despertar_codi() -> str:
                 contexto.append("- Usa marcar_mantenimiento_hecho('id') al completar")
         except Exception:
             pass
-
-        contexto.append("\n## DEBUG_MARKER: Llegamos aqui antes del bloque 9")
 
         # 9. Prediccion contextual
         try:

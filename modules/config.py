@@ -102,6 +102,15 @@ CONSOLIDATION_SEMANTIC_DEDUP_THRESHOLD = 0.85  # Dedup threshold for semantic fa
 CONSOLIDATION_MAX_EPISODES_PER_RUN = 200    # Cap per consolidation run
 
 # ============================================================
+# PHASE 6: COMPRESSION PARAMETERS
+# ============================================================
+COMPRESSION_MIN_AGE_DAYS = 7
+COMPRESSION_MIN_GROUP_SIZE = 3
+COMPRESSION_MAX_PER_RUN = 100
+COMPRESSION_SIMILARITY_THRESHOLD = 0.60
+COMPRESSION_ENABLED = True
+
+# ============================================================
 # PHASE 1: RECONSOLIDATION PARAMETERS
 # ============================================================
 RECONSOLIDATION_WINDOW_HOURS = 1.0          # Lability window duration

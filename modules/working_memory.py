@@ -5,6 +5,8 @@ SQLite-backed (memories_fts.db), connection-per-call, WAL mode.
 """
 
 import json
+import hashlib
+import time
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
@@ -15,6 +17,10 @@ from modules.config import (
 )
 from modules.db_pool import get_conn
 from modules.secret_redact import redact_secrets
+
+# Dedup window to prevent identical pushes within 30 seconds
+_push_dedup = {}  # {content_hash: timestamp}
+_DEDUP_WINDOW_S = 30
 
 # ============================================================
 # DATABASE INIT & CONNECTION
@@ -283,6 +289,23 @@ def push_to_working_memory(
         source: Origin of info ('interaction', 'system', 'observation')
     """
     try:
+        # Dedup: skip if identical content pushed in last 30 seconds
+        content_hash = hashlib.md5(content[:300].encode()).hexdigest()
+        _now = time.time()
+        if content_hash in _push_dedup and (_now - _push_dedup[content_hash]) < _DEDUP_WINDOW_S:
+            return json.dumps({
+                "id": None, "deduped": True, "chain_id": None,
+                "topic": topic, "relevance": relevance,
+                "pretty": f"# WORKING MEMORY\nDeduped: {content[:60]}... (same content pushed <{_DEDUP_WINDOW_S}s ago)",
+            }, ensure_ascii=False)
+        _push_dedup[content_hash] = _now
+        # Periodic cleanup of stale entries
+        if len(_push_dedup) > 100:
+            cutoff = _now - _DEDUP_WINDOW_S
+            for k in list(_push_dedup):
+                if _push_dedup[k] < cutoff:
+                    del _push_dedup[k]
+
         added_at = now_iso()
         if occurred_at is None:
             occurred_at = added_at

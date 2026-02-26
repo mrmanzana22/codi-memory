@@ -59,6 +59,15 @@ def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) 
                     emotional_weight=0.7,
                     emotional_valence=valence_map.get(momento, 'neutral')
                 )
+                # FTS indexing (same pattern as add_memory_smart)
+                try:
+                    from modules.memory_smart import index_memory_fts
+                    index_memory_fts(
+                        mem_id, contenido, "checkpoint",
+                        "experienced", importance_map.get(momento, 'medium')
+                    )
+                except Exception:
+                    pass
 
     maybe_backup(reason="checkpoint", force=True)
 

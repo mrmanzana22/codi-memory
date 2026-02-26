@@ -342,58 +342,84 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
     )
 
     try:
-        all_points, _ = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)
-        if not all_points:
-            return "No hay memorias para aplicar decay."
-
         decayed_count = 0
         preserved_count = 0
         fadem_count = 0
+        total_scanned = 0
 
         # Map decay_rate to FadeMem multiplier (0.05 = 1.0x, 0.03 = 0.6x)
         decay_multiplier = decay_rate / 0.05
 
-        for point in all_points:
-            salience = point.payload.get('attention_salience', 0.5)
-            importance = point.payload.get('narrative_importance', 'medium')
+        # Pre-filter: only scroll memories that can actually be decayed
+        # (salience above floor, not critical/high importance)
+        from qdrant_client.models import Filter, FieldCondition, Range, MatchValue
+        decay_filter = Filter(
+            must=[
+                FieldCondition(key='attention_salience', range=Range(gt=FADEM_FLOOR)),
+            ],
+            must_not=[
+                FieldCondition(key='narrative_importance', match=MatchValue(value='critical')),
+                FieldCondition(key='narrative_importance', match=MatchValue(value='high')),
+            ]
+        )
 
-            if importance in ['critical', 'high']:
-                preserved_count += 1
-                continue
+        # Paginated scroll (same pattern as consolidation.py:208-267)
+        offset = None
+        MAX_SCROLL = 5000  # safety cap
 
-            if salience <= FADEM_FLOOR:
-                continue
+        while total_scanned < MAX_SCROLL:
+            batch, next_offset = qdrant.scroll(
+                collection_name=COLLECTION_NAME,
+                scroll_filter=decay_filter,
+                limit=200,
+                with_payload=True,
+                offset=offset,
+            )
+            if not batch:
+                break
 
-            # Try FadeMem curve (needs timing data)
-            hours = _get_hours_since_access(point.payload)
-            if hours is not None:
-                new_salience = compute_fadem_strength(
-                    current_salience=salience,
-                    hours_since_access=hours,
-                    importance=importance,
-                    consolidated=_is_consolidated(point.payload),
-                    memory_type=_get_memory_type(point.payload),
-                    emotional_arousal=_get_emotional_arousal(point.payload),
-                    decay_multiplier=decay_multiplier,
-                )
-                fadem_count += 1
-            else:
-                # Flat fallback for memories without timing data
-                new_salience = max(FADEM_FLOOR, salience - decay_rate)
+            for point in batch:
+                salience = point.payload.get('attention_salience', 0.5)
+                importance = point.payload.get('narrative_importance', 'medium')
 
-            if new_salience < salience:
-                record_access(COLLECTION_NAME, point.id, {
-                    'attention_salience': new_salience,
-                })
-                decayed_count += 1
+                # Try FadeMem curve (needs timing data)
+                hours = _get_hours_since_access(point.payload)
+                if hours is not None:
+                    new_salience = compute_fadem_strength(
+                        current_salience=salience,
+                        hours_since_access=hours,
+                        importance=importance,
+                        consolidated=_is_consolidated(point.payload),
+                        memory_type=_get_memory_type(point.payload),
+                        emotional_arousal=_get_emotional_arousal(point.payload),
+                        decay_multiplier=decay_multiplier,
+                    )
+                    fadem_count += 1
+                else:
+                    # Flat fallback for memories without timing data
+                    new_salience = max(FADEM_FLOOR, salience - decay_rate)
+
+                if new_salience < salience:
+                    record_access(COLLECTION_NAME, point.id, {
+                        'attention_salience': new_salience,
+                    })
+                    decayed_count += 1
+
+            total_scanned += len(batch)
+            if not next_offset:
+                break
+            offset = next_offset
+
+        if total_scanned == 0:
+            return "No hay memorias para aplicar decay."
 
         lines = [f"# Salience Decay Aplicado (FadeMem)\n"]
         lines.append(f"**Decay multiplier:** {decay_multiplier:.2f}x")
-        lines.append(f"**Memorias procesadas:** {len(all_points)}")
+        lines.append(f"**Memorias procesadas:** {total_scanned}")
         lines.append(f"**Con decay aplicado:** {decayed_count}")
         lines.append(f"**FadeMem curves:** {fadem_count}")
         lines.append(f"**Flat fallback:** {decayed_count - fadem_count}")
-        lines.append(f"**Preservadas (alta importancia):** {preserved_count}")
+        lines.append(f"**Preservadas (filtradas):** critical/high excluded via pre-filter")
         return "\n".join(lines)
     except Exception as e:
         return f"Error aplicando decay: {redact_secrets(str(e))}"

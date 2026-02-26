@@ -572,6 +572,23 @@ def _compare_prediction(conn, prompt):
         threshold = _get_adaptive_threshold(conn)
 
         if weighted_surprise > threshold:
+            # Find memories that influenced the wrong prediction (Lee 2009)
+            affected_ids = []
+            try:
+                predicted_kw_query = clean_fts_query(predicted_topic)
+                if predicted_kw_query:
+                    cursor = conn.execute("""
+                        SELECT mt.memory_id
+                        FROM memories_text mt
+                        WHERE mt.rowid IN (
+                            SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?
+                        )
+                        LIMIT 3
+                    """, (predicted_kw_query,))
+                    affected_ids = [row[0] for row in cursor.fetchall()]
+            except Exception:
+                pass
+
             return {
                 'surprise': weighted_surprise,
                 'raw_surprise': surprise,
@@ -581,6 +598,7 @@ def _compare_prediction(conn, prompt):
                 'actual_topic': actual_topic,
                 'topic_changed': predicted_topic != actual_topic,
                 'actual_keywords': list(actual_keywords)[:10],
+                'affected_memory_ids': affected_ids,
             }
 
         return None  # Below threshold, not surprising
@@ -664,7 +682,46 @@ def _emit_prediction_error(surprise_info):
 
     This triggers the wiring handler that boosts encoding and
     captures attention (Schultz 1997 dopaminergic PE signals).
+    Also marks affected memories as labile when PE > 0.4 (Nader 2000).
     """
+    # 1. Persist to SQLite directly (no dependency on dotenv/db_pool/config)
+    try:
+        from datetime import datetime
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn.execute("""
+            INSERT INTO event_counts (event, count, last_seen)
+            VALUES ('prediction_error', 1, ?)
+            ON CONFLICT(event) DO UPDATE SET
+                count = count + 1,
+                last_seen = excluded.last_seen
+        """, (datetime.now().isoformat(),))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    # 2. Mark affected memories as labile when PE > 0.4 (Loop 2: Nader 2000)
+    try:
+        affected_ids = surprise_info.get('affected_memory_ids', [])
+        pe_magnitude = surprise_info.get('surprise', 0)
+        if affected_ids and pe_magnitude > 0.4:
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            expires = (now + timedelta(hours=1)).isoformat()
+            now_iso = now.isoformat()
+            trigger_ctx = (f"Topic PE: predicted={surprise_info.get('predicted_topic', '?')}, "
+                          f"actual={surprise_info.get('actual_topic', '?')}")
+            conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+            for mem_id in affected_ids[:2]:  # Max 2 memories per PE event
+                conn.execute("""
+                    INSERT OR REPLACE INTO labile_memories
+                    (memory_id, marked_at, window_expires, prediction_error, trigger_context)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (mem_id, now_iso, expires, pe_magnitude, trigger_ctx))
+            conn.commit()
+            conn.close()
+    except Exception:
+        pass
+    # 3. Emit to event bus for in-process handlers (best-effort, may fail in system python3)
     try:
         sys.path.insert(0, BASE_DIR)
         from modules.events import event_bus, Events
@@ -675,7 +732,71 @@ def _emit_prediction_error(surprise_info):
             'precision': surprise_info['precision'],
             'threshold': surprise_info['threshold'],
             'actual_keywords': surprise_info.get('actual_keywords', []),
+            'affected_memory_ids': surprise_info.get('affected_memory_ids', []),
         })
+    except Exception:
+        pass
+
+
+def _load_attention_state():
+    """Load persisted attention transitions and last focus from SQLite.
+
+    Enables cross-process bigram prediction (Graziano 2013 AST).
+    Without this, _attention_schema resets each hook invocation and
+    the predictor has no history to achieve pred_prob >= 0.5.
+    """
+    try:
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attention_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_topic TEXT NOT NULL,
+                to_topic TEXT NOT NULL,
+                driver TEXT DEFAULT 'unknown',
+                created_at TEXT NOT NULL
+            )
+        """)
+        rows = conn.execute(
+            "SELECT from_topic, to_topic, driver, created_at "
+            "FROM attention_transitions ORDER BY id DESC LIMIT 30"
+        ).fetchall()
+        conn.close()
+
+        transitions = [
+            {"from": r[0], "to": r[1], "driver": r[2], "at": r[3]}
+            for r in reversed(rows)
+        ]
+        last_focus = rows[0][1] if rows else None  # Most recent to_topic
+        return transitions, last_focus
+    except Exception:
+        return [], None
+
+
+def _save_attention_transition(from_topic, to_topic, driver, created_at):
+    """Persist a new topic transition to SQLite for cross-process continuity."""
+    try:
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attention_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_topic TEXT NOT NULL,
+                to_topic TEXT NOT NULL,
+                driver TEXT DEFAULT 'unknown',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO attention_transitions (from_topic, to_topic, driver, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (from_topic, to_topic, driver, created_at)
+        )
+        # Prune old entries (keep last 100)
+        conn.execute(
+            "DELETE FROM attention_transitions WHERE id NOT IN "
+            "(SELECT id FROM attention_transitions ORDER BY id DESC LIMIT 100)"
+        )
+        conn.commit()
+        conn.close()
     except Exception:
         pass
 
@@ -715,10 +836,11 @@ def _update_attention_from_prompt(prompt: str):
     """Extract topic from prompt and update attention schema.
 
     Lightweight topic extraction (no API calls) based on keyword density.
+    Loads persisted transitions so bigram predictor works cross-process.
     """
     try:
         sys.path.insert(0, BASE_DIR)
-        from modules.wiring import _update_attention_schema
+        import modules.wiring as _wiring
 
         # Simple topic extraction: most frequent non-stopword
         stopwords = {
@@ -732,15 +854,55 @@ def _update_attention_from_prompt(prompt: str):
         words = re.findall(r'\w{3,}', prompt.lower())
         filtered = [w for w in words if w not in stopwords]
 
-        if filtered:
-            # Most frequent word as topic proxy
-            from collections import Counter
-            topic = Counter(filtered).most_common(1)[0][0]
-            _update_attention_schema(
-                focus=topic,
-                driver="user_prompt",
-                strength=0.6,
+        if not filtered:
+            return
+
+        from collections import Counter
+        topic = Counter(filtered).most_common(1)[0][0]
+
+        # --- AST-1 FIX: Load persisted state into _attention_schema ---
+        transitions, last_focus = _load_attention_state()
+        if transitions:
+            _wiring._attention_schema["topic_transitions"] = transitions
+        if last_focus:
+            _wiring._attention_schema["current_focus"] = last_focus
+
+        # Count transitions before update (to detect new ones)
+        n_before = len(_wiring._attention_schema["topic_transitions"])
+
+        # Call update (bigram predictor now has history!)
+        _wiring._update_attention_schema(
+            focus=topic,
+            driver="user_prompt",
+            strength=0.6,
+        )
+
+        # --- Persist new transition if one was added ---
+        n_after = len(_wiring._attention_schema["topic_transitions"])
+        if n_after > n_before:
+            latest = _wiring._attention_schema["topic_transitions"][-1]
+            _save_attention_transition(
+                latest["from"], latest["to"],
+                latest.get("driver", "unknown"), latest.get("at", "")
             )
+
+        # --- AST-1: Persist attention PE to event_counts (direct SQLite) ---
+        if _wiring._attention_schema.get("last_predicted_focus") is not None:
+            try:
+                from datetime import datetime
+                conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+                conn.execute("""
+                    INSERT INTO event_counts (event, count, last_seen)
+                    VALUES ('attention_prediction_error', 1, ?)
+                    ON CONFLICT(event) DO UPDATE SET
+                        count = count + 1,
+                        last_seen = excluded.last_seen
+                """, (datetime.now().isoformat(),))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
     except Exception:
         pass
 

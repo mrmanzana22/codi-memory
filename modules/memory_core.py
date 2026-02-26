@@ -977,6 +977,38 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
 
 
 # ============================================================
+# ACCESS TRACKING HELPER (for scroll-based search functions)
+# ============================================================
+
+def _track_scroll_access(points):
+    """
+    Update access_count for Qdrant scroll results.
+    Same pattern as search_memory() lines 514-538.
+    """
+    if not points:
+        return
+    try:
+        from modules.access_tracking import record_access
+        ts = now_iso()
+        for p in points:
+            mid = str(p.id)
+            payload = p.payload or {}
+            access_count = int(payload.get('attention_access_count', 0) or 0)
+            access_ts = list(payload.get('access_timestamps', []) or [])
+            if not isinstance(access_ts, list):
+                access_ts = []
+            access_ts.append(ts)
+            access_ts = access_ts[-20:]
+            record_access(COLLECTION_NAME, mid, {
+                'attention_access_count': access_count + 1,
+                'attention_last_accessed': ts,
+                'access_timestamps': access_ts,
+            })
+    except Exception:
+        pass
+
+
+# ============================================================
 # OWNERSHIP TOOLS
 # ============================================================
 
@@ -1027,6 +1059,8 @@ def search_by_ownership(source: str = None, min_confidence: float = 0.0,
         if not points:
             return "No encontre memorias con esos filtros."
 
+        _track_scroll_access(points)
+
         lines = [f"Encontradas {len(points)} memorias:"]
         for p in points:
             data = p.payload.get('data', 'N/A')
@@ -1058,6 +1092,8 @@ def get_my_experiences(limit: int = 10) -> str:
         if not points:
             return "No encontre experiencias propias."
 
+        _track_scroll_access(points)
+
         lines = [f"Mis {len(points)} experiencias vividas:"]
         for p in points:
             data = p.payload.get('data', 'N/A')
@@ -1086,6 +1122,8 @@ def get_critical_memories() -> str:
 
         if not points:
             return "No hay memorias criticas."
+
+        _track_scroll_access(points)
 
         lines = [f"Memorias CRITICAS ({len(points)}):"]
         for p in points:
@@ -1118,6 +1156,8 @@ def search_by_theme(theme: str, limit: int = 10) -> str:
 
         if not points:
             return f"No encontre memorias sobre '{theme}'."
+
+        _track_scroll_access(points)
 
         lines = [f"Memorias sobre '{theme}' ({len(points)}):"]
         for p in points:

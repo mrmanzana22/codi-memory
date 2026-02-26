@@ -3,6 +3,8 @@ Codi Memory - Prediction module.
 Predictive processing: predict, surprise, beliefs, accuracy.
 """
 
+import threading
+
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME,
     now_iso,
@@ -12,6 +14,7 @@ from modules.utils import (
 )
 from modules.secret_redact import redact_secrets
 from modules.access_tracking import record_access
+from modules.qdrant_utils import scroll_all
 
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -32,11 +35,14 @@ _predictive_state = {
     'belief_updates': [],
     'accuracy_history': []
 }
+_state_lock = threading.Lock()
 
 
 def get_predictive_state():
     """Obtiene el estado predictivo actual."""
-    return _predictive_state
+    with _state_lock:
+        return {k: list(v) if isinstance(v, list) else v
+                for k, v in _predictive_state.items()}
 
 
 def predict_context(current_context: str) -> str:
@@ -54,7 +60,8 @@ def predict_context(current_context: str) -> str:
                 'predicted_memories': [], 'confidence': 0.0,
                 'reason': 'No hay memorias previas sobre este contexto'
             }
-            _predictive_state['predictions'].append(prediction)
+            with _state_lock:
+                _predictive_state['predictions'].append(prediction)
             return f"No tengo memorias para predecir sobre: {current_context}\nPrediccion: contexto nuevo, alta probabilidad de sorpresa."
 
         predicted_memories = []
@@ -73,10 +80,14 @@ def predict_context(current_context: str) -> str:
                         'importance': payload.get('narrative_importance', 'medium')
                     })
                     total_score += score
+                    record_access(COLLECTION_NAME, mem_id, {
+                        'attention_access_count': int((payload or {}).get('attention_access_count', 0) or 0) + 1,
+                        'attention_last_accessed': now_iso(),
+                    })
             except Exception:
                 pass
 
-        confidence = min(total_score / len(results['results']) if results['results'] else 0, 1.0)
+        confidence = min(total_score / len(predicted_memories) if predicted_memories else 0, 1.0)
         predicted_themes = []
         for pm in predicted_memories:
             predicted_themes.extend(pm.get('themes', []))
@@ -87,7 +98,8 @@ def predict_context(current_context: str) -> str:
             'predicted_memories': [pm['id'] for pm in predicted_memories[:5]],
             'predicted_themes': predicted_themes, 'confidence': confidence, 'verified': False
         }
-        _predictive_state['predictions'].append(prediction)
+        with _state_lock:
+            _predictive_state['predictions'].append(prediction)
 
         lines = [f"# PREDICCION - Anticipando contexto\n"]
         lines.append(f"**Contexto:** {current_context}")
@@ -120,7 +132,8 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
             'actual': actual, 'intensity': intensity,
             'surprise_value': surprise_value, 'session': get_session_id()
         }
-        _predictive_state['surprises'].append(surprise_record)
+        with _state_lock:
+            _predictive_state['surprises'].append(surprise_record)
 
         content = f"[SORPRESA|{intensity.upper()}] Esperaba: {expected[:50]}... | Realidad: {actual[:50]}..."
         result = memory.add(
@@ -202,18 +215,17 @@ def get_prediction_accuracy() -> str:
             lines.append(f"**Sorpresas de alta intensidad:** {high_surprises}")
 
         try:
-            error_points, _ = qdrant.scroll(
-                collection_name=COLLECTION_NAME,
+            all_error_points = scroll_all(
                 scroll_filter=Filter(must=[
                     FieldCondition(key='prediction_error', match=MatchValue(value=True))
                 ]),
-                limit=20, with_payload=True
+                max_results=500,
             )
-            if error_points:
-                lines.append(f"\n## Errores de Prediccion Almacenados ({len(error_points)})")
-                for p in error_points[:5]:
-                    data = p.payload.get('data', 'N/A')[:60]
-                    error_val = p.payload.get('prediction_error_value', 0)
+            if all_error_points:
+                lines.append(f"\n## Errores de Prediccion Almacenados ({len(all_error_points)})")
+                for p in all_error_points[:10]:
+                    data = (p.payload or {}).get('data', 'N/A')[:60]
+                    error_val = (p.payload or {}).get('prediction_error_value', 0)
                     lines.append(f"- [{error_val:.1f}] {data}...")
         except Exception:
             pass
@@ -245,7 +257,8 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
             'timestamp': now_iso(), 'topic': topic,
             'old_belief': old_belief, 'new_belief': new_belief, 'reason': reason
         }
-        _predictive_state['belief_updates'].append(belief_update)
+        with _state_lock:
+            _predictive_state['belief_updates'].append(belief_update)
 
         content = f"[ACTUALIZACION DE CREENCIA] Sobre {topic}: Antes creia '{old_belief[:50]}...' | Ahora creo '{new_belief[:50]}...' | Razon: {reason[:50]}..."
         result = memory.add(

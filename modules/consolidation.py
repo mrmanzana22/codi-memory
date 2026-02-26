@@ -121,6 +121,7 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     result = {
         "batch_id": batch_id,
         "scope": scope,
+        "lookback_hours": lookback_hours,
         "episodes_scanned": len(candidates),
         "clusters_found": len(clusters),
         "facts_extracted": 0,
@@ -149,6 +150,11 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         if consolidated_ids:
             pruning = _phase_pruning(consolidated_ids)
             result["episodes_pruned"] = pruning.get("marked_consolidated", 0)
+
+    # Phase 6: Compression (full scope only)
+    compression_result = _phase_compression(scope=scope)
+    result["episodes_compressed"] = compression_result.get("episodes_archived", 0)
+    result["compression_summaries"] = compression_result.get("summaries_created", 0)
 
     # Housekeeping: expire stale correction suggestions
     try:
@@ -635,6 +641,207 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
 
     _logger.info("Pruning: %d episodes marked as consolidated", marked)
     return {"marked_consolidated": marked, "decayed": decayed}
+
+
+# ============================================================
+# PHASE 6: COMPRESSION — Episodic memory compression
+# Compresses groups of low-value consolidated episodes into summaries.
+# Based on: Schema abstraction (Gilboa & Marlatte 2017), gist extraction
+# ============================================================
+
+COMPRESSION_PROMPT = """Eres un sistema de compresion de memoria. Tu tarea es comprimir {n} memorias episodicas en UN SOLO resumen.
+
+REGLAS:
+1. Maximo 200 palabras
+2. Preservar: decisiones tomadas, patrones descubiertos, resultados importantes
+3. Descartar: detalles de implementacion, estados transitorios, errores ya resueltos
+4. Formato: parrafo narrativo que capture la esencia
+5. Idioma: espanol
+6. El resumen debe ser util si se recupera 30+ dias despues
+
+MEMORIAS A COMPRIMIR:
+{episodes}
+
+Responde SOLO con el resumen (sin markdown, sin explicacion):"""
+
+
+def _phase_compression(scope: str = "full") -> dict:
+    """Phase 6: Compress low-value consolidated episodes into summaries.
+
+    Only runs in 'full' scope. Requires COMPRESSION_ENABLED=True.
+    """
+    from modules.config import (
+        COMPRESSION_MIN_AGE_DAYS, COMPRESSION_MIN_GROUP_SIZE,
+        COMPRESSION_MAX_PER_RUN, COMPRESSION_ENABLED,
+    )
+
+    if not COMPRESSION_ENABLED:
+        return {"compressed_groups": 0, "episodes_archived": 0, "summaries_created": 0}
+    if scope != "full":
+        return {"compressed_groups": 0, "episodes_archived": 0, "summaries_created": 0}
+
+    cutoff = datetime.now() - timedelta(days=COMPRESSION_MIN_AGE_DAYS)
+    now = now_iso()
+
+    # Step 1: Select candidates
+    scroll_filter = Filter(must=[
+        FieldCondition(key="consolidation_status", match=MatchValue(value="consolidated")),
+    ], must_not=[
+        FieldCondition(key="consolidated_compressed", match=MatchValue(value=True)),
+    ])
+
+    candidates = []
+    offset = None
+    max_scroll = COMPRESSION_MAX_PER_RUN * 5
+
+    while len(candidates) < max_scroll:
+        pts, next_offset = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=scroll_filter,
+            limit=100,
+            with_payload=True,
+            offset=offset,
+        )
+        if not pts:
+            break
+
+        for p in pts:
+            payload = p.payload or {}
+
+            # Skip high-importance
+            imp = payload.get("narrative_importance", "medium")
+            if imp in ("critical", "high"):
+                continue
+
+            # Skip recently accessed
+            acc = int(payload.get("attention_access_count", 0) or 0)
+            if acc > 0:
+                continue
+
+            # Skip too recent
+            try:
+                created = datetime.fromisoformat(
+                    str(payload.get("created_at", "")).replace("Z", "+00:00")
+                )
+                if created.tzinfo:
+                    created = created.replace(tzinfo=None)
+                if created > cutoff:
+                    continue
+            except Exception:
+                continue
+
+            text = payload.get("data", "")
+            if not text or len(text) < 20:
+                continue
+
+            candidates.append({
+                "id": str(p.id),
+                "data": text,
+                "payload": payload,
+                "topics": payload.get("narrative_themes", []),
+            })
+
+        if not next_offset:
+            break
+        offset = next_offset
+
+    if len(candidates) < COMPRESSION_MIN_GROUP_SIZE:
+        _logger.info("Compression: only %d candidates, skipping", len(candidates))
+        return {"compressed_groups": 0, "episodes_archived": 0, "summaries_created": 0}
+
+    # Step 2: Cluster by primary topic
+    topic_groups = defaultdict(list)
+    for c in candidates:
+        topics = c.get("topics", [])
+        primary = topics[0] if topics else "general"
+        topic_groups[primary].append(c)
+
+    groups = []
+    for topic, members in topic_groups.items():
+        if len(members) >= COMPRESSION_MIN_GROUP_SIZE:
+            groups.append({"topic": topic, "members": members})
+
+    # Step 3: Compress each group
+    compressed_groups = 0
+    episodes_archived = 0
+    summaries_created = 0
+
+    for group in groups[:20]:  # max 20 groups per run
+        topic = group["topic"]
+        members = group["members"][:15]  # max 15 episodes per summary
+
+        episodes_block = "\n".join(
+            f"- {m['data'][:300]}" for m in members
+        )
+        prompt = COMPRESSION_PROMPT.format(n=len(members), episodes=episodes_block)
+
+        try:
+            response = _get_oai().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            summary = response.choices[0].message.content.strip()
+
+            if not summary or len(summary) < 30:
+                continue
+
+            # Create compressed memory
+            new_id = str(uuid.uuid4())
+            original_ids = [m["id"] for m in members]
+            embedding = _embed_text(summary)
+
+            payload = {
+                "data": summary,
+                "user_id": USER_ID,
+                "category": "episodio",
+                "narrative_importance": "medium",
+                "narrative_themes": [topic],
+                "memory_type": "compressed_episodic",
+                "compressed_from": original_ids,
+                "compression_ratio": f"{len(original_ids)}:1",
+                "created_at": now,
+                "consolidation_status": "consolidated",
+                "attention_access_count": 0,
+                "_v": 4.1,
+            }
+
+            qdrant.upsert(
+                collection_name=COLLECTION_NAME,
+                points=[PointStruct(
+                    id=new_id,
+                    vector=embedding,
+                    payload=payload,
+                )],
+            )
+            summaries_created += 1
+
+            # Mark originals as compressed
+            for oid in original_ids:
+                record_access(COLLECTION_NAME, oid, {
+                    "consolidated_compressed": True,
+                    "compressed_into": new_id,
+                })
+                episodes_archived += 1
+
+            compressed_groups += 1
+            _logger.info(
+                "Compressed %d episodes -> 1 summary for topic '%s'",
+                len(original_ids), topic,
+            )
+
+        except Exception as e:
+            _logger.error("Compression error for '%s': %s", topic, redact_secrets(str(e)))
+            continue
+
+    result = {
+        "compressed_groups": compressed_groups,
+        "episodes_archived": episodes_archived,
+        "summaries_created": summaries_created,
+    }
+    _logger.info("Compression complete: %s", result)
+    return result
 
 
 def _log_consolidation_run(result: dict):

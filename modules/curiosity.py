@@ -15,6 +15,8 @@ from modules.config import (
     CURIOSIDAD_FILE, KNOWN_PROJECTS, CURIOSITY_STALE_DAYS, CURIOSITY_TEMPLATES,
 )
 from modules.secret_redact import redact_secrets
+from modules.qdrant_utils import scroll_all
+from modules.access_tracking import record_access
 
 __all__ = [
     "detectar_sorpresa",
@@ -88,7 +90,10 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
         from datetime import timedelta
         fecha_limite = now_col() - timedelta(days=dias)
 
-        all_mems = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)[0]
+        all_mems = scroll_all(max_results=5000)
+
+        ts = now_iso()
+        analyzed_count = 0
 
         checkpoints = []
         errores = []
@@ -109,6 +114,14 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
                         continue
             except Exception:
                 continue
+
+            if analyzed_count < 500:
+                acc = int((payload.get('attention_access_count', 0)) or 0)
+                record_access(COLLECTION_NAME, point.id, {
+                    'attention_access_count': acc + 1,
+                    'attention_last_accessed': ts,
+                })
+                analyzed_count += 1
 
             texto_lower = texto.lower()
             if "error" in texto_lower or "fallo" in texto_lower or "problema" in texto_lower:
@@ -150,7 +163,10 @@ def generar_curiosidad() -> str:
     try:
         proyectos_conocidos = KNOWN_PROJECTS
 
-        all_mems = qdrant.scroll(collection_name=COLLECTION_NAME, limit=500, with_payload=True)[0]
+        all_mems = scroll_all(max_results=5000)
+
+        ts = now_iso()
+        tracked_count = 0
 
         ultima_mencion = {}
         ahora = now_col()
@@ -171,6 +187,13 @@ def generar_curiosidad() -> str:
                 if proyecto in texto:
                     if proyecto not in ultima_mencion or fecha > ultima_mencion[proyecto]:
                         ultima_mencion[proyecto] = fecha
+                        if tracked_count < 500:
+                            acc = int((payload.get('attention_access_count', 0)) or 0)
+                            record_access(COLLECTION_NAME, point.id, {
+                                'attention_access_count': acc + 1,
+                                'attention_last_accessed': ts,
+                            })
+                            tracked_count += 1
 
         preguntas = []
         for proyecto in proyectos_conocidos:

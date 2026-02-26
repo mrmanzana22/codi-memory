@@ -362,6 +362,28 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
         if not points:
             return json.dumps({'result': 'Sin resultados', 'emotion': emotion_type, 'memories': []})
 
+        # Access tracking (same pattern as search_memory)
+        try:
+            from modules.access_tracking import record_access
+            from modules.config import COLLECTION_NAME, now_iso
+            _ts = now_iso()
+            for _p in points:
+                _mid = str(_p.id)
+                _payload = _p.payload or {}
+                _acc = int(_payload.get('attention_access_count', 0) or 0)
+                _ats = list(_payload.get('access_timestamps', []) or [])
+                if not isinstance(_ats, list):
+                    _ats = []
+                _ats.append(_ts)
+                _ats = _ats[-20:]
+                record_access(COLLECTION_NAME, _mid, {
+                    'attention_access_count': _acc + 1,
+                    'attention_last_accessed': _ts,
+                    'access_timestamps': _ats,
+                })
+        except Exception:
+            pass
+
         memories = []
         for p in points:
             memories.append({

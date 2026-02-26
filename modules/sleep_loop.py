@@ -81,12 +81,13 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "consolidation", "homeostasis"]
+TICK_ORDER = ["prospective", "health", "self_model", "consolidation", "homeostasis"]
 
 # Minimum ms required to even attempt a tick (below this, skip)
 TICK_MIN_MS = {
     "prospective": 200,
     "health": 200,
+    "self_model": 500,
     "consolidation": 1500,
     "homeostasis": 200,
 }
@@ -202,18 +203,101 @@ def _write_sleep_report(checkpoint_id: int, report_text: str) -> bool:
 # TICK FUNCTIONS
 # ============================================================
 
+def _should_run_full_consolidation() -> bool:
+    """Check if full consolidation should run (once per day, during night hours)."""
+    try:
+        from modules.config import now_col
+        now = now_col()
+        # Only during night hours (10pm-6am) to minimize interference
+        if not (22 <= now.hour or now.hour < 6):
+            return False
+        # Check if full ran in last 20 hours
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            from datetime import datetime
+            last = datetime.fromisoformat(str(row[0]))
+            if last.tzinfo:
+                last = last.replace(tzinfo=None)
+            hours_since = (datetime.now() - last).total_seconds() / 3600
+            return hours_since >= 20
+        return True  # never ran, should run
+    except Exception:
+        return False  # fail safe: don't run full on error
+
+
 def _tick_consolidation(budget_ms: int) -> dict:
-    """Tick 1: Light consolidation (no LLM, clustering only)."""
+    """Tick: Consolidation. Light every tick, full once per day at night."""
     start = time.monotonic()
     result = {"tick": "consolidation", "ok": False, "detail": ""}
 
     try:
         from modules.consolidation import run_consolidation
-        report = run_consolidation(scope="light", lookback_hours=6)
+
+        if _should_run_full_consolidation():
+            scope = "full"
+            lookback = 24
+        else:
+            scope = "light"
+            lookback = 6
+
+        report = run_consolidation(scope=scope, lookback_hours=lookback)
         elapsed = (time.monotonic() - start) * 1000
         result["ok"] = True
+        result["scope"] = scope
         result["detail"] = report[:200] if report else "no output"
         result["elapsed_ms"] = round(elapsed)
+    except Exception as e:
+        result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
+        result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+
+    return result
+
+
+def _tick_self_model(budget_ms: int) -> dict:
+    """Tick: Self-model refresh (HOT-1, Rosenthal 2005).
+
+    Calls reflect_on_self() to generate a meta-representation,
+    then emits SELF_MODEL_REFRESHED event so assessment can detect it.
+    """
+    start = time.monotonic()
+    result = {"tick": "self_model", "ok": False, "detail": ""}
+
+    try:
+        from modules.self_model import reflect_on_self
+        summary = reflect_on_self()
+
+        if summary and "Error" not in summary[:20]:
+            # Emit event (EventBus flush works in venv python3)
+            event_bus.emit(Events.SELF_MODEL_REFRESHED, {
+                "source": "sleep_loop",
+                "summary_len": len(summary),
+            })
+            # Belt-and-suspenders: direct SQLite write to event_counts
+            try:
+                conn = _get_conn()
+                conn.execute("""
+                    INSERT INTO event_counts (event, count, last_seen)
+                    VALUES ('self_model_refreshed', 1, ?)
+                    ON CONFLICT(event) DO UPDATE SET
+                        count = count + 1,
+                        last_seen = excluded.last_seen
+                """, (datetime.now().isoformat(),))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass  # EventBus emit is primary; this is backup
+            elapsed = (time.monotonic() - start) * 1000
+            result["ok"] = True
+            result["detail"] = f"refreshed ({len(summary)} chars)"
+            result["elapsed_ms"] = round(elapsed)
+        else:
+            elapsed = (time.monotonic() - start) * 1000
+            result["detail"] = "no identity memories or error"
+            result["elapsed_ms"] = round(elapsed)
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
@@ -300,6 +384,54 @@ def _tick_health(budget_ms: int) -> dict:
     except Exception as e:
         parts.append(f"health: error {redact_secrets(str(e))[:50]}")
 
+    # Incremental FTS sync: index Qdrant memories not yet in FTS
+    try:
+        from qdrant_client import QdrantClient
+
+        fts_db_path = os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db')
+        fts_conn = sqlite3.connect(fts_db_path)
+
+        # Get IDs already in FTS
+        fts_ids = set(
+            row[0] for row in
+            fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
+        )
+
+        # Scroll recent Qdrant memories (no Range filter — created_at is string, not indexed)
+        client = QdrantClient(host='localhost', port=6333)
+        points, _ = client.scroll(
+            collection_name='codi_memories',
+            limit=100,
+            with_payload=['data', 'category', 'narrative_importance', 'ownership_source'],
+            with_vectors=False,
+        )
+
+        synced = 0
+        for p in points:
+            mid = str(p.id)
+            if mid not in fts_ids:
+                content = p.payload.get('data', '')
+                if not content:
+                    continue
+                category = p.payload.get('category', 'general')
+                source = p.payload.get('ownership_source', 'experienced')
+                importance = p.payload.get('narrative_importance', 'medium')
+                fts_conn.execute("""
+                    INSERT OR REPLACE INTO memories_text
+                    (memory_id, content, category, source, importance, created_at)
+                    VALUES (?, ?, ?, ?, ?, datetime('now'))
+                """, (mid, content, category, source, importance))
+                synced += 1
+
+        if synced > 0:
+            fts_conn.commit()
+        fts_conn.close()
+
+        if synced > 0:
+            parts.append(f"fts_sync: {synced} new")
+    except Exception as e:
+        parts.append(f"fts_sync: error {str(e)[:50]}")
+
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True
     result["detail"] = "; ".join(parts)
@@ -346,6 +478,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
     tick_dispatch = {
         "prospective": _tick_prospective,
         "health": _tick_health,
+        "self_model": _tick_self_model,
         "consolidation": _tick_consolidation,
         "homeostasis": _tick_homeostasis,
     }
@@ -445,24 +578,20 @@ def cli_main():
         _logger.error("FTS DB not found: %s", FTS_DB_PATH)
         sys.exit(0)
 
-    # Check if there's a checkpoint that needs a report
-    target_id = _get_target_checkpoint(args.max_age_min)
-    if target_id is None:
-        _logger.info("No eligible checkpoint (all have reports or too old). Skipping.")
-        sys.exit(0)
-
     # Acquire lock
     if not _acquire_lock():
         _logger.warning("Another instance is running. Skipping.")
         sys.exit(0)
 
     try:
-        _logger.info("Starting (reason=%s, budget=%dms, checkpoint=%s)", args.reason, args.budget_ms, target_id)
+        # Always run the 4 ticks (consolidation, decay, prospective, health)
+        target_id = _get_target_checkpoint(args.max_age_min)
+        _logger.info("Starting (reason=%s, budget=%dms, checkpoint=%s)", args.reason, args.budget_ms, target_id or "none")
 
         result = run_sleep_loop(reason=args.reason, budget_ms=args.budget_ms)
 
-        # Write report to checkpoint
-        if result.get("report"):
+        # Write report to checkpoint if one is available
+        if target_id and result.get("report"):
             written = _write_sleep_report(target_id, result["report"])
             if written:
                 _logger.info("Report written to checkpoint %s", target_id)

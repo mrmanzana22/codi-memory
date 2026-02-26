@@ -14,6 +14,7 @@ from modules.config import (
 )
 from modules.secret_redact import redact_secrets
 from modules.access_tracking import record_access
+from modules.qdrant_utils import scroll_all
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     calculate_confidence_score,
@@ -37,27 +38,15 @@ def reflect_on_self() -> str:
     Genera un modelo de quien soy basado en evidencia de mis experiencias.
     """
     try:
-        self_ref_points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='self_reference', match=MatchValue(value=True))
-            ]),
-            limit=20, with_payload=True
-        )
-        identity_points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='narrative_themes', match=MatchValue(value='identidad'))
-            ]),
-            limit=20, with_payload=True
-        )
-        critical_points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))
-            ]),
-            limit=10, with_payload=True
-        )
+        self_ref_points = scroll_all(Filter(must=[
+            FieldCondition(key='self_reference', match=MatchValue(value=True))
+        ]), max_results=100)
+        identity_points = scroll_all(Filter(must=[
+            FieldCondition(key='narrative_themes', match=MatchValue(value='identidad'))
+        ]), max_results=100)
+        critical_points = scroll_all(Filter(must=[
+            FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))
+        ]), max_results=50)
 
         all_points = {}
         for p in (self_ref_points or []) + (identity_points or []) + (critical_points or []):
@@ -65,6 +54,15 @@ def reflect_on_self() -> str:
 
         if not all_points:
             return "No encontre memorias sobre mi identidad. Necesito mas experiencias para reflexionar."
+
+        ts = now_iso()
+        for pid, p in all_points.items():
+            payload = p.payload or {}
+            acc = int(payload.get('attention_access_count', 0) or 0)
+            record_access(COLLECTION_NAME, pid, {
+                'attention_access_count': acc + 1,
+                'attention_last_accessed': ts,
+            })
 
         reflection = ["# REFLEXION SOBRE MI MISMO\n"]
         capacidades = []
@@ -132,6 +130,15 @@ def assess_confidence(topic: str) -> str:
 
         if not points:
             return f"Tengo referencias a '{topic}' pero sin metadata de ownership."
+
+        ts = now_iso()
+        for p in points:
+            payload = p.payload or {}
+            acc = int(payload.get('attention_access_count', 0) or 0)
+            record_access(COLLECTION_NAME, p.id, {
+                'attention_access_count': acc + 1,
+                'attention_last_accessed': ts,
+            })
 
         conf = calculate_confidence_score(points)
 
@@ -219,14 +226,18 @@ def identify_knowledge_gaps() -> str:
 
         for theme in expected_themes:
             try:
-                points, _ = qdrant.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=Filter(must=[
-                        FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
-                    ]),
-                    limit=100, with_payload=True
-                )
+                points = scroll_all(Filter(must=[
+                    FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
+                ]), max_results=500)
                 if points:
+                    ts = now_iso()
+                    for p in points:
+                        payload_p = p.payload or {}
+                        acc = int(payload_p.get('attention_access_count', 0) or 0)
+                        record_access(COLLECTION_NAME, p.id, {
+                            'attention_access_count': acc + 1,
+                            'attention_last_accessed': ts,
+                        })
                     experienced = sum(1 for p in points if p.payload.get('ownership_source') == 'experienced')
                     high_conf = sum(1 for p in points if p.payload.get('ownership_confidence', 0) >= 0.8)
                     theme_stats[theme] = {
@@ -701,16 +712,21 @@ def get_self_model_summary() -> str:
     Organiza las observaciones por aspecto.
     """
     try:
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='self_reference', match=MatchValue(value=True))
-            ]),
-            limit=50, with_payload=True
-        )
+        points = scroll_all(Filter(must=[
+            FieldCondition(key='self_reference', match=MatchValue(value=True))
+        ]), max_results=200)
 
         if not points:
             return "No tengo un self-model definido aun. Usa update_self_model() para agregar observaciones."
+
+        ts = now_iso()
+        for p in points:
+            payload = p.payload or {}
+            acc = int(payload.get('attention_access_count', 0) or 0)
+            record_access(COLLECTION_NAME, p.id, {
+                'attention_access_count': acc + 1,
+                'attention_last_accessed': ts,
+            })
 
         by_aspect = {'capacidad': [], 'limitacion': [], 'valor': [], 'preferencia': [], 'general': []}
 

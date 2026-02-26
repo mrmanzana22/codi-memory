@@ -136,6 +136,8 @@ def _get_hours_since_access(payload: dict) -> Optional[float]:
             last_ts = timestamps[-1]
             if isinstance(last_ts, str):
                 last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00").replace("+00:00", ""))
+                if last_dt.tzinfo:
+                    last_dt = last_dt.replace(tzinfo=None)
                 return max(0.0, (now - last_dt).total_seconds() / 3600)
         except (ValueError, TypeError):
             pass
@@ -145,6 +147,8 @@ def _get_hours_since_access(payload: dict) -> Optional[float]:
     if created and isinstance(created, str):
         try:
             created_dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
+            if created_dt.tzinfo:
+                created_dt = created_dt.replace(tzinfo=None)
             return max(0.0, (now - created_dt).total_seconds() / 3600)
         except (ValueError, TypeError):
             pass

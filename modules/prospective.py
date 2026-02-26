@@ -583,18 +583,17 @@ def _mark_triggered(conn: sqlite3.Connection, int_id: str, detail: str, now_str:
                 relevance=0.9,
                 source="prospective_memory",
             )
+            # Broadcast to global workspace (GWT competition)
+            try:
+                from modules.consciousness import update_workspace_spotlight
+                update_workspace_spotlight(
+                    memories=[f"[PM TRIGGERED] {row[0]}. {detail}"],
+                    theme="intention_triggered",
+                )
+            except Exception:
+                pass  # Don't block trigger on workspace failure
     except Exception:
         pass  # Don't block trigger on WM failure
-
-    # Broadcast to global workspace (GWT competition)
-    try:
-        from modules.consciousness import update_workspace_spotlight
-        update_workspace_spotlight(
-            memories=[f"[PM TRIGGERED] {row[0]}. {detail}"],
-            theme="intention_triggered",
-        )
-    except Exception:
-        pass
 
     # Handle recurrence: create next instance if recurring
     # (Einstein, McDaniel, Smith & Shaw, 1998: habitual PM)

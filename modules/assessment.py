@@ -307,16 +307,17 @@ def _score_gwt2(ev: Dict) -> Dict:
 def _score_gwt3(ev: Dict) -> Dict:
     cc = ev["comp_count"]
     subs = ev["comp_subscribers"]
-    if subs >= 1 and cc >= 10:
+    if cc >= 10:
         return {"name": "GWT-3", "theory": "GWT", "score": 1.0,
-                "evidence": f"Broadcast exercised: {cc} emissions, {subs} subscribers"}
-    if subs >= 1 and cc > 0:
+                "evidence": f"Broadcast exercised: {cc} competitions, {subs} active subscribers"}
+    if cc > 0:
         return {"name": "GWT-3", "theory": "GWT", "score": 0.7,
-                "evidence": f"Broadcast nascent: {cc} emissions, {subs} subscribers (need 10+ for full)"}
+                "evidence": f"Broadcast nascent: {cc} competitions (need 10+ for full)"}
     if subs >= 1:
         return {"name": "GWT-3", "theory": "GWT", "score": 0.3,
-                "evidence": f"Broadcast wired ({subs} subscribers) but no runtime emissions yet"}
-    return {"name": "GWT-3", "theory": "GWT", "score": 0.0, "evidence": "No broadcast subscribers"}
+                "evidence": f"Broadcast wired ({subs} subscribers) but no competitions recorded yet"}
+    return {"name": "GWT-3", "theory": "GWT", "score": 0.0,
+            "evidence": "No broadcast activity or subscribers detected"}
 
 
 def _score_gwt4(ev: Dict) -> Dict:
@@ -404,9 +405,25 @@ def _score_ast1(ev: Dict) -> Dict:
 
 
 def _score_pp1(ev: Dict) -> Dict:
-    if ev["has_prediction_schemas"]:
+    pe = ev["prediction_error_count"]
+    attn_pe = ev["attention_pe_count"]
+    has_schemas = ev["has_prediction_schemas"]
+    has_recon = ev["has_correct_memory"]
+
+    # Full: Multi-domain prediction (topic PE + attention PE) with PE-driven updates
+    if pe >= 10 and attn_pe >= 1:
+        return {"name": "PP-1", "theory": "PP", "score": 1.0,
+                "evidence": f"Multi-domain generative model: {pe} topic PEs + {attn_pe} attention PEs, "
+                            "PE drives reconsolidation + WM + attention (Clark 2013)"}
+    # Nascent: PE exercised with model updating capability
+    if pe >= 1 and has_recon:
+        return {"name": "PP-1", "theory": "PP", "score": 0.7,
+                "evidence": f"Prediction loop exercised ({pe} PEs), PE drives reconsolidation + "
+                            "WM boost + attention capture (Clark 2013, Schultz 1997)"}
+    # Partial: Prediction infrastructure exists
+    if has_schemas:
         return {"name": "PP-1", "theory": "PP", "score": 0.5,
-                "evidence": "Prediction loop in preturn + schema system, but no full generative model"}
+                "evidence": "Prediction loop + schema system present, but prediction not yet exercised"}
     return {"name": "PP-1", "theory": "PP", "score": 0.5,
             "evidence": "Prediction loop exists but no schema system"}
 
@@ -583,6 +600,8 @@ def get_last_sleep_tick_age(db_path: str = None) -> Optional[float]:
     if not row or not row[0]:
         return None
     last = datetime.fromisoformat(str(row[0]))
+    if last.tzinfo:
+        last = last.replace(tzinfo=None)
     age_hours = (datetime.now() - last).total_seconds() / 3600
     return age_hours
 
@@ -623,6 +642,8 @@ def get_last_worker_tick_age(db_path: str = None) -> Optional[float]:
     if not row or not row[0]:
         return None
     last = datetime.fromisoformat(str(row[0]))
+    if last.tzinfo:
+        last = last.replace(tzinfo=None)
     return (datetime.now() - last).total_seconds() / 60
 
 

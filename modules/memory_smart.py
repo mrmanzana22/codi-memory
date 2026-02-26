@@ -627,7 +627,7 @@ def add_memory_smart(content: str, category: str = "general",
                 try:
                     event_bus.emit(Events.MEMORY_STORED, {
                         'memory_id': new_id,
-                        'content': content[:200],
+                        'content': content[:300],
                         'category': category,
                         'source': source,
                         'importance': importance,
@@ -709,7 +709,7 @@ def add_memory_smart(content: str, category: str = "general",
         try:
             event_bus.emit(Events.MEMORY_STORED, {
                 'memory_id': new_id,
-                'content': content[:200],
+                'content': content[:300],
                 'category': category,
                 'source': source,
                 'importance': importance,
