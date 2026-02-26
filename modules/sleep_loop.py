@@ -81,13 +81,14 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "consolidation", "homeostasis"]
+TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis"]
 
 # Minimum ms required to even attempt a tick (below this, skip)
 TICK_MIN_MS = {
     "prospective": 200,
     "health": 200,
     "self_model": 500,
+    "reconsolidation": 300,
     "consolidation": 1500,
     "homeostasis": 200,
 }
@@ -227,6 +228,127 @@ def _should_run_full_consolidation() -> bool:
         return True  # never ran, should run
     except Exception:
         return False  # fail safe: don't run full on error
+
+
+def _tick_reconsolidation(budget_ms: int) -> dict:
+    """Tick: Process labile memories within reconsolidation window (Nader 2000).
+
+    Memories destabilized by prediction error can be updated during
+    a time-limited reconsolidation window. For topic-shift PEs:
+    lower confidence slightly (signal that context was ambiguous).
+    """
+    start = time.monotonic()
+    result = {"tick": "reconsolidation", "ok": False, "detail": ""}
+
+    try:
+        from modules.config import FTS_DB_PATH, qdrant, COLLECTION_NAME
+
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
+        now = datetime.now().isoformat()
+        processed = 0
+        expired_count = 0
+
+        # Get active (non-expired) labile memories
+        rows = conn.execute(
+            "SELECT memory_id, prediction_error, trigger_context "
+            "FROM labile_memories WHERE window_expires > ? LIMIT 5",
+            (now,)
+        ).fetchall()
+
+        # Clean up expired
+        expired_count = conn.execute(
+            "DELETE FROM labile_memories WHERE window_expires <= ?",
+            (now,)
+        ).rowcount
+
+        for memory_id, pe, context in rows:
+            try:
+                points = qdrant.retrieve(
+                    COLLECTION_NAME, [memory_id], with_payload=True
+                )
+                if not points:
+                    conn.execute(
+                        "DELETE FROM labile_memories WHERE memory_id = ?",
+                        (memory_id,)
+                    )
+                    continue
+
+                payload = points[0].payload
+                old_confidence = payload.get("confidence", 0.8)
+
+                # Lower confidence proportional to PE magnitude
+                confidence_reduction = min(0.2, pe * 0.3)
+                new_confidence = max(0.1, old_confidence - confidence_reduction)
+
+                # Update payload in Qdrant
+                qdrant.set_payload(
+                    COLLECTION_NAME,
+                    payload={
+                        "confidence": new_confidence,
+                        "reconsolidated_at": now,
+                        "reconsolidation_count": int(payload.get("reconsolidation_count", 0)) + 1,
+                        "last_pe_context": context[:200],
+                    },
+                    points=[memory_id],
+                )
+
+                # Log to reconsolidation_log
+                conn.execute("""
+                    INSERT INTO reconsolidation_log
+                    (memory_id, memory_type, action, prediction_error,
+                     memory_strength, old_content, new_content,
+                     blend_weight, trigger_context, created_at)
+                    VALUES (?, 'episodic', ?, ?, ?, ?, ?, 0.0, ?, ?)
+                """, (
+                    memory_id,
+                    "confidence_adjustment",
+                    pe,
+                    old_confidence,
+                    f"confidence={old_confidence:.2f}",
+                    f"confidence={new_confidence:.2f}",
+                    context[:200],
+                    now,
+                ))
+
+                # Remove from labile
+                conn.execute(
+                    "DELETE FROM labile_memories WHERE memory_id = ?",
+                    (memory_id,)
+                )
+
+                # Emit event (direct SQLite)
+                conn.execute("""
+                    INSERT INTO event_counts (event, count, last_seen)
+                    VALUES ('reconsolidation_triggered', 1, ?)
+                    ON CONFLICT(event) DO UPDATE SET
+                        count = count + 1,
+                        last_seen = excluded.last_seen
+                """, (now,))
+
+                processed += 1
+
+            except Exception:
+                pass
+
+        conn.commit()
+        conn.close()
+
+        elapsed = (time.monotonic() - start) * 1000
+        result["ok"] = True
+        detail_parts = []
+        if processed > 0:
+            detail_parts.append(f"{processed} reconsolidated")
+        if expired_count > 0:
+            detail_parts.append(f"{expired_count} expired")
+        if not detail_parts and not rows:
+            detail_parts.append("no labiles")
+        result["detail"] = ", ".join(detail_parts) if detail_parts else "idle"
+        result["elapsed_ms"] = round(elapsed)
+    except Exception as e:
+        result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
+        result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+
+    return result
 
 
 def _tick_consolidation(budget_ms: int) -> dict:
@@ -479,6 +601,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "prospective": _tick_prospective,
         "health": _tick_health,
         "self_model": _tick_self_model,
+        "reconsolidation": _tick_reconsolidation,
         "consolidation": _tick_consolidation,
         "homeostasis": _tick_homeostasis,
     }

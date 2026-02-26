@@ -11,7 +11,10 @@ import signal
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda: None  # No-op if dotenv not available
 
 _logger = logging.getLogger(__name__)
 

@@ -299,8 +299,8 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
     import os
     from modules.db_pool import get_conn
 
-    fok = 0.5  # base
-    basis_parts = ["base=0.5"]
+    fok = 0.35  # lower base: assume less knowledge, let evidence raise it
+    basis_parts = ["base=0.35"]
 
     # 1. Check failed_searches table
     failed_count = 0
@@ -317,6 +317,33 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
                 penalty = min(0.3, failed_count * 0.1)
                 fok -= penalty
                 basis_parts.append(f"failed_searches={failed_count}(-{penalty:.2f})")
+        except Exception:
+            pass
+
+    # 1.5 FTS metamemory: count how many memories match this query (Reder 1992)
+    fts_count = 0
+    if fts_db_path and os.path.exists(fts_db_path):
+        try:
+            fts_conn = get_conn(fts_db_path)
+            # Sanitize query for FTS5 MATCH
+            words = [w for w in query.split() if len(w) > 2 and w.isalnum()]
+            if words:
+                fts_query = " OR ".join(words[:5])
+                cursor = fts_conn.execute(
+                    "SELECT COUNT(*) FROM memories_fts WHERE content MATCH ?",
+                    (fts_query,)
+                )
+                fts_count = cursor.fetchone()[0]
+                if fts_count > 0:
+                    # Scale: 1 match = +0.1, 5 = +0.25, 20+ = +0.4 (log curve)
+                    import math
+                    boost = min(0.4, 0.1 * math.log2(fts_count + 1))
+                    fok += boost
+                    basis_parts.append(f"fts_count={fts_count}(+{boost:.2f})")
+                else:
+                    # No FTS matches: strong signal of low knowledge
+                    fok -= 0.1
+                    basis_parts.append("fts_count=0(-0.10)")
         except Exception:
             pass
 
@@ -342,12 +369,25 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
         except Exception:
             pass
 
-    # 3. Check retrieval buffer for similar past queries
-    buffer_hits = sum(
-        1 for r in _retrieval_buffer
-        if r.coverage in ("comprehensive", "partial") and
-        any(word in r.query.lower() for word in query.lower().split() if len(word) > 3)
-    )
+    # 3. Check persistent retrieval buffer (cross-process, via fok_calibration_log)
+    buffer_hits = 0
+    _buf_conn = wm_conn
+    if not _buf_conn and fts_db_path and os.path.exists(fts_db_path):
+        try:
+            _buf_conn = get_conn(fts_db_path)
+        except Exception:
+            pass
+    if _buf_conn:
+        try:
+            words = [w for w in query.lower().split() if len(w) > 3]
+            if words:
+                like_clauses = " OR ".join(f"query LIKE '%{w[:20]}%'" for w in words[:3])
+                cursor = _buf_conn.execute(
+                    f"SELECT COUNT(*) FROM fok_calibration_log WHERE actual_coverage IN ('comprehensive', 'partial') AND ({like_clauses})"
+                )
+                buffer_hits = cursor.fetchone()[0]
+        except Exception:
+            pass
     if buffer_hits > 0:
         boost = min(0.15, buffer_hits * 0.05)
         fok += boost
