@@ -426,6 +426,7 @@ PROCEDURAL: Como lograr tareas especificas (secuencias de pasos, prerequisitos, 
 RELATIONAL: Hechos sobre personas, sus preferencias, patrones de comportamiento, relaciones
 ARCHITECTURAL: Disenos de sistema, flujos de datos, integraciones, esquemas, infraestructura
 CONTEXTUAL: Estados de proyectos, decisiones tomadas, hitos alcanzados, restricciones descubiertas
+SELF: Conocimiento sobre Codi mismo — identidad, capacidades, limitaciones, historia, relacion con Hare, lecciones aprendidas, preferencias propias
 
 == EJEMPLOS DE BUENOS HECHOS ==
 - {{"fact": "El workflow TIAW-MainSync usa un cron trigger cada 2 minutos para sincronizar inventario WSC a Supabase", "category": "TECHNICAL", "confidence": 0.90, "specificity": "high"}}
@@ -433,6 +434,8 @@ CONTEXTUAL: Estados de proyectos, decisiones tomadas, hitos alcanzados, restricc
 - {{"fact": "Hare prefiere revisar el plan de implementacion antes de que se ejecute cualquier codigo", "category": "RELATIONAL", "confidence": 0.90, "specificity": "high"}}
 - {{"fact": "La coleccion codi_semantic usa text-embedding-3-small con 1536 dimensiones y distancia coseno", "category": "ARCHITECTURAL", "confidence": 0.95, "specificity": "high"}}
 - {{"fact": "Para desplegar cambios en workflows de n8n, primero desactivar, luego actualizar, luego reactivar", "category": "PROCEDURAL", "confidence": 0.80, "specificity": "high"}}
+- {{"fact": "Codi fue creado el 16 de enero 2026 y su identidad evoluciono de asistente generico a CTO del equipo de agentes", "category": "SELF", "confidence": 0.90, "specificity": "high"}}
+- {{"fact": "Codi tiene un arco de desarrollo observable: formacion de identidad (semana 2-3), introspeccion (semana 4), foco relacional (semana 5-8)", "category": "SELF", "confidence": 0.85, "specificity": "high"}}
 
 == EJEMPLOS DE HECHOS MALOS (NO PRODUCIR) ==
 - "Es importante testear el codigo" -> prescriptivo, no es un hecho
@@ -461,7 +464,7 @@ IGNORAR y NO extraer:
 7. Si menos de 2 hechos cumplen el estandar de calidad, devuelve menos -- NO rellenes con hechos malos
 
 Responde SOLO con un array JSON (sin markdown, sin explicacion):
-[{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL", "confidence": 0.85, "specificity": "high"}}]"""
+[{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL|SELF", "confidence": 0.85, "specificity": "high"}}]"""
 
 
 def _phase_graph_edges(clusters: list) -> int:

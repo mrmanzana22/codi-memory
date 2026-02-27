@@ -242,11 +242,25 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             base_salience = min(1.0, base_salience + pad_boost)
 
             # Capture emotional context at encoding time
+            # Use BOTH accumulated PAD state AND text-inferred emotion
+            # Scherer 2001: appraisal of THIS event determines ITS emotional meaning
             emotional_valence_auto = 'neutral'
+            # A) PAD-based (mood context)
             if pleasure > 0.3:
                 emotional_valence_auto = 'positive'
             elif pleasure < -0.3:
                 emotional_valence_auto = 'negative'
+            # B) Text-based (content appraisal) — overrides if strong signal
+            try:
+                from modules.emotion import infer_emotion_from_text
+                text_deltas = infer_emotion_from_text(content)
+                text_p = text_deltas.get('pleasure_delta', 0.0)
+                if text_p > 0.06:
+                    emotional_valence_auto = 'positive'
+                elif text_p < -0.06:
+                    emotional_valence_auto = 'negative'
+            except Exception:
+                pass
             if emotional_valence == 'neutral':
                 emotional_valence = emotional_valence_auto
         except Exception:

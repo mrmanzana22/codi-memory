@@ -158,6 +158,29 @@ def apply_migrations(db_path: str, migrations_dir: str = "migrations") -> dict:
             # Then record in schema_migrations in a separate step.
             try:
                 conn.executescript(sql)
+            except sqlite3.OperationalError as e:
+                err_msg = str(e).lower()
+                # Idempotent: column/table already exists = migration already applied manually
+                if "duplicate column" in err_msg or "already exists" in err_msg:
+                    pass  # Schema already matches desired state
+                else:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"Migration {name} failed: {e}. Database rolled back."
+                    ) from e
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Migration {name} failed: {e}. Database rolled back."
+                ) from e
+
+            try:
                 fingerprint = _compute_fingerprint(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
@@ -174,7 +197,7 @@ def apply_migrations(db_path: str, migrations_dir: str = "migrations") -> dict:
                 except Exception:
                     pass
                 raise RuntimeError(
-                    f"Migration {name} failed: {e}. Database rolled back."
+                    f"Migration {name} record failed: {e}."
                 ) from e
 
         # Determine current version

@@ -919,6 +919,82 @@ def detect_self_discrepancies() -> dict:
         except Exception:
             pass
 
+        # --- METAMEMORY CONTROL (Nelson & Narens 1990) ---
+        # Monitoring detected issues → now CORRECT them
+
+        # Control 1: Adaptive FOK correction factor
+        fok_discs = [d for d in discrepancies if d["domain"] == "metacognition"]
+        if fok_discs:
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS metamemory_params (
+                        param TEXT PRIMARY KEY,
+                        value REAL,
+                        updated_at TEXT
+                    )
+                """)
+                row = conn.execute(
+                    "SELECT value FROM metamemory_params WHERE param = 'fok_correction_factor'"
+                ).fetchone()
+                current_factor = row[0] if row else 0.5
+
+                recent_fok = conn.execute("""
+                    SELECT magnitude, discrepancy_type FROM self_discrepancies
+                    WHERE domain = 'metacognition'
+                    ORDER BY created_at DESC LIMIT 3
+                """).fetchall()
+
+                if len(recent_fok) >= 3:
+                    all_under = all('underconfident' in r[1] for r in recent_fok)
+                    all_over = all('overconfident' in r[1] for r in recent_fok)
+                    if (all_under or all_over) and recent_fok[0][0] > 0.15:
+                        new_factor = min(0.9, current_factor + 0.1)
+                    elif recent_fok[0][0] < 0.10:
+                        new_factor = max(0.3, current_factor - 0.05)
+                    else:
+                        new_factor = current_factor
+
+                    conn.execute("""
+                        INSERT INTO metamemory_params (param, value, updated_at)
+                        VALUES ('fok_correction_factor', ?, ?)
+                        ON CONFLICT(param) DO UPDATE SET
+                            value = excluded.value,
+                            updated_at = excluded.updated_at
+                    """, (new_factor, ts))
+                    conn.commit()
+            except Exception:
+                pass
+
+        # Control 2: Prediction trend → working memory (conscious awareness)
+        pred_discs = [d for d in discrepancies if d["domain"] == "prediction"]
+        for pd in pred_discs:
+            if pd["discrepancy_type"] == "actual/ought":
+                try:
+                    from modules.working_memory import push_to_working_memory
+                    push_to_working_memory(
+                        content=f"METACOGNITIVE ALERT: {pd['actual']}. "
+                                f"Prediction model may need attention.",
+                        topic="metacognition",
+                        relevance=0.7,
+                        source="system",
+                    )
+                except Exception:
+                    pass
+
+        # Control 3: Knowledge gap → curiosity trigger
+        gap_discs = [d for d in discrepancies if d["discrepancy_type"] == "actual/ideal"
+                     and d["domain"] not in ("metacognition",)]
+        for gd in gap_discs[:2]:
+            try:
+                from modules.curiosity import push_curiosidad
+                push_curiosidad(
+                    tema=f"Knowledge gap in '{gd['domain']}': confidence={gd['actual']}",
+                    prioridad="media",
+                    categoria=gd["domain"],
+                )
+            except Exception:
+                pass
+
         conn.close()
 
     except Exception:

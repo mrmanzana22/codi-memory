@@ -188,12 +188,23 @@ def _construct_scenes(daily_data: dict) -> list:
             if len(mems) < 1:
                 continue
 
-            # Emotional tone: aggregate PAD values
+            # Emotional tone: aggregate PAD values (fix: pad_at_encoding["P"])
             pleasures = []
             for m in mems:
-                p = (m.payload or {}).get("pad_pleasure", 0)
-                if p and isinstance(p, (int, float)):
-                    pleasures.append(p)
+                pad_enc = (m.payload or {}).get("pad_at_encoding")
+                if isinstance(pad_enc, dict):
+                    p_val = pad_enc.get("P", 0)
+                else:
+                    p_val = 0
+                if p_val and isinstance(p_val, (int, float)):
+                    pleasures.append(p_val)
+                elif not p_val:
+                    # Fallback: use experiential_emotional_valence
+                    valence = (m.payload or {}).get("experiential_emotional_valence", "neutral")
+                    if valence == "positive":
+                        pleasures.append(0.3)
+                    elif valence == "negative":
+                        pleasures.append(-0.3)
             avg_pleasure = sum(pleasures) / len(pleasures) if pleasures else 0.0
 
             if avg_pleasure > 0.2:

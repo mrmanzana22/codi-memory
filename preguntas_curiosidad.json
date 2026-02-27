@@ -45,6 +45,66 @@
       "categoria": "identidad",
       "agregada": "2026-01-22",
       "prioridad": "alta"
+    },
+    {
+      "id": 7,
+      "pregunta": "Tengo poca confianza en '**definitive**'. Que deberia aprender?",
+      "categoria": "**definitive**",
+      "agregada": "2026-02-26 18:26",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 8,
+      "pregunta": "Tengo poca confianza en '**test**'. Que deberia aprender?",
+      "categoria": "**test**",
+      "agregada": "2026-02-26 18:26",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 9,
+      "pregunta": "Tengo poca confianza en '**rpt-1**'. Que deberia aprender?",
+      "categoria": "**rpt-1**",
+      "agregada": "2026-02-26 18:26",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 10,
+      "pregunta": "Mi prediccion falla en 'codigo' (accuracy 14%, surprise 0.86). Que patrones me estoy perdiendo?",
+      "categoria": "codigo",
+      "agregada": "2026-02-26 19:15",
+      "prioridad": "alta",
+      "source": "prediction_error",
+      "curiosity_score": 0.157
+    },
+    {
+      "id": 11,
+      "pregunta": "Mi prediccion falla en 'memoria' (accuracy 0%, surprise 0.96). Que patrones me estoy perdiendo?",
+      "categoria": "memoria",
+      "agregada": "2026-02-26 19:15",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.136
+    },
+    {
+      "id": 12,
+      "pregunta": "Mi prediccion falla en 'codigo' (accuracy 12%, surprise 0.88). Que patrones me estoy perdiendo?",
+      "categoria": "codigo",
+      "agregada": "2026-02-26 19:45",
+      "prioridad": "alta",
+      "source": "prediction_error",
+      "curiosity_score": 0.152
+    },
+    {
+      "id": 13,
+      "pregunta": "Mi prediccion falla en 'codigo' (accuracy 33%, surprise 0.73). Que patrones me estoy perdiendo?",
+      "categoria": "codigo",
+      "agregada": "2026-02-26 20:45",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.096
     }
   ],
   "exploradas": [],

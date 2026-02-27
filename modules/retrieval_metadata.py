@@ -615,15 +615,21 @@ def get_fok_calibration(lookback: int = 100, fts_db_path: str = None) -> dict:
         return {"mean_absolute_error": 0.0, "overconfidence_bias": 0.0, "n_records": 0}
 
 
-def calibrated_fok_score(raw_fok: float, calibration: dict) -> float:
+def calibrated_fok_score(raw_fok: float, calibration: dict,
+                         correction_factor: float = 0.5) -> float:
     """Adjust raw FOK score based on historical calibration.
 
     If historically overconfident (bias > 0), reduce FOK.
     If historically underconfident (bias < 0), increase FOK.
 
+    Nelson & Narens 1990: correction_factor adapts based on persistent bias.
+    Managed by detect_self_discrepancies() in self_model.py.
+
     Args:
         raw_fok: Raw FOK score (0.0-1.0)
         calibration: Output from get_fok_calibration()
+        correction_factor: Adaptive factor [0.3-0.9], default 0.5.
+            Updated by metamemory control loop.
 
     Returns:
         Calibrated FOK score (clamped to 0.0-1.0)
@@ -632,6 +638,5 @@ def calibrated_fok_score(raw_fok: float, calibration: dict) -> float:
         return raw_fok  # Not enough data to calibrate
 
     bias = calibration["overconfidence_bias"]
-    # Subtract bias: if overconfident, bias > 0, so we reduce FOK
-    adjusted = raw_fok - (bias * 0.5)  # Apply half the bias as correction
+    adjusted = raw_fok - (bias * correction_factor)
     return max(0.0, min(1.0, adjusted))
