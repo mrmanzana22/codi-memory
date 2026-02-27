@@ -252,6 +252,13 @@ def _phase_selection(lookback_hours: int) -> list:
             if not text or len(text) < 10:
                 continue
 
+            # Proposal #60 Fix 2: Skip checkpoint episodes — inherently episodic (Tulving 1972)
+            _cat = payload.get("metadata", {}).get("category", "")
+            if not _cat:
+                _cat = payload.get("ownership_category", "")
+            if _cat == "checkpoint":
+                continue
+
             # Score: importance * recency * emotional priority
             # Payne & Kensinger 2010: arousal x valence interaction
             imp = payload.get("narrative_importance", "medium")
@@ -613,14 +620,15 @@ def _phase_integration(facts: list) -> dict:
                 new_sources = list(set(old_sources + fact["source_episode_ids"]))
                 old_evidence = int(old_payload.get("evidence_count", 1))
 
+                # Proposal #60 Fix 3: Evidence-proportional confidence (Koriat 1997)
+                import math
+                new_evidence = old_evidence + fact["evidence_count"]
+                evidence_confidence = min(0.95, 0.70 + 0.05 * math.log2(max(1, new_evidence)))
                 record_access(SEMANTIC_COLLECTION, duplicate.id, {
-                    "evidence_count": old_evidence + fact["evidence_count"],
+                    "evidence_count": new_evidence,
                     "source_episode_ids": new_sources,
                     "last_observed": now,
-                    "confidence": max(
-                        float(old_payload.get("confidence", 0.5)),
-                        fact["confidence"]
-                    ),
+                    "confidence": evidence_confidence,
                 })
                 updated += 1
                 _logger.info("Updated existing fact: %s...", fact_text[:60])

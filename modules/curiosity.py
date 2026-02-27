@@ -441,7 +441,7 @@ def _get_knowledge_gaps() -> list:
             for line in gaps.split('\n'):
                 line = line.strip()
                 if line.startswith('- ') and ':' in line:
-                    topic = line.split(':')[0].replace('- ', '').strip()
+                    topic = line.split(':')[0].replace('- ', '').replace('**', '').strip()
                     if topic and len(topic) > 2:
                         topics.append(topic)
             return topics[:5]
@@ -472,13 +472,19 @@ def auto_curiosity_tick() -> dict:
                 max_id = item_id
 
         # 1. PE-driven curiosity: high-surprise domains
+        # Proposal #58 Fix 3: Semantic dedup — one PE curiosity per topic
+        existing_pe_topics = {
+            item.get("categoria")
+            for item in data.get("pendientes", [])
+            if item.get("source") == "prediction_error"
+        }
         pe_domains = _get_high_surprise_domains()
         for domain in pe_domains[:3]:
             topic = domain["topic"]
             question = (f"Mi prediccion falla en '{topic}' "
                         f"(accuracy {domain['accuracy']:.0%}, surprise {domain['avg_surprise']:.2f}). "
                         f"Que patrones me estoy perdiendo?")
-            if question.lower() not in existing_questions:
+            if question.lower() not in existing_questions and topic not in existing_pe_topics:
                 max_id += 1
                 data["pendientes"].append({
                     "id": max_id,
@@ -489,8 +495,19 @@ def auto_curiosity_tick() -> dict:
                     "source": "prediction_error",
                     "curiosity_score": domain["curiosity_score"],
                 })
+                existing_pe_topics.add(topic)
                 result["pe_driven"] += 1
                 result["generated"] += 1
+            elif topic in existing_pe_topics:
+                # Update existing if new score is higher
+                for item in data.get("pendientes", []):
+                    if (item.get("source") == "prediction_error"
+                            and item.get("categoria") == topic
+                            and domain["curiosity_score"] > item.get("curiosity_score", 0)):
+                        item["pregunta"] = question
+                        item["curiosity_score"] = domain["curiosity_score"]
+                        item["agregada"] = now_short()
+                        break
 
         # 2. Knowledge gap curiosity
         gaps = _get_knowledge_gaps()
@@ -540,8 +557,22 @@ def auto_curiosity_tick() -> dict:
                         still_pending.append(item)
                 data["pendientes"] = still_pending
 
-        if result["generated"] > 0:
-            _guardar_curiosidades(data)
+        # Proposal #58 Fix 4: Prune stale manual curiosities (>60 days)
+        from datetime import timedelta
+        cutoff_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        still_pending_2 = []
+        for item in data.get("pendientes", []):
+            if (not item.get("source")  # manual items have no source
+                    and item.get("agregada", "") < cutoff_date
+                    and not item.get("explored_at")):
+                item["resuelto"] = now_short()
+                item["razon"] = "stale (>60 days without exploration)"
+                data.setdefault("exploradas", []).append(item)
+            else:
+                still_pending_2.append(item)
+        data["pendientes"] = still_pending_2
+
+        _guardar_curiosidades(data)
 
     except Exception:
         pass

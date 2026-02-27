@@ -69,6 +69,14 @@ def _on_memory_stored(event_name: str, data: dict):
     making them available for the current cognitive cycle.
     """
     try:
+        # Proposal #57: Skip WM push if remember() already handled it
+        try:
+            from modules.interface import _remember_ctx
+            if getattr(_remember_ctx, 'wm_pushed', False):
+                return
+        except ImportError:
+            pass
+
         importance_raw = data.get("importance", "medium")
         # P0-2 FIX: importance is a string ("critical","high","medium","low"), not float
         if isinstance(importance_raw, str):
@@ -456,29 +464,11 @@ def _on_prediction_error(event_name: str, data: dict):
         except Exception as e:
             _logger.error("_on_prediction_error attention error: %s", redact_secrets(str(e)))
 
-    # Effect 3: PE-driven reconsolidation (Nader 2000, Lee 2009)
-    affected_ids = data.get('affected_memory_ids', [])
-    if affected_ids and error_magnitude > 0.4:
-        try:
-            from modules.reconsolidation import mark_as_labile
-            for mem_id in affected_ids[:2]:
-                mark_as_labile(
-                    memory_id=mem_id,
-                    prediction_error=error_magnitude,
-                    trigger_context=(
-                        f"Topic PE: predicted={data.get('predicted_topic', '?')}, "
-                        f"actual={topic}"
-                    ),
-                )
-            _logger.info(
-                "PE reconsolidation: marked %d memories labile (PE=%.2f)",
-                len(affected_ids[:2]), error_magnitude,
-            )
-        except Exception as e:
-            _logger.error(
-                "_on_prediction_error reconsolidation: %s",
-                redact_secrets(str(e)),
-            )
+    # Effect 3: DISABLED (Proposal #59) — Topic PE reflects Markov model error,
+    # not memory content error. FTS keyword targeting punishes innocent bystander
+    # memories. Real reconsolidation should be triggered by CONTRADICTION detection
+    # (Path B), which remains active. See: Exton-McGuinness 2015, Lee 2009.
+    pass
 
 
 # ============================================================

@@ -616,22 +616,9 @@ def _compare_prediction(conn, prompt):
         threshold = _get_adaptive_threshold(conn)
 
         if weighted_surprise > threshold:
-            # Find memories that influenced the wrong prediction (Lee 2009)
+            # Proposal #59: Topic PE doesn't target specific memories.
+            # The FTS keyword search was punishing innocent bystanders.
             affected_ids = []
-            try:
-                predicted_kw_query = clean_fts_query(predicted_topic)
-                if predicted_kw_query:
-                    cursor = conn.execute("""
-                        SELECT mt.memory_id
-                        FROM memories_text mt
-                        WHERE mt.rowid IN (
-                            SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?
-                        )
-                        LIMIT 3
-                    """, (predicted_kw_query,))
-                    affected_ids = [row[0] for row in cursor.fetchall()]
-            except Exception:
-                pass
 
             return {
                 'surprise': weighted_surprise,
@@ -976,23 +963,10 @@ def _update_attention_from_prompt(prompt: str):
         sys.path.insert(0, BASE_DIR)
         import modules.wiring as _wiring
 
-        # Simple topic extraction: most frequent non-stopword
-        stopwords = {
-            'el', 'la', 'los', 'las', 'de', 'del', 'en', 'que', 'es', 'un',
-            'una', 'por', 'con', 'para', 'se', 'no', 'si', 'me', 'al', 'lo',
-            'the', 'is', 'in', 'to', 'and', 'of', 'for', 'on', 'it', 'a',
-            'this', 'that', 'with', 'from', 'as', 'but', 'not', 'are', 'was',
-            'como', 'este', 'esta', 'ya', 'hay', 'su', 'les', 'nos', 'mas',
-            'pero', 'todo', 'eso', 'ser', 'mi', 'te', 'le', 'muy', 'bien',
-        }
-        words = re.findall(r'\w{3,}', prompt.lower())
-        filtered = [w for w in words if w not in stopwords]
-
-        if not filtered:
+        # Proposal #58 Fix 5: Use same topic classifier as prediction system
+        topic = _classify_topic(prompt)
+        if not topic:
             return
-
-        from collections import Counter
-        topic = Counter(filtered).most_common(1)[0][0]
 
         # --- AST-1 FIX: Load persisted state into _attention_schema ---
         transitions, last_focus = _load_attention_state()

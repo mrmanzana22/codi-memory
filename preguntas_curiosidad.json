@@ -105,6 +105,121 @@
       "prioridad": "media",
       "source": "prediction_error",
       "curiosity_score": 0.096
+    },
+    {
+      "id": 14,
+      "pregunta": "Mi prediccion falla en 'memoria' (accuracy 0%, surprise 1.00). Que patrones me estoy perdiendo?",
+      "categoria": "memoria",
+      "agregada": "2026-02-27 04:50",
+      "prioridad": "alta",
+      "source": "prediction_error",
+      "curiosity_score": 0.186
+    },
+    {
+      "id": 15,
+      "pregunta": "Tengo poca confianza en 'definitive'. Que deberia aprender?",
+      "categoria": "definitive",
+      "agregada": "2026-02-27 05:21",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 16,
+      "pregunta": "Tengo poca confianza en 'rpt-1'. Que deberia aprender?",
+      "categoria": "rpt-1",
+      "agregada": "2026-02-27 05:21",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 17,
+      "pregunta": "Mi prediccion falla en 'consciencia' (accuracy 0%, surprise 0.93). Que patrones me estoy perdiendo?",
+      "categoria": "consciencia",
+      "agregada": "2026-02-27 05:45",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.132
+    },
+    {
+      "id": 18,
+      "pregunta": "Tengo poca confianza en 'aprendizaje'. Que deberia aprender?",
+      "categoria": "aprendizaje",
+      "agregada": "2026-02-27 05:45",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 19,
+      "pregunta": "Tengo poca confianza en 'proyectos'. Que deberia aprender?",
+      "categoria": "proyectos",
+      "agregada": "2026-02-27 05:45",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 20,
+      "pregunta": "Tengo poca confianza en 'consciencia'. Que deberia aprender?",
+      "categoria": "consciencia",
+      "agregada": "2026-02-27 05:45",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 21,
+      "pregunta": "Tengo poca confianza en 'memoria'. Que deberia aprender?",
+      "categoria": "memoria",
+      "agregada": "2026-02-27 05:45",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 22,
+      "pregunta": "Tengo poca confianza en 'programming'. Que deberia aprender?",
+      "categoria": "programming",
+      "agregada": "2026-02-27 05:46",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 23,
+      "pregunta": "Tengo poca confianza en 'solo'. Que deberia aprender?",
+      "categoria": "solo",
+      "agregada": "2026-02-27 05:46",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 24,
+      "pregunta": "Tengo poca confianza en 'desarrollo'. Que deberia aprender?",
+      "categoria": "desarrollo",
+      "agregada": "2026-02-27 05:51",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 25,
+      "pregunta": "Mi prediccion falla en 'pilas' (accuracy 0%, surprise 0.93). Que patrones me estoy perdiendo?",
+      "categoria": "pilas",
+      "agregada": "2026-02-27 05:58",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.099
+    },
+    {
+      "id": 26,
+      "pregunta": "Tengo poca confianza en 'docker'. Que deberia aprender?",
+      "categoria": "docker",
+      "agregada": "2026-02-27 05:58",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 27,
+      "pregunta": "Tengo poca confianza en 'test'. Que deberia aprender?",
+      "categoria": "test",
+      "agregada": "2026-02-27 05:58",
+      "prioridad": "media",
+      "source": "knowledge_gap"
     }
   ],
   "exploradas": [],

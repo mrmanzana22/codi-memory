@@ -18,9 +18,10 @@ from modules.config import (
 from modules.db_pool import get_conn
 from modules.secret_redact import redact_secrets
 
-# Dedup window to prevent identical pushes within 30 seconds
+# Dedup window to prevent identical pushes (Proposal #57: 30→120s)
+# Covers async add_memory_smart() latency (observed 15-84s)
 _push_dedup = {}  # {content_hash: timestamp}
-_DEDUP_WINDOW_S = 30
+_DEDUP_WINDOW_S = 120
 
 # ============================================================
 # DATABASE INIT & CONNECTION

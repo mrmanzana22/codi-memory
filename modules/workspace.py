@@ -557,6 +557,129 @@ def emotional_focus_attention(context: str) -> str:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
 
+def recalibrate_importance(
+    max_scan: int = 200,
+    critical_decay_days: int = 45,
+    high_decay_days: int = 90,
+) -> str:
+    """Recalibrate importance based on access patterns.
+
+    Proposal #61 Fix 2 (Craik & Lockhart 1972, Bjork & Bjork 1992):
+    Importance should reflect actual processing depth, not just encoding label.
+    Memories tagged critical/high but never re-accessed have shallow effective
+    processing and should lose their privileged status over time.
+
+    Downgrades:
+      critical -> high: if no access in critical_decay_days AND
+                        not a checkpoint with tipo_momento=momento_personal
+      high -> medium:   if no access in high_decay_days AND
+                        not source=experienced with emotional_weight >= 0.8
+
+    Never downgrades below medium (safety floor).
+    """
+    from datetime import datetime, timedelta
+    import logging
+
+    logger = logging.getLogger(__name__)
+    downgraded_crit = 0
+    downgraded_high = 0
+    scanned = 0
+    now = datetime.now()
+    critical_cutoff = (now - timedelta(days=critical_decay_days)).isoformat()
+    high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
+
+    # --- Scan critical memories ---
+    crit_filter = Filter(
+        must=[FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))],
+    )
+    offset = None
+    while scanned < max_scan:
+        batch, next_offset = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=crit_filter,
+            limit=100,
+            with_payload=True,
+            offset=offset,
+        )
+        if not batch:
+            break
+
+        for point in batch:
+            scanned += 1
+            payload = point.payload
+
+            # Protected: legitimate critical content (personal moments)
+            meta = payload.get('metadata', {})
+            if meta.get('tipo_momento') == 'momento_personal':
+                continue
+
+            # Check last access time
+            timestamps = payload.get('access_timestamps', [])
+            last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
+            if last_access and last_access < critical_cutoff:
+                record_access(COLLECTION_NAME, point.id, {
+                    'narrative_importance': 'high',
+                })
+                downgraded_crit += 1
+
+        if next_offset is None:
+            break
+        offset = next_offset
+
+    # --- Scan high memories ---
+    high_filter = Filter(
+        must=[FieldCondition(key='narrative_importance', match=MatchValue(value='high'))],
+    )
+    offset = None
+    while scanned < max_scan:
+        batch, next_offset = qdrant.scroll(
+            collection_name=COLLECTION_NAME,
+            scroll_filter=high_filter,
+            limit=100,
+            with_payload=True,
+            offset=offset,
+        )
+        if not batch:
+            break
+
+        for point in batch:
+            scanned += 1
+            payload = point.payload
+
+            # Protected: emotionally weighted memories
+            ew = payload.get('experiential_emotional_weight', 0)
+            try:
+                if ew and float(ew) >= 0.8:
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+            timestamps = payload.get('access_timestamps', [])
+            last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
+            if last_access and last_access < high_cutoff:
+                record_access(COLLECTION_NAME, point.id, {
+                    'narrative_importance': 'medium',
+                })
+                downgraded_high += 1
+
+        if next_offset is None:
+            break
+        offset = next_offset
+
+    total_downgraded = downgraded_crit + downgraded_high
+    if total_downgraded > 0:
+        logger.info(f"[importance_recal] {downgraded_crit} critical→high, {downgraded_high} high→medium")
+
+    return (
+        f"# Importance Recalibration\n\n"
+        f"**Scanned:** {scanned}\n"
+        f"**Downgraded:** {total_downgraded} "
+        f"({downgraded_crit} critical→high, {downgraded_high} high→medium)\n"
+        f"**Criteria:** critical→high after {critical_decay_days}d, "
+        f"high→medium after {high_decay_days}d without access"
+    )
+
+
 def register_tools(mcp):
     """Register workspace MCP tools."""
     mcp.tool()(focus_attention)

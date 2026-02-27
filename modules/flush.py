@@ -68,6 +68,12 @@ def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) 
                     )
                 except Exception:
                     pass
+                # Proposal #55: Auto-connect to graph neighbors (was missing here)
+                try:
+                    from modules.memory_smart import _auto_connect_neighbors
+                    _auto_connect_neighbors(mem_id, contenido)
+                except Exception:
+                    pass
 
     maybe_backup(reason="checkpoint", force=True)
 

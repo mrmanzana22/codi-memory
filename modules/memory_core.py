@@ -97,6 +97,14 @@ def _add_memory_sync(content: str, category: str, source: str, importance: str) 
     except Exception as fts_err:
         _logger.warning("FTS index error in add_memory: %s", fts_err)
 
+    # Proposal #55: Auto-connect to graph neighbors (was missing here)
+    if mem_id_fts:
+        try:
+            from modules.memory_smart import _auto_connect_neighbors
+            _auto_connect_neighbors(mem_id_fts, content)
+        except Exception:
+            pass
+
     try:
         event_bus.emit(Events.MEMORY_STORED, {
             'memory_id': mem_id_fts,
@@ -752,6 +760,7 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
 
         # Obtener memorias con timestamps
         memories_with_dates = []
+        _timeline_points = []  # Proposal #54: collect for access tracking
         for mem in results["results"]:
             mem_id = mem.get("id", "unknown")
             text = mem.get("memory", "")
@@ -763,6 +772,7 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
                     with_payload=True
                 )
                 if points:
+                    _timeline_points.extend(points)  # Proposal #54
                     payload = points[0].payload
                     created_at = payload.get('created_at', '')
                     session_id = payload.get('temporal_session_id', '')
@@ -788,6 +798,10 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
                     })
             except Exception:
                 pass
+
+        # Proposal #54: Access tracking for timeline retrieves
+        if _timeline_points:
+            _track_scroll_access(_timeline_points)
 
         # Ordenar por fecha (mas reciente primero)
         memories_with_dates.sort(key=lambda x: x['date_key'] or '', reverse=True)
@@ -830,6 +844,9 @@ def get_all_memories(limit: int = 500) -> str:
 
         if not points:
             return "No hay recuerdos almacenados."
+
+        # Proposal #54: Access tracking for ACT-R base-level update
+        _track_scroll_access(points)
 
         memories = []
         for i, point in enumerate(points, 1):

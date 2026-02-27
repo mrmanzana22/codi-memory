@@ -8,6 +8,9 @@ from typing import Any, Dict, List, Optional
 
 _logger = logging.getLogger(__name__)
 
+# Proposal #57: Thread-local flag to prevent WM double-push from remember()
+_remember_ctx = threading.local()
+
 from modules.memory_core import (
     search_memory,
     search_by_theme,
@@ -136,9 +139,32 @@ def _auto_importance_from_text(content: str) -> str:
         return "high"
     if len(content) >= 200:
         return "high"
-    if len(content) <= 60:
+    # Proposal #61 Fix 1: Add "low" path (Craik & Lockhart 1972)
+    # Short content without urgency markers = shallow processing → weaker trace
+    # Also catch date-only or number-only content regardless of length
+    stripped = content.strip()
+    if _is_trivial_content(stripped):
+        return "low"
+    if len(content) <= 50:
+        return "low"
+    if len(content) <= 100:
         return "medium"
     return "medium"
+
+
+def _is_trivial_content(text: str) -> bool:
+    """Detect trivial content: dates, numbers, short status lines."""
+    import re
+    # Pure date/time patterns
+    if re.match(r'^(Date:\s*)?[\d\-/T:\.Z\s]+$', text):
+        return True
+    # Pure numbers or IDs
+    if re.match(r'^[a-f0-9\-]{8,}$', text):
+        return True
+    # Very short status like "OK", "done", "listo"
+    if len(text) <= 15 and not any(c.isupper() and i > 0 for i, c in enumerate(text)):
+        return True
+    return False
 
 
 def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
@@ -433,12 +459,15 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
 
                     def _inner():
                         try:
+                            _remember_ctx.wm_pushed = True
                             result_box["output"] = add_memory_smart(
                                 content=content, category=topic,
                                 source=ms_source, importance=imp,
                             )
                         except Exception as exc:
                             result_box["error"] = str(exc)
+                        finally:
+                            _remember_ctx.wm_pushed = False
 
                     inner_thread = threading.Thread(target=_inner, daemon=True)
                     inner_thread.start()
@@ -481,7 +510,11 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
 
         elif write_mode == "shadow":
             # Shadow: sync first, then enqueue + record dual compare
-            lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+            _remember_ctx.wm_pushed = True
+            try:
+                lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+            finally:
+                _remember_ctx.wm_pushed = False
             try:
                 from modules.write_queue import enqueue_write_job, compute_dedupe_key
                 from modules.dual_compare import record_sync_result, compute_request_fingerprint
@@ -507,7 +540,11 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                 _logger.error("dual enqueue failed: %s: %s", type(e).__name__, redact_secrets(str(e)))
         else:
             # Sync (default): current behavior
-            lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+            _remember_ctx.wm_pushed = True
+            try:
+                lt_res = add_memory_smart(content=content, category=topic, source=ms_source, importance=imp)
+            finally:
+                _remember_ctx.wm_pushed = False
 
     pretty_lines = [
         "# REMEMBER",

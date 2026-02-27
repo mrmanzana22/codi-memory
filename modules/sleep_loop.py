@@ -312,7 +312,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     VALUES (?, 'episodic', ?, ?, ?, ?, ?, 0.0, ?, ?)
                 """, (
                     memory_id,
-                    "confidence_adjustment",
+                    "extinction",  # Bouton 2004: strength reduction without content update
                     pe,
                     old_confidence,
                     f"confidence={old_confidence:.2f}",
@@ -467,6 +467,17 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         parts.append(f"emotional: {emo_report[:80]}")
     except Exception as e:
         parts.append(f"emotional: error {redact_secrets(str(e))[:50]}")
+
+    # Proposal #61 Fix 2: Importance recalibration (Craik & Lockhart 1972)
+    # Downgrade critical/high memories that haven't been accessed
+    try:
+        from modules.workspace import recalibrate_importance
+        recal_report = recalibrate_importance(max_scan=100)
+        # Only log if something was downgraded (avoid noise)
+        if "Downgraded: 0" not in recal_report:
+            parts.append(f"importance: {recal_report[:80]}")
+    except Exception as e:
+        parts.append(f"importance: error {redact_secrets(str(e))[:50]}")
 
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True

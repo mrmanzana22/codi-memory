@@ -435,6 +435,13 @@ def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None
         if not points:
             return json.dumps({'result': 'Sin resultados', 'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': []})
 
+        # Proposal #54: Access tracking for ACT-R base-level update
+        try:
+            from modules.memory_core import _track_scroll_access
+            _track_scroll_access(points)
+        except Exception:
+            pass
+
         memories = []
         for p in points:
             memories.append({
