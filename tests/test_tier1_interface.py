@@ -193,8 +193,9 @@ class TestContextSnapshot:
 class TestAutoImportance:
     """Pure function: text -> importance heuristic."""
 
-    def test_short_text_medium(self):
-        assert _auto_importance_from_text("hello") == "medium"
+    def test_short_text_low(self):
+        # "hello" is <= 50 chars, no urgency keywords -> "low" (Craik & Lockhart 1972)
+        assert _auto_importance_from_text("hello") == "low"
 
     def test_urgent_keyword_high(self):
         assert _auto_importance_from_text("esto es urgente y hay que resolverlo") == "high"

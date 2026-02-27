@@ -157,17 +157,17 @@ def _insert_checkpoint(db_path, summary="test session", source="flush",
 
 
 class TestFullLoop:
-    """Test 1: all 4 ticks execute and produce a report."""
+    """Test 1: all 8 ticks execute and produce a report."""
 
     def test_all_ticks_run(self, isolated_db, mock_tick_deps):
-        from modules.sleep_loop import run_sleep_loop
+        from modules.sleep_loop import run_sleep_loop, TICK_ORDER
 
         result = run_sleep_loop(reason="test", budget_ms=8000)
 
         assert result["ok"] is True
         assert result["report"] is not None
         assert "SLEEP REPORT" in result["report"]
-        assert len(result["tick_results"]) == 4
+        assert len(result["tick_results"]) == len(TICK_ORDER)
 
         # All ticks should succeed
         for tick in result["tick_results"]:

@@ -12,11 +12,31 @@
   {
     "ok": true,
     "status": "ok",
+    "tick": "self_model"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "reconsolidation"
+  },
+  {
+    "ok": true,
+    "status": "ok",
     "tick": "consolidation"
   },
   {
     "ok": true,
     "status": "ok",
     "tick": "homeostasis"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "curiosity"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "backup"
   }
 ]

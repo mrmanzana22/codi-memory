@@ -12,11 +12,31 @@
   {
     "ok": false,
     "status": "skipped",
+    "tick": "self_model"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "reconsolidation"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "consolidation"
   },
   {
     "ok": false,
     "status": "skipped",
     "tick": "homeostasis"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "curiosity"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "backup"
   }
 ]

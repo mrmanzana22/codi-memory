@@ -17,7 +17,10 @@ from tests.conftest import FakeQdrantPoint
 class TestReflectOnSelf:
     """Tests for reflect_on_self."""
 
-    def test_no_memories_returns_message(self, patch_externals):
+    def test_no_memories_returns_message(self, patch_externals, monkeypatch):
+        # scroll_all uses qdrant imported in modules.qdrant_utils, which
+        # patch_externals doesn't cover. Patch it explicitly.
+        monkeypatch.setattr("modules.qdrant_utils.qdrant", patch_externals["qdrant"])
         from modules.self_model import reflect_on_self
         result = reflect_on_self()
         assert "No encontre memorias" in result
@@ -108,7 +111,10 @@ class TestUpdateSelfModel:
 class TestGetSelfModelSummary:
     """Tests for get_self_model_summary."""
 
-    def test_no_points_returns_message(self, patch_externals):
+    def test_no_points_returns_message(self, patch_externals, monkeypatch):
+        # scroll_all uses qdrant imported in modules.qdrant_utils, which
+        # patch_externals doesn't cover. Patch it explicitly.
+        monkeypatch.setattr("modules.qdrant_utils.qdrant", patch_externals["qdrant"])
         from modules.self_model import get_self_model_summary
         result = get_self_model_summary()
         assert "No tengo un self-model" in result

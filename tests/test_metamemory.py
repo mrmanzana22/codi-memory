@@ -27,6 +27,7 @@ from modules.retrieval_metadata import (
     init_failed_searches_table,
     log_failed_search,
     get_top_failed_topics,
+    _init_fok_calibration_table,
 )
 
 
@@ -137,11 +138,17 @@ class TestRetrievalWrapping:
 
 class TestFeelingOfKnowing:
     def test_fok_no_history(self):
-        """No failed searches, no WM, no buffer = base 0.5"""
+        """No failed searches, no WM, no buffer = base 0.35.
+
+        FOK base was lowered from 0.5 to 0.35 (assume less knowledge,
+        let evidence raise it). Without any signals, may drop further due
+        to FTS metamemory check (fts_count=0 -> -0.10).
+        """
         _retrieval_buffer.clear()
         result = feeling_of_knowing("some random query")
-        assert result["fok_score"] == 0.5
-        assert result["recommendation"] == "uncertain"
+        # Base is 0.35; FTS check may subtract 0.10 -> 0.25, or stay at 0.35
+        assert 0.20 <= result["fok_score"] <= 0.40
+        assert result["recommendation"] in ("uncertain", "ask")
 
     def test_fok_after_failures(self):
         """Failed searches should reduce FOK."""
@@ -166,7 +173,7 @@ class TestFeelingOfKnowing:
             os.unlink(db_path)
 
     def test_fok_wm_boost(self):
-        """Topic in working memory should boost FOK."""
+        """Topic in working memory should boost FOK above base (0.35)."""
         _retrieval_buffer.clear()
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
@@ -177,21 +184,47 @@ class TestFeelingOfKnowing:
             conn.commit()
 
             result = feeling_of_knowing("trading", wm_conn=conn)
-            assert result["fok_score"] > 0.5
+            # Base 0.35 + wm_boost 0.15 = 0.50
+            assert result["fok_score"] >= 0.5
             assert "in_wm" in result["basis"]
             conn.close()
         finally:
             os.unlink(db_path)
 
     def test_fok_buffer_boost(self):
-        """Successful past queries with similar words should boost FOK."""
+        """Successful past queries (in fok_calibration_log) should boost FOK."""
         _retrieval_buffer.clear()
-        # Add a successful past retrieval
-        wrap_retrieval_result("fullempaques production", _fake_merged(5, activation=0.7))
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            # FOK now checks persistent fok_calibration_log table (cross-process)
+            # instead of in-memory _retrieval_buffer.
+            # Also seeds memories_fts so the FTS metamemory check doesn't penalize.
+            from modules.migrations import apply_migrations
+            apply_migrations(db_path, migrations_dir=os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
+            conn = sqlite3.connect(db_path)
+            _init_fok_calibration_table(conn)
+            now = datetime.now().isoformat()
+            # Seed fok_calibration_log with a past successful retrieval
+            conn.execute(
+                "INSERT INTO fok_calibration_log (query, fok_predicted, actual_coverage, actual_count, actual_top_activation, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("fullempaques production", 0.5, "comprehensive", 5, 0.7, now)
+            )
+            # Seed memories_fts so FTS metamemory check doesn't penalize (-0.10)
+            conn.execute(
+                "INSERT INTO memories_text (memory_id, content, created_at) VALUES (?, ?, ?)",
+                ("fake-mem-1", "fullempaques production data", now)
+            )
+            conn.commit()
+            conn.close()
 
-        result = feeling_of_knowing("fullempaques prices")
-        assert result["fok_score"] > 0.5
-        assert "buffer_hits" in result["basis"]
+            result = feeling_of_knowing("fullempaques prices", fts_db_path=db_path)
+            # base 0.35 + fts boost + buffer_hits boost
+            assert result["fok_score"] > 0.35
+            assert "buffer_hits" in result["basis"]
+        finally:
+            os.unlink(db_path)
 
     def test_fok_clamped(self):
         """FOK score should always be 0-1."""

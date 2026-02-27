@@ -116,13 +116,10 @@ class TestEvidenceCorrectness:
         result = get_assessment(evidence=ev)
 
         # All should be FULL except:
-        # - HOT-4 caps at 0.7 NASCENT (needs runtime ranking evidence)
-        # - PP-1 caps at 0.5 PARTIAL (no full generative model)
+        # - HOT-4 caps at 0.7 NASCENT (needs runtime emotion gating/change evidence in event_counts)
         for ind in result["indicators"]:
             if ind["name"] == "HOT-4":
                 assert ind["score"] == 0.7, f"HOT-4 should be NASCENT, got {ind['score']}"
-            elif ind["name"] == "PP-1":
-                assert ind["score"] == 0.5, f"PP-1 should be PARTIAL, got {ind['score']}"
             else:
                 assert ind["score"] == 1.0, f"{ind['name']} should be FULL, got {ind['score']}"
 

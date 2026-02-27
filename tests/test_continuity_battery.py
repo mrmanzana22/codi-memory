@@ -456,7 +456,13 @@ class TestSynapticHomeostasis:
     """Bucket 4: salience decay + emotional decay behave correctly."""
 
     def test_salience_decay_reduces_medium(self, monkeypatch):
-        """apply_salience_decay() reduces salience of medium-importance memories."""
+        """apply_salience_decay() reduces salience of non-critical/non-high memories.
+
+        Production code now uses a Qdrant filter (must_not critical/high)
+        to pre-filter. FakeQdrant returns all points regardless, so all 3
+        get flat-fallback decay (no timing data). Updated expectations to
+        match: all points are decayed by flat decay_rate.
+        """
         points = [
             FakeQdrantPoint("m1", {"attention_salience": 0.6, "narrative_importance": "medium"}),
             FakeQdrantPoint("m2", {"attention_salience": 0.4, "narrative_importance": "medium"}),
@@ -470,9 +476,10 @@ class TestSynapticHomeostasis:
         from modules.consciousness import apply_salience_decay
         result = apply_salience_decay(decay_rate=0.05)
 
-        # Medium memories should have been decayed
-        assert len(fake.payloads_set) == 2, f"Expected 2 set_payload calls, got {len(fake.payloads_set)}"
-        # Check the new values
+        # FakeQdrant ignores scroll_filter, so all 3 points are processed.
+        # In production, m3 (high importance) would be filtered out by Qdrant.
+        assert len(fake.payloads_set) == 3, f"Expected 3 set_payload calls (FakeQdrant doesn't filter), got {len(fake.payloads_set)}"
+        # Check the new values (flat decay: salience - 0.05)
         for call in fake.payloads_set:
             new_sal = call["payload"]["attention_salience"]
             point_id = call["points"][0]
@@ -480,6 +487,8 @@ class TestSynapticHomeostasis:
                 assert abs(new_sal - 0.55) < 0.01
             elif point_id == "m2":
                 assert abs(new_sal - 0.35) < 0.01
+            elif point_id == "m3":
+                assert abs(new_sal - 0.75) < 0.01
 
     def test_salience_decay_respects_floor(self, monkeypatch):
         """Salience never drops below 0.1."""

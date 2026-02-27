@@ -12,11 +12,31 @@
   {
     "ok": false,
     "status": "skipped",
+    "tick": "self_model"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "reconsolidation"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "consolidation"
   },
   {
     "ok": true,
-    "status": "over_budget",
+    "status": "ok",
     "tick": "homeostasis"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "curiosity"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "backup"
   }
 ]

@@ -5,10 +5,9 @@
   "has_sleep_report": false,
   "intentions_present": [],
   "sections_present": [
-    "CURIOSIDADES (9 pendientes, 7 alta prioridad)",
-    "DEBUG_MARKER: Llegamos aqui antes del bloque 9",
+    "CURIOSIDADES (N pendientes, N alta prioridad)",
     "ESTADO EMOCIONAL",
-    "INTENCIONES PENDIENTES (2)",
+    "INTENCIONES PENDIENTES (N)",
     "PREDICCION CONTEXTUAL",
     "SPOTLIGHT (Executive Focus)",
     "WORKER STATUS: MISSING"

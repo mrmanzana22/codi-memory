@@ -30,6 +30,14 @@ def isolated_db(tmp_path, monkeypatch):
     conn.execute("PRAGMA journal_mode=WAL")
     from hooks.preturn_inject import _init_prediction_tables
     _init_prediction_tables(conn)
+    # Add 'source' column that _compare_prediction and _generate_prediction
+    # reference (added via migration in production, but _init_prediction_tables
+    # doesn't include it)
+    try:
+        conn.execute("ALTER TABLE prediction_results ADD COLUMN source TEXT DEFAULT 'interactive'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     yield conn
     conn.close()
 

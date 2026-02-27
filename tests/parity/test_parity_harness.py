@@ -122,8 +122,19 @@ def _normalize_despertar_sections(wake_text: str) -> dict:
     """Extract section headers and key contract fields from despertar_codi output."""
     sections = re.findall(r"^## (.+)$", wake_text, re.MULTILINE)
 
+    # Normalize dynamic counts inside parentheses in section headers.
+    # e.g. "CURIOSIDADES (19 pendientes, 7 alta prioridad)" ->
+    #      "CURIOSIDADES (N pendientes, N alta prioridad)"
+    def _replace_nums_in_parens(m):
+        return re.sub(r"\d+", "N", m.group(0))
+
+    normalized_sections = [
+        re.sub(r"\([^)]*\d[^)]*\)", _replace_nums_in_parens, s)
+        for s in sections
+    ]
+
     result = {
-        "sections_present": sorted(sections),
+        "sections_present": sorted(normalized_sections),
         "has_session_bridge": "SESSION BRIDGE" in wake_text,
         "has_prediction_errors": "PREDICTION ERRORS" in wake_text,
         "has_sleep_report": "SLEEP REPORT" in wake_text,
@@ -460,20 +471,21 @@ class TestSleepReportSnapshot:
 class TestTickStatusSnapshot:
     """Snapshot 4: tick execution order and status under different budget scenarios."""
 
+    @staticmethod
+    def _mock_all_ticks(monkeypatch, elapsed_ms=50):
+        """Mock all 8 ticks as instant, deterministic functions."""
+        def _make_tick(name):
+            return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": elapsed_ms, "detail": "ok"}
+
+        for tick_name in ("prospective", "health", "self_model", "reconsolidation",
+                          "consolidation", "homeostasis", "curiosity", "backup"):
+            monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
+        monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+
     def test_normal_budget(self, parity_env, monkeypatch):
         """All ticks run OK with generous budget."""
-        # Mock tick functions to be fast and deterministic
-        monkeypatch.setattr("modules.sleep_loop._tick_prospective",
-            lambda budget_ms: {"tick": "prospective", "ok": True, "elapsed_ms": 50, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_health",
-            lambda budget_ms: {"tick": "health", "ok": True, "elapsed_ms": 100, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_consolidation",
-            lambda budget_ms: {"tick": "consolidation", "ok": True, "elapsed_ms": 200, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_homeostasis",
-            lambda budget_ms: {"tick": "homeostasis", "ok": True, "elapsed_ms": 50, "detail": "ok"})
-
-        # Suppress tick metric logging (no need for DB in this test)
-        monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+        # Mock all 8 tick functions to be fast and deterministic
+        self._mock_all_ticks(monkeypatch)
 
         from modules.sleep_loop import run_sleep_loop
         result = run_sleep_loop(reason="parity_test", budget_ms=8000)
@@ -492,17 +504,15 @@ class TestTickStatusSnapshot:
         assert_snapshot("tick_status_zero_budget", normalized)
 
     def test_tight_budget_skips_heavy(self, parity_env, monkeypatch):
-        """Tight budget: fast ticks run, consolidation skipped (needs 1500ms)."""
-        # prospective and health are fast
-        monkeypatch.setattr("modules.sleep_loop._tick_prospective",
-            lambda budget_ms: {"tick": "prospective", "ok": True, "elapsed_ms": 100, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_health",
-            lambda budget_ms: {"tick": "health", "ok": True, "elapsed_ms": 100, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+        """Tight budget: consolidation (needs 1500ms) is skipped, rest runs.
+
+        All ticks are mocked as instant lambdas. Budget gating uses
+        time.monotonic() so real time barely passes — the only tick
+        skipped is consolidation (TICK_MIN_MS=1500 > 500ms budget).
+        """
+        self._mock_all_ticks(monkeypatch)
 
         from modules.sleep_loop import run_sleep_loop
-        # 500ms total: prospective(200min) + health(200min) eat ~200ms real,
-        # consolidation needs 1500ms → skipped, homeostasis gets ~100ms left
         result = run_sleep_loop(reason="parity_test", budget_ms=500)
 
         normalized = _normalize_tick_results(result["tick_results"])
@@ -518,15 +528,13 @@ class TestWritePathSmoke:
 
     def test_report_written_once(self, parity_env, monkeypatch):
         """run_sleep_loop produces a report; second call doesn't clobber."""
-        # Mock ticks to be fast
-        monkeypatch.setattr("modules.sleep_loop._tick_prospective",
-            lambda budget_ms: {"tick": "prospective", "ok": True, "elapsed_ms": 10, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_health",
-            lambda budget_ms: {"tick": "health", "ok": True, "elapsed_ms": 10, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_consolidation",
-            lambda budget_ms: {"tick": "consolidation", "ok": True, "elapsed_ms": 10, "detail": "ok"})
-        monkeypatch.setattr("modules.sleep_loop._tick_homeostasis",
-            lambda budget_ms: {"tick": "homeostasis", "ok": True, "elapsed_ms": 10, "detail": "ok"})
+        # Mock ALL 8 ticks to be fast and deterministic
+        def _make_tick(name):
+            return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": 10, "detail": "ok"}
+
+        for tick_name in ("prospective", "health", "self_model", "reconsolidation",
+                          "consolidation", "homeostasis", "curiosity", "backup"):
+            monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
 
         from modules.sleep_loop import run_sleep_loop, _write_sleep_report
@@ -539,11 +547,15 @@ class TestWritePathSmoke:
         assert len(report_text) <= 600, f"Report exceeds 600 char cap: {len(report_text)}"
 
         # Snapshot the report structure (not timing)
+        # Normalize dynamic total_ms: "SLEEP REPORT (parity_test, 484ms)"
+        # -> "SLEEP REPORT (parity_test, Nms)"
+        # Normalize the full first line before truncating so the length is stable.
+        report_prefix = re.sub(r"(\w+),\s*\d+ms", r"\1, Nms", report_text[:50])[:30]
         snapshot_data = {
             "ok": result["ok"],
             "ticks_total": len(result["tick_results"]),
             "ticks_ok": sum(1 for t in result["tick_results"] if t.get("ok")),
-            "report_starts_with": report_text[:30],
+            "report_starts_with": report_prefix,
             "report_line_count": len(report_text.strip().split("\n")),
             "report_length_within_cap": len(report_text) <= 600,
         }
