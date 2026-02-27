@@ -253,6 +253,37 @@ def collect_evidence() -> Dict[str, Any]:
     except Exception:
         pass
 
+    # --- Proposal #64: Quality checks for honest scoring ---
+    # Attention transition quality (stale word-level vs proper topics)
+    try:
+        from modules.config import FTS_DB_PATH
+        import sqlite3
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        rows = conn.execute(
+            "SELECT from_topic, to_topic FROM attention_transitions ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        KNOWN_TOPICS = {"general", "codigo", "consciencia", "trading", "fullempaques",
+                        "automatizacion", "memoria", "identidad", "relaciones"}
+        if rows:
+            valid = sum(1 for r in rows if r[0].lower() in KNOWN_TOPICS and r[1].lower() in KNOWN_TOPICS)
+            evidence["attention_transition_quality"] = "clean" if valid >= 5 else "stale"
+        else:
+            evidence["attention_transition_quality"] = "empty"
+
+        # Reconsolidation quality: how many have non-zero blend?
+        try:
+            quality = conn.execute(
+                "SELECT COUNT(*) FROM reconsolidation_log WHERE blend_weight > 0"
+            ).fetchone()[0]
+            evidence["reconsolidation_quality_count"] = quality
+        except Exception:
+            evidence["reconsolidation_quality_count"] = 0
+
+        conn.close()
+    except Exception:
+        evidence["attention_transition_quality"] = "unknown"
+        evidence["reconsolidation_quality_count"] = 0
+
     return evidence
 
 
@@ -396,6 +427,12 @@ def _score_ast1(ev: Dict) -> Dict:
     pe = ev["attention_pe_count"]
     has_supp = ev["attention_suppressed"]
     has_hist = ev["attention_history_len"] > 0
+    transition_quality = ev.get("attention_transition_quality", "unknown")
+
+    # Proposal #64: Discount PE from stale/corrupt predictor (Graziano 2013)
+    if transition_quality == "stale":
+        pe = 0  # Don't count noise PE events
+
     if pe >= 20:
         return {"name": "AST-1", "theory": "AST", "score": 1.0,
                 "evidence": f"AST closed loop: predict->compare->adapt, {pe} PE events (Graziano 2013)"}
@@ -416,6 +453,11 @@ def _score_pp1(ev: Dict) -> Dict:
     attn_pe = ev["attention_pe_count"]
     has_schemas = ev["has_prediction_schemas"]
     has_recon = ev["has_correct_memory"]
+    transition_quality = ev.get("attention_transition_quality", "unknown")
+
+    # Proposal #64: Don't use noise attention PE for multi-domain claim
+    if transition_quality == "stale":
+        attn_pe = 0
 
     # Full: Multi-domain prediction (topic PE + attention PE) with PE-driven updates
     if pe >= 10 and attn_pe >= 1:
@@ -451,9 +493,15 @@ def _score_pp3(ev: Dict) -> Dict:
     if not ev["has_correct_memory"]:
         return {"name": "PP-3", "theory": "PP", "score": 0.0, "evidence": "No model updating"}
     rc = ev["reconsolidation_count"]
-    if rc >= 5:
+    # Proposal #64: Check quality (blend_weight > 0 = real reconsolidation, not extinction)
+    quality_rc = ev.get("reconsolidation_quality_count", rc)
+
+    if quality_rc >= 5:
         return {"name": "PP-3", "theory": "PP", "score": 1.0,
-                "evidence": f"PE-driven reconsolidation exercised ({rc} records, re-embed + labile gate)"}
+                "evidence": f"PE-driven reconsolidation exercised ({quality_rc}/{rc} quality records, blend>0)"}
+    if rc >= 5:
+        return {"name": "PP-3", "theory": "PP", "score": 0.7,
+                "evidence": f"Reconsolidation fires ({rc} records) but quality limited ({quality_rc} with blend>0)"}
     if rc >= 1:
         return {"name": "PP-3", "theory": "PP", "score": 0.7,
                 "evidence": f"Reconsolidation nascent ({rc} records, need 5+ for full)"}

@@ -717,6 +717,24 @@ def _generate_prediction(conn, prompt, wm_topics=None):
             confidence,
             now,
         ))
+
+        # Proposal #62 Fix 4: Sync prediction transitions to attention_transitions
+        # Unifies the two transition tracking systems (Tononi 2004 integration)
+        prev_row = conn.execute("""
+            SELECT actual_topic FROM prediction_results
+            WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+            ORDER BY id DESC LIMIT 1
+        """).fetchone()
+        if prev_row and prev_row[0] and current_topic and prev_row[0] != current_topic:
+            try:
+                conn.execute(
+                    "INSERT INTO attention_transitions (from_topic, to_topic, driver, created_at) "
+                    "VALUES (?, ?, 'prediction_sync', ?)",
+                    (prev_row[0], current_topic, now)
+                )
+            except Exception:
+                pass
+
         conn.commit()
     except Exception:
         pass
@@ -922,118 +940,72 @@ def _save_attention_transition(from_topic, to_topic, driver, created_at):
         pass
 
 
-def _process_temporal_dynamics():
-    """Apply time-based processes: decay, maintenance, emotional drift.
-
-    A brain does not freeze between inputs. This computes elapsed time
-    since last interaction and triggers proportional temporal processes.
-    """
-    try:
-        sys.path.insert(0, BASE_DIR)
-        from modules.wiring import (
-            process_elapsed_time, get_last_interaction_time,
-            set_last_interaction_time, _update_attention_schema,
-        )
-        from datetime import datetime
-
-        now = datetime.now()
-        last = get_last_interaction_time()
-
-        if last:
-            try:
-                last_dt = datetime.fromisoformat(last)
-                elapsed = (now - last_dt).total_seconds()
-                if elapsed > 60:  # Only process if > 1 min gap
-                    process_elapsed_time(elapsed)
-            except Exception:
-                pass
-
-        set_last_interaction_time(now.isoformat())
-    except Exception:
-        pass
-
 
 def _update_attention_from_prompt(prompt: str):
-    """Extract topic from prompt and update attention schema.
+    """Update attention state using pure SQLite (no module imports).
 
-    Lightweight topic extraction (no API calls) based on keyword density.
-    Loads persisted transitions so bigram predictor works cross-process.
+    The heavy AST-1 prediction and self-correction happens in-process
+    in the MCP server via wiring.py. The hook only records topic shifts.
+
+    Proposal #62: Eliminated wiring.py import (776ms -> <8ms).
+    Fixed Sisyphean transition persistence bug (count-based -> topic match).
     """
+    topic = _classify_topic(prompt)
+    if not topic:
+        return
     try:
-        sys.path.insert(0, BASE_DIR)
-        import modules.wiring as _wiring
+        from datetime import datetime
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
 
-        # Proposal #58 Fix 5: Use same topic classifier as prediction system
-        topic = _classify_topic(prompt)
-        if not topic:
-            return
+        # Ensure tables exist
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attention_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attention_transitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_topic TEXT NOT NULL,
+                to_topic TEXT NOT NULL,
+                driver TEXT DEFAULT 'unknown',
+                created_at TEXT NOT NULL
+            )
+        """)
 
-        # --- AST-1 FIX: Load persisted state into _attention_schema ---
-        transitions, last_focus = _load_attention_state()
-        if transitions:
-            _wiring._attention_schema["topic_transitions"] = transitions
-        if last_focus:
-            _wiring._attention_schema["current_focus"] = last_focus
+        # Get previous focus
+        row = conn.execute(
+            "SELECT value FROM attention_state WHERE key = 'current_focus'"
+        ).fetchone()
+        prev_focus = row[0] if row else None
 
-        # Count transitions before update (to detect new ones)
-        n_before = len(_wiring._attention_schema["topic_transitions"])
-
-        # Call update (bigram predictor now has history!)
-        _wiring._update_attention_schema(
-            focus=topic,
-            driver="user_prompt",
-            strength=0.6,
-        )
-
-        # --- Persist new transition if one was added ---
-        n_after = len(_wiring._attention_schema["topic_transitions"])
-        if n_after > n_before:
-            latest = _wiring._attention_schema["topic_transitions"][-1]
-            _save_attention_transition(
-                latest["from"], latest["to"],
-                latest.get("driver", "unknown"), latest.get("at", "")
+        # Record transition if topic changed
+        if prev_focus and prev_focus != topic:
+            conn.execute(
+                "INSERT INTO attention_transitions (from_topic, to_topic, driver, created_at) "
+                "VALUES (?, ?, 'user_prompt', ?)",
+                (prev_focus, topic, now)
+            )
+            # Prune old entries (keep last 100)
+            conn.execute(
+                "DELETE FROM attention_transitions WHERE id NOT IN "
+                "(SELECT id FROM attention_transitions ORDER BY id DESC LIMIT 100)"
             )
 
-        # --- AST-1: Persist attention PE to event_counts (direct SQLite) ---
-        if _wiring._attention_schema.get("last_predicted_focus") is not None:
-            try:
-                from datetime import datetime
-                conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
-                conn.execute("""
-                    INSERT INTO event_counts (event, count, last_seen)
-                    VALUES ('attention_prediction_error', 1, ?)
-                    ON CONFLICT(event) DO UPDATE SET
-                        count = count + 1,
-                        last_seen = excluded.last_seen
-                """, (datetime.now().isoformat(),))
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
+        # Update current focus
+        conn.execute("""
+            INSERT INTO attention_state (key, value, updated_at)
+            VALUES ('current_focus', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+        """, (topic, now))
 
-        # --- Save current focus for next process bootstrap ---
-        try:
-            conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS attention_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            from datetime import datetime
-            conn.execute("""
-                INSERT INTO attention_state (key, value, updated_at)
-                VALUES ('current_focus', ?, ?)
-                ON CONFLICT(key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at
-            """, (topic, datetime.now().isoformat()))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
+        conn.commit()
+        conn.close()
     except Exception:
         pass
 
@@ -1052,10 +1024,7 @@ def main():
         if not os.path.exists(FTS_DB_PATH):
             return
 
-        # --- Temporal dynamics (time-based decay and maintenance) ---
-        _process_temporal_dynamics()
-
-        # --- Update attention schema from prompt ---
+        # --- Update attention schema from prompt (pure SQLite, no module imports) ---
         _update_attention_from_prompt(prompt)
 
         # --- PREDICTION LOOP: Phase 1 - Compare (before processing) ---

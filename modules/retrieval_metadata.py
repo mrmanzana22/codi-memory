@@ -434,11 +434,25 @@ def metacognitive_control(query: str, fts_db_path: str = None, wm_conn=None) -> 
     fok = feeling_of_knowing(query, fts_db_path=fts_db_path, wm_conn=wm_conn)
     fok_score = fok["fok_score"]
 
-    # Apply calibration if available
+    # Apply calibration if available (Nelson & Narens 1990: monitoring + control)
     try:
         calibration = get_fok_calibration(fts_db_path=fts_db_path)
         if calibration["n_records"] >= 10:
-            fok_score = calibrated_fok_score(fok_score, calibration)
+            # Read adaptive correction factor from self_model (Proposal #64 Fix 2)
+            correction_factor = 0.5
+            try:
+                import sqlite3 as _sql
+                _conn = _sql.connect(fts_db_path, timeout=3)
+                _row = _conn.execute(
+                    "SELECT value FROM metamemory_params "
+                    "WHERE param = 'fok_correction_factor'"
+                ).fetchone()
+                if _row:
+                    correction_factor = float(_row[0])
+                _conn.close()
+            except Exception:
+                pass
+            fok_score = calibrated_fok_score(fok_score, calibration, correction_factor)
     except Exception:
         pass
 
