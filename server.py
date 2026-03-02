@@ -87,6 +87,7 @@ from modules import consolidation
 from modules import sharpe
 from modules import sharpe_insights
 from modules import prospective
+from modules import goals
 from modules import wiring
 from modules import assessment
 from modules import session_bridge
@@ -120,6 +121,7 @@ consolidation.register_consolidation_tools(mcp)
 sharpe.register_sharpe_tools(mcp)
 sharpe_insights.register_insights_tools(mcp)
 prospective.register_prospective_tools(mcp)
+goals.register_goal_tools(mcp)
 assessment.register_assessment_tools(mcp)
 session_bridge.register_tools(mcp)
 sleep_loop.register_tools(mcp)

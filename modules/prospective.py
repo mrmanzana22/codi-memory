@@ -122,6 +122,7 @@ def create_intention(
     context: str = "",
     creator: str = "codi",
     recurrence: str = "",
+    goal_id: str = "",
 ) -> dict:
     """Create a new prospective memory intention."""
     conn = _get_conn()
@@ -155,12 +156,13 @@ def create_intention(
     conn.execute("""
         INSERT INTO intentions
         (id, action, trigger_type, trigger_spec, cue_focality, priority,
-         activation, created_at, expiry, context_at_creation, creator, recurrence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         activation, created_at, expiry, context_at_creation, creator, recurrence,
+         goal_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         int_id, action, trigger_type, json.dumps(spec), cue_focality,
         priority, activation, now, expiry or None, context, creator,
-        recurrence or None,
+        recurrence or None, goal_id or None,
     ))
 
     _log_event(conn, int_id, "created", json.dumps({
@@ -774,6 +776,7 @@ def register_prospective_tools(mcp):
         priority: str = "medium",
         expiry: str = "",
         context: str = "",
+        goal_id: str = "",
     ) -> str:
         """Create a prospective memory intention (remember to do something later).
 
@@ -785,6 +788,7 @@ def register_prospective_tools(mcp):
             priority: low|medium|high|critical
             expiry: ISO timestamp when intention expires (empty = no expiry)
             context: What's happening now (for context-dependent retrieval)
+            goal_id: Link to a goal in the goal system (optional)
         """
         result = create_intention(
             action=action,
@@ -794,6 +798,7 @@ def register_prospective_tools(mcp):
             expiry=expiry,
             context=context,
             creator="codi",
+            goal_id=goal_id,
         )
         return json.dumps(result, indent=2, ensure_ascii=False)
 

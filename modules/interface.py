@@ -691,12 +691,26 @@ def context_snapshot(level: str = "light") -> str:
     except Exception:
         pass
 
+    # Goals (Sprint 15)
+    goals_str = ""
+    try:
+        from modules.goals import get_context_goals
+        gctx = get_context_goals(limit=5)
+        if gctx and gctx.get("goals"):
+            lines_g = [f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})"
+                       for g in gctx["goals"]]
+            goals_str = f"Interference={gctx['interference_level']} | {gctx['above_threshold']}/{gctx['total_active']} above\n" + "\n".join(lines_g)
+            pretty_lines.append("\n## Active Goals\n" + goals_str)
+    except Exception:
+        pass
+
     return _json_response(
         "\n".join(pretty_lines),
         level="light",
         working_memory=wm_raw,
         workspace=ws,
         recordatorios=rec,
+        goals=goals_str,
     )
 
 
