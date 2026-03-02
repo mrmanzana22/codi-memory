@@ -23,16 +23,16 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     """Use a temporary DB for prediction tests."""
+    import hooks.preturn_inject as pi
     test_db = str(tmp_path / "test_predictions.db")
-    monkeypatch.setattr("hooks.preturn_inject.FTS_DB_PATH", test_db)
+    monkeypatch.setattr(pi, "FTS_DB_PATH", test_db)
+    # Reset DDL guard so tables are created fresh for each test
+    monkeypatch.setattr(pi, "_PREDICTION_DDL_DONE", False)
     # Create the DB with prediction tables
     conn = sqlite3.connect(test_db)
     conn.execute("PRAGMA journal_mode=WAL")
-    from hooks.preturn_inject import _init_prediction_tables
-    _init_prediction_tables(conn)
-    # Add 'source' column that _compare_prediction and _generate_prediction
-    # reference (added via migration in production, but _init_prediction_tables
-    # doesn't include it)
+    pi._init_prediction_tables(conn)
+    # Add 'source' column (added via migration in production but missing from DDL)
     try:
         conn.execute("ALTER TABLE prediction_results ADD COLUMN source TEXT DEFAULT 'interactive'")
         conn.commit()

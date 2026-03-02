@@ -885,12 +885,14 @@ class TestContradictionEventEmission:
         event_bus.on(Events.CONTRADICTION_DETECTED, capture_event)
 
         try:
-            with patch('modules.memory_smart.memory') as mock_mem, \
+            with patch('modules.memory_smart.search_with_fts_content') as mock_search, \
+                 patch('modules.memory_smart.memory') as mock_mem, \
                  patch('modules.memory_smart.qdrant') as mock_qdrant, \
                  patch('modules.memory_smart.index_memory_fts'), \
+                 patch('modules.bmr.compute_log_bayes_factor', return_value=-1.0), \
                  patch('modules.memory_smart._inline_contradiction_check') as mock_check:
 
-                mock_mem.search.return_value = {
+                mock_search.return_value = {
                     "results": [{"id": "existing-1", "memory": "Old fact", "score": 0.70}]
                 }
                 mock_mem.add.return_value = {"results": [{"id": "new-mem-1"}]}

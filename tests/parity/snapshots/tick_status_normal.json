@@ -43,5 +43,10 @@
     "ok": true,
     "status": "ok",
     "tick": "causal_discovery"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "sharpe_insights"
   }
 ]

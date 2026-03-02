@@ -371,17 +371,19 @@ class TestHierarchyPipelineIntegration:
     """Tests for L0/L1/L2 prediction hierarchy tables and cycles."""
 
     @pytest.fixture
-    def pred_db(self, tmp_path):
+    def pred_db(self, tmp_path, monkeypatch):
         """Create an isolated SQLite DB with all prediction tables initialized."""
         try:
-            from hooks.preturn_inject import _init_prediction_tables
+            import hooks.preturn_inject as pi
         except ImportError:
             pytest.skip("hooks.preturn_inject not importable in this environment")
 
+        # Reset DDL guard so tables are created fresh
+        monkeypatch.setattr(pi, "_PREDICTION_DDL_DONE", False)
         db_path = str(tmp_path / "test_pred.db")
         conn = sqlite3.connect(db_path)
         conn.execute("PRAGMA journal_mode=WAL")
-        _init_prediction_tables(conn)
+        pi._init_prediction_tables(conn)
         # Add 'source' column required by _compare_prediction and _generate_prediction
         try:
             conn.execute(

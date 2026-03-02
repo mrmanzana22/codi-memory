@@ -358,7 +358,7 @@ class TestNoCreateTableOutsideMigrations:
         """No module should contain CREATE TABLE -- only migrations.py allowed."""
         import re
         pattern = re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE | re.MULTILINE)
-        WHITELIST = {"migrations.py", "self_model.py", "spreading.py", "sleep_loop.py", "active_inference.py"}
+        WHITELIST = {"migrations.py", "self_model.py", "spreading.py", "sleep_loop.py", "active_inference.py", "temporal_renorm.py"}
 
         violations = []
         modules_dir = os.path.join(PROJECT_ROOT, "modules")

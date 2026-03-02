@@ -59,18 +59,27 @@ def prospective_db(tmp_path, monkeypatch):
         CREATE TABLE IF NOT EXISTS intentions (
             id TEXT PRIMARY KEY,
             action TEXT NOT NULL,
+            action_type TEXT DEFAULT 'remind',
             trigger_type TEXT DEFAULT 'event',
             trigger_spec TEXT DEFAULT '{}',
             cue_focality TEXT DEFAULT 'focal',
             priority TEXT DEFAULT 'medium',
             status TEXT DEFAULT 'pending',
-            activation REAL DEFAULT 0.65,
+            activation REAL DEFAULT 0.7,
             created_at TEXT,
+            triggered_at TEXT,
             completed_at TEXT,
             expiry TEXT,
+            snooze_until TEXT,
             context_at_creation TEXT DEFAULT '',
             creator TEXT DEFAULT 'codi',
-            recurrence TEXT
+            recurrence TEXT,
+            recurrence_spec TEXT,
+            check_count INTEGER DEFAULT 0,
+            partial_match_count INTEGER DEFAULT 0,
+            last_checked_at TEXT,
+            last_maintained_at TEXT,
+            goal_id TEXT
         )
     """)
     conn.execute("""

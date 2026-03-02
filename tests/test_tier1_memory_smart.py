@@ -199,10 +199,13 @@ class TestAddMemorySmart:
 
     def test_similar_saved_with_relation(self, patch_externals):
         """Content above relate_threshold but below dedup creates relation."""
+        from unittest.mock import patch
         ms.add_memory_smart("original memory about cats", category="general")
         # FakeMem0 score=0.8, set thresholds: dedup=0.90, relate=0.70
-        result = ms.add_memory_smart("another memory about cats", category="general",
-                                      dedup_threshold=0.90, relate_threshold=0.70)
+        # BMR must return negative so dedup is skipped and relate path executes
+        with patch('modules.bmr.compute_log_bayes_factor', return_value=-0.5):
+            result = ms.add_memory_smart("another memory about cats", category="general",
+                                          dedup_threshold=0.90, relate_threshold=0.70)
         parsed = json.loads(result)
         assert parsed["action"] == "saved_with_relation"
         assert "related_to" in parsed
