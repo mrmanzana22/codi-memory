@@ -691,15 +691,23 @@ def context_snapshot(level: str = "light") -> str:
     except Exception:
         pass
 
-    # Goals (Sprint 15)
+    # Goals (Sprint 15.5 - Structured Context)
     goals_str = ""
     try:
         from modules.goals import get_context_goals
         gctx = get_context_goals(limit=5)
         if gctx and gctx.get("goals"):
-            lines_g = [f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})"
-                       for g in gctx["goals"]]
-            goals_str = f"Interference={gctx['interference_level']} | {gctx['above_threshold']}/{gctx['total_active']} above\n" + "\n".join(lines_g)
+            lines_g = [f"Interference={gctx['interference_level']} | {gctx['above_threshold']}/{gctx['total_active']} above"]
+            for g in gctx["goals"]:
+                lines_g.append(f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})")
+                if g.get("goal_what"):
+                    lines_g.append(f"  WHAT: {g['goal_what']}")
+                if g.get("goal_next_step"):
+                    lines_g.append(f"  NEXT: {g['goal_next_step']}")
+            stale = gctx.get("stale_warnings", [])
+            if stale:
+                lines_g.append(f"STALE: {'; '.join(stale)}")
+            goals_str = "\n".join(lines_g)
             pretty_lines.append("\n## Active Goals\n" + goals_str)
     except Exception:
         pass

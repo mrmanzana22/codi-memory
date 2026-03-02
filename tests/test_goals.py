@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Sprint 15: Goal System Tests (ICARUS Activation-Based)
-=======================================================
+Sprint 15/15.5: Goal System Tests (ICARUS Activation-Based)
+============================================================
 Tests for the goal system based on:
   - Altmann & Trafton 2002 (activation model)
   - Cox et al 2017 (6 goal operations)
   - Pink et al 2025 (episodic context)
+  - Sprint 15.5: Structured context (ACT-R/SOAR/Duncan)
 
 Run: ./venv/bin/pytest tests/test_goals.py -v
 """
@@ -83,6 +84,53 @@ class TestCreateGoal:
             "SELECT context FROM goals WHERE id = ?", (result["id"],)
         ).fetchone()
         assert "goal architectures" in row[0]
+
+    def test_structured_context_stored(self):
+        """Sprint 15.5: structured fields persist."""
+        result = goals.create_goal(
+            "Consciencia",
+            level="project",
+            goal_what="Sistema cognitivo con 5 loops de integracion",
+            goal_why="Hacer que codi-memory sea un sistema cognitivo completo",
+            goal_next_step="Implementar auto-context para goals",
+        )
+        assert "id" in result
+        conn = goals._get_conn()
+        row = conn.execute(
+            "SELECT goal_what, goal_why, goal_next_step, context_updated_at "
+            "FROM goals WHERE id = ?", (result["id"],)
+        ).fetchone()
+        assert "5 loops" in row[0]
+        assert "cognitivo completo" in row[1]
+        assert "auto-context" in row[2]
+        assert row[3] is not None  # context_updated_at set
+
+    def test_missing_what_why_warns(self):
+        """Strong elicitation: warn when goal_what/why missing."""
+        result = goals.create_goal("No context", level="task")
+        assert "warnings" in result
+        assert len(result["warnings"]) == 2
+        assert any("goal_what" in w for w in result["warnings"])
+        assert any("goal_why" in w for w in result["warnings"])
+
+    def test_partial_what_only_warns_why(self):
+        """Only missing field gets warning."""
+        result = goals.create_goal(
+            "Partial", level="task",
+            goal_what="Something concrete",
+        )
+        assert "warnings" in result
+        assert len(result["warnings"]) == 1
+        assert "goal_why" in result["warnings"][0]
+
+    def test_full_context_no_warnings(self):
+        """Complete structured context = no warnings."""
+        result = goals.create_goal(
+            "Complete", level="task",
+            goal_what="What it is",
+            goal_why="Why it matters",
+        )
+        assert "warnings" not in result
 
 
 # ============================================================
@@ -389,3 +437,162 @@ class TestGoalLog:
         ).fetchall()
         events = [l[0] for l in logs]
         assert "auto_paused" in events
+
+
+# ============================================================
+# 11. STRUCTURED CONTEXT (Sprint 15.5)
+# ============================================================
+
+class TestStructuredContext:
+    """Sprint 15.5: Structured context fields (ACT-R/SOAR/Duncan)."""
+
+    def test_get_active_goals_includes_structured_fields(self):
+        """get_active_goals returns structured context fields."""
+        goals.create_goal(
+            "With context", level="task",
+            goal_what="Test what field",
+            goal_why="Test why field",
+            goal_next_step="Test next step",
+        )
+        active = goals.get_active_goals()
+        g = [x for x in active if x["title"] == "With context"][0]
+        assert g["goal_what"] == "Test what field"
+        assert g["goal_why"] == "Test why field"
+        assert g["goal_next_step"] == "Test next step"
+        assert g["context_updated_at"] is not None
+
+    def test_touch_updates_derivable_fields(self):
+        """touch_goal() updates only derivable (I-support) fields."""
+        g = goals.create_goal(
+            "Touchable", level="task",
+            goal_what="Original what",
+            goal_why="Original why",
+        )
+        goals.touch_goal(
+            g["id"],
+            last_state="Sprint 15 done",
+            next_step="Start Sprint 16",
+        )
+        conn = goals._get_conn()
+        row = conn.execute(
+            "SELECT goal_what, goal_why, goal_last_state, goal_next_step "
+            "FROM goals WHERE id = ?", (g["id"],)
+        ).fetchone()
+        # Committed fields unchanged
+        assert row[0] == "Original what"
+        assert row[1] == "Original why"
+        # Derivable fields updated
+        assert row[2] == "Sprint 15 done"
+        assert row[3] == "Start Sprint 16"
+
+    def test_touch_refreshes_context_timestamp(self):
+        """Touching with derivable data refreshes context_updated_at."""
+        g = goals.create_goal("Timed", level="task", goal_what="X")
+        # Fake old timestamp
+        conn = goals._get_conn()
+        conn.execute(
+            "UPDATE goals SET context_updated_at = '2026-01-01T00:00:00' WHERE id = ?",
+            (g["id"],),
+        )
+        conn.commit()
+        goals.touch_goal(g["id"], next_step="Fresh step")
+        row = conn.execute(
+            "SELECT context_updated_at FROM goals WHERE id = ?", (g["id"],)
+        ).fetchone()
+        assert "2026-03" in row[0]  # Should be recent
+
+    def test_touch_without_context_no_timestamp_refresh(self):
+        """Touch without derivable fields does NOT refresh context_updated_at."""
+        g = goals.create_goal("Plain touch", level="task", goal_what="X")
+        conn = goals._get_conn()
+        conn.execute(
+            "UPDATE goals SET context_updated_at = '2026-01-15T00:00:00' WHERE id = ?",
+            (g["id"],),
+        )
+        conn.commit()
+        goals.touch_goal(g["id"])  # No context update
+        row = conn.execute(
+            "SELECT context_updated_at FROM goals WHERE id = ?", (g["id"],)
+        ).fetchone()
+        assert "2026-01-15" in row[0]  # Unchanged
+
+    def test_update_goal_derivable_fields(self):
+        """update_goal() supports goal_last_state and goal_next_step."""
+        g = goals.create_goal("Updatable", level="task", goal_what="X")
+        result = goals.update_goal(
+            g["id"],
+            goal_last_state="Tests passing",
+            goal_next_step="Deploy to prod",
+        )
+        assert "last_state updated" in result["changes"]
+        assert "next_step updated" in result["changes"]
+        conn = goals._get_conn()
+        row = conn.execute(
+            "SELECT goal_last_state, goal_next_step, context_updated_at "
+            "FROM goals WHERE id = ?", (g["id"],)
+        ).fetchone()
+        assert row[0] == "Tests passing"
+        assert row[1] == "Deploy to prod"
+        assert row[2] is not None
+
+
+# ============================================================
+# 12. CONTEXT STALENESS (Duncan 2013 + Sprint 15.5)
+# ============================================================
+
+class TestContextStaleness:
+    """Staleness detection: warn when context is outdated."""
+
+    def test_stale_context_warning(self):
+        """Goals with context_updated_at > 7d should get stale warning."""
+        # Need 2 goals: target (high, stale) + filler (low) so target > interference
+        g = goals.create_goal(
+            "Stale goal", level="task", priority="critical",
+            goal_what="Something important",
+        )
+        goals.create_goal("Filler", level="task", priority="low")
+        conn = goals._get_conn()
+        conn.execute(
+            "UPDATE goals SET context_updated_at = '2026-01-01T00:00:00' WHERE id = ?",
+            (g["id"],),
+        )
+        conn.commit()
+        ctx = goals.get_context_goals(limit=10)
+        assert len(ctx.get("stale_warnings", [])) >= 1
+        assert any("stale" in w for w in ctx["stale_warnings"])
+
+    def test_no_context_warning(self):
+        """Goals with NO context should get 'NO context set' warning."""
+        # Need 2 goals so target is above interference
+        goals.create_goal("Empty context", level="task", priority="critical")
+        goals.create_goal("Filler low", level="task", priority="low")
+        ctx = goals.get_context_goals(limit=10)
+        assert len(ctx.get("stale_warnings", [])) >= 1
+        assert any("NO context set" in w for w in ctx["stale_warnings"])
+
+    def test_fresh_context_no_warning(self):
+        """Goals with fresh context should not get warnings."""
+        goals.create_goal(
+            "Fresh", level="task", priority="critical",
+            goal_what="Fresh what",
+            goal_why="Fresh why",
+            goal_next_step="Next action",
+        )
+        goals.create_goal("Filler", level="task", priority="low")
+        ctx = goals.get_context_goals(limit=10)
+        stale = [w for w in ctx.get("stale_warnings", []) if "Fresh" in w]
+        assert len(stale) == 0
+
+    def test_context_goals_includes_structured_data(self):
+        """get_context_goals returns structured fields for cascading priming."""
+        # Need 2 goals so critical one is above interference
+        goals.create_goal(
+            "Context goal", level="task", priority="critical",
+            goal_what="The what",
+            goal_next_step="The next step",
+        )
+        goals.create_goal("Filler", level="task", priority="low")
+        ctx = goals.get_context_goals(limit=10)
+        g = [x for x in ctx["goals"] if x["title"] == "Context goal"][0]
+        assert g["goal_what"] == "The what"
+        assert g["goal_next_step"] == "The next step"

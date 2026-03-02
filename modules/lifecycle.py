@@ -615,14 +615,28 @@ def despertar_codi() -> str:
         except Exception:
             pass
 
-        # 12b. Active Goals (Sprint 15)
+        # 12b. Active Goals (Sprint 15.5 - Structured Context)
         try:
             from modules.goals import get_context_goals
             gctx = get_context_goals(limit=5)
             if gctx and gctx.get("goals"):
                 contexto.append(f"\n## ACTIVE GOALS ({gctx['above_threshold']}/{gctx['total_active']} above interference)")
                 for g in gctx["goals"]:
-                    contexto.append(f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})")
+                    line = f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})"
+                    contexto.append(line)
+                    # Structured context: WHAT + NEXT (cascading priming)
+                    if g.get("goal_what"):
+                        contexto.append(f"  WHAT: {g['goal_what']}")
+                    if g.get("goal_next_step"):
+                        contexto.append(f"  NEXT: {g['goal_next_step']}")
+                    if not g.get("goal_what") and not g.get("goal_next_step"):
+                        contexto.append(f"  [!] No structured context — update with actualizar_goal()")
+                # Staleness warnings
+                stale = gctx.get("stale_warnings", [])
+                if stale:
+                    contexto.append(f"\n### STALE CONTEXT ({len(stale)} goals)")
+                    for w in stale:
+                        contexto.append(f"  - {w}")
         except Exception:
             pass
 
