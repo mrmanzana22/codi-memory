@@ -124,8 +124,10 @@ class TestUrgencyRescue:
         assert act_near_deadline > act_no_deadline, \
             f"Near deadline {act_near_deadline} should > no deadline {act_no_deadline}"
 
-    def test_urgency_past_deadline(self, isolated_db):
+    def test_urgency_past_deadline(self, isolated_db, monkeypatch):
         """Past-deadline intention gets max urgency."""
+        # Eliminate stochastic noise so assertion is deterministic
+        monkeypatch.setattr("modules.prospective.random.gauss", lambda mu, sigma: 0)
         pm = isolated_db
         now = datetime.now()
         act = pm._compute_activation(

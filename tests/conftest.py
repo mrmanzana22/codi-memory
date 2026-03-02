@@ -49,8 +49,36 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     # Patch FTS_DB_PATH in modules that import it directly (import aliasing fix)
     for mod in ["modules.memory_smart", "modules.memory_core",
                 "modules.dual_compare", "modules.write_queue",
-                "modules.db_pool", "modules.consolidation_common"]:
+                "modules.db_pool", "modules.consolidation_common",
+                "modules.sleep_loop", "modules.active_inference_integration"]:
         monkeypatch.setattr(f"{mod}.FTS_DB_PATH", db_path, raising=False)
+
+    # Patch PROSPECTIVE_DB_PATH aliases (modules that import directly from config)
+    for mod in ["modules.prospective", "modules.goals"]:
+        monkeypatch.setattr(f"{mod}.PROSPECTIVE_DB_PATH", prosp_path, raising=False)
+
+    # Reset cached DB connections (Tier 1 — prevents wrong-DB reads/writes)
+    monkeypatch.setattr("modules.prospective._conn", None, raising=False)
+    monkeypatch.setattr("modules.goals._conn", None, raising=False)
+
+    # Reset DDL guards (Tier 2 — ensures table creation on fresh DBs)
+    monkeypatch.setattr("hooks.preturn_inject._DDL_DONE", False, raising=False)
+    monkeypatch.setattr("hooks.preturn_inject._PREDICTION_DDL_DONE", False, raising=False)
+
+    # Reset wiring state (Tier 4 — accumulated counters/timestamps)
+    monkeypatch.setattr("modules.wiring._wired", False, raising=False)
+    monkeypatch.setattr("modules.wiring._interaction_count", 0, raising=False)
+    monkeypatch.setattr("modules.wiring._session_interaction_count", 0, raising=False)
+    monkeypatch.setattr("modules.wiring._last_interaction_time", None, raising=False)
+    monkeypatch.setattr("modules.wiring._self_model_tick", 0, raising=False)
+
+    # Reset prediction state in-place (Tier 4 — preserves object identity for
+    # tests that check `_predictive_state is ps` across facade re-exports)
+    import modules.prediction as _pred_mod
+    _saved_pred = {k: list(v) for k, v in _pred_mod._predictive_state.items()}
+    _pred_mod._predictive_state.update({
+        "predictions": [], "surprises": [], "belief_updates": [], "accuracy_history": []
+    })
 
     # Force legacy access tracking in tests (tests mock qdrant, not batch API)
     monkeypatch.setattr(
@@ -76,6 +104,9 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
 
     yield
+
+    # Restore prediction state (in-place mutation, not replacement)
+    _pred_mod._predictive_state.update(_saved_pred)
 
     # Clean up db_pool connections so next test gets fresh connections
     # pointing to its own tmp_path DB
