@@ -52,6 +52,9 @@ BUNDLE_CORE = frozenset({
     "get_emotional_state", "get_emotional_expression",
     # Prospective (intentions - daily use)
     "ver_intenciones", "crear_intencion", "completar_intencion",
+    # Goals (Sprint 15 - daily use)
+    "crear_goal", "ver_goals", "actualizar_goal", "completar_goal",
+    "contexto_goals", "arbol_goals",
     # Governance meta (always visible)
     "get_toolset_status",
 })

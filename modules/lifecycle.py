@@ -615,6 +615,17 @@ def despertar_codi() -> str:
         except Exception:
             pass
 
+        # 12b. Active Goals (Sprint 15)
+        try:
+            from modules.goals import get_context_goals
+            gctx = get_context_goals(limit=5)
+            if gctx and gctx.get("goals"):
+                contexto.append(f"\n## ACTIVE GOALS ({gctx['above_threshold']}/{gctx['total_active']} above interference)")
+                for g in gctx["goals"]:
+                    contexto.append(f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})")
+        except Exception:
+            pass
+
         # 13. Spotlight (GWT Executive Focus)
         try:
             from modules.spotlight import (
