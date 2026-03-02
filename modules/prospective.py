@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 
 _logger = logging.getLogger(__name__)
 
-from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, now_iso, now_col
+from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, now_iso, now_col, connect_fts
 
 # ============================================================
 # CONSTANTS
@@ -83,8 +83,7 @@ _conn = None
 def _get_conn() -> sqlite3.Connection:
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(PROSPECTIVE_DB_PATH)
-        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn = connect_fts(PROSPECTIVE_DB_PATH)
         _init_tables(_conn)
     return _conn
 

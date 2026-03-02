@@ -92,15 +92,30 @@ def temporal_narrative(period: str = "last_week", focus: str = None) -> dict:
 
 
 def _retrieve_by_period(days: int, focus: str = None) -> list:
-    """Retrieve memories from the last N days via scroll+filter."""
+    """Retrieve memories from the last N days via Qdrant filtered scroll.
+
+    Proposal #63 Fix 3: Use Qdrant Range filter on created_at instead of
+    scanning ALL memories. ~85% reduction in data transferred.
+    """
+    from qdrant_client.models import Filter, FieldCondition, Range, MatchValue
+
     now = datetime.now(_TZ)
     cutoff = (now - timedelta(days=days)).isoformat()
+
+    must_conditions = [
+        FieldCondition(key="created_at", range=Range(gte=cutoff))
+    ]
+    if focus:
+        must_conditions.append(
+            FieldCondition(key="narrative_themes", match=MatchValue(value=focus.lower()))
+        )
 
     memories = []
     offset = None
     while True:
         pts, nxt = qdrant.scroll(
             collection_name=COLLECTION_NAME,
+            scroll_filter=Filter(must=must_conditions),
             limit=100,
             offset=offset,
             with_payload=True,
@@ -108,15 +123,7 @@ def _retrieve_by_period(days: int, focus: str = None) -> list:
         )
         if not pts:
             break
-        for p in pts:
-            pl = p.payload or {}
-            created = pl.get("created_at", "")
-            if created >= cutoff:
-                if focus:
-                    themes = pl.get("narrative_themes", [])
-                    if focus.lower() not in [t.lower() for t in themes]:
-                        continue
-                memories.append(p)
+        memories.extend(pts)
         offset = nxt
         if offset is None:
             break
@@ -294,6 +301,14 @@ def _generate_narrative(daily_data: dict, top_themes: list,
                 f"{sc['key_content'][:80]}"
             )
 
+    # Proposal #63 Fix 4: Story arcs from WM chains (Conway SMS general events)
+    wm_chains = _integrate_wm_chains(period_days)
+    if wm_chains:
+        lines.append(f"")
+        lines.append(f"Arcos narrativos ({len(wm_chains)} cadenas):")
+        for chain in wm_chains[:5]:
+            lines.append(f"  - {chain['label']} [{chain['period']}]")
+
     # Add temporal arc
     if active_days >= 3:
         days_list = sorted(daily_data.keys())
@@ -310,6 +325,35 @@ def _generate_narrative(daily_data: dict, top_themes: list,
             lines.append(f"Hilo conductor: '{first_top}' fue constante durante todo el periodo.")
 
     return "\n".join(lines)
+
+
+def _integrate_wm_chains(period_days: int = 7) -> list:
+    """Map working memory chains for narrative structure.
+
+    Proposal #63 Fix 4: Conway & Pleydell-Pearce 2000 SMS hierarchy.
+    WM chains provide the 'general events' level (between lifetime periods
+    and event-specific knowledge).
+    """
+    try:
+        from modules.config import connect_fts
+        conn = connect_fts()
+        chains = conn.execute("""
+            SELECT chain_id, topic, COUNT(*) as items,
+                   MIN(occurred_at) as first_at, MAX(occurred_at) as last_at
+            FROM working_memory
+            WHERE active = 1 OR occurred_at > datetime('now', ? || ' days')
+            GROUP BY chain_id
+            HAVING items >= 3
+            ORDER BY first_at
+        """, (f"-{period_days}",)).fetchall()
+        conn.close()
+        return [{
+            "chain_id": c[0], "topic": c[1], "items": c[2],
+            "period": f"{c[3][:10]} to {c[4][:10]}",
+            "label": f"{c[1]} ({c[2]} events)",
+        } for c in chains]
+    except Exception:
+        return []
 
 
 def _project_future(daily_data: dict, top_themes: list) -> list:
@@ -418,8 +462,28 @@ def _compute_coherence(daily_data: dict, theme_counts: dict) -> float:
     else:
         regularity = 1.0
 
-    # Weighted average
-    coherence = 0.40 * continuity + 0.35 * thematic + 0.25 * regularity
+    # Proposal #63 Fix 5: Add causal + self-reference dimensions (McAdams 2001)
+    total_memories = sum(len(v) for v in daily_data.values())
+
+    # 4. Causal density (0-1): what % of memories have causal_links?
+    causal_count = sum(
+        1 for d in daily_data.values() for m in d
+        if (m.payload or {}).get("causal_links")
+    )
+    causal_density = min(1.0, causal_count / max(total_memories * 0.1, 1))
+
+    # 5. Self-reference ratio (0-1): memories with self/identity language
+    _self_words = ("aprendi", "decidi", "quiero", "mi objetivo", "prefiero", "soy")
+    self_count = sum(
+        1 for d in daily_data.values() for m in d
+        if any(w in ((m.payload or {}).get("data", "") or "").lower() for w in _self_words)
+    )
+    self_ratio = min(1.0, self_count / max(total_memories * 0.05, 1))
+
+    # Weighted average (rebalanced: 5 dimensions)
+    coherence = (0.25 * continuity + 0.20 * thematic +
+                 0.15 * regularity + 0.25 * causal_density +
+                 0.15 * self_ratio)
     return min(1.0, coherence)
 
 

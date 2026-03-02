@@ -41,7 +41,7 @@ from modules.tracing import get_trace_id
 class Events:
     """Event name constants."""
     MEMORY_STORED = 'memory_stored'
-    MEMORY_RETRIEVED = 'memory_retrieved'
+    MEMORY_RETRIEVED = 'memory_retrieved'       # Payload: query, result_count, episodic_count, semantic_count, top_activation, retrieved_ids, source (search|timeline|ownership|experiences|critical|theme|emotion|focus_attention)
     EMOTION_CHANGED = 'emotion_changed'
     WORKSPACE_BROADCAST = 'workspace_broadcast'
     CONSOLIDATION_COMPLETE = 'consolidation_complete'
@@ -59,6 +59,7 @@ class Events:
     SESSION_OPEN = 'session_open'                                         # Session bridge: bridge loaded at wake
     SLEEP_LOOP_COMPLETE = 'sleep_loop_complete'                             # Sleep loop: background maintenance done
     EMOTION_GATING_APPLIED = 'emotion_gating_applied'                        # HOT-4 runtime evidence (Bower 1981)
+    AFFECTIVE_CHARGE_COMPUTED = 'affective_charge_computed'                     # Sprint 4: AC from policy shift (Joffily & Coricelli 2013)
 
 
 class EventBus:

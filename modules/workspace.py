@@ -14,6 +14,7 @@ from modules.config import (
     _emotional_state, now_iso,
 )
 from modules.secret_redact import redact_secrets
+from modules.memory_smart import search_with_fts_content
 from modules.utils import (
     resolve_memory_id,
     _classify_emotion,
@@ -63,15 +64,17 @@ def update_workspace_spotlight(memories: list, theme: str = None):
         _global_workspace['workspace_theme'] = theme
 
 
-def record_workspace_cycle(theme: str, winner_content: str) -> None:
+def record_workspace_cycle(theme: str, winner_content: str, winning_domain: str = "unknown") -> None:
     """Record a cognitive cycle for seriality tracking (GWT-6).
 
     Baars 1988: Consciousness is serial -- one content at a time in the spotlight.
     LIDA (Franklin 2006): Cognitive cycles are the fundamental unit of processing.
+    S3-02: Records winning_domain for Phi_E integration measurement.
 
     Args:
         theme: Topic of the winning content
         winner_content: Text of the winner (truncated to 100 chars)
+        winning_domain: Source domain of the winner (for Phi_E computation)
     """
     global _global_workspace
     now = now_iso()
@@ -84,10 +87,20 @@ def record_workspace_cycle(theme: str, winner_content: str) -> None:
         'theme': theme,
         'content': winner_content[:100],
         'timestamp': now,
+        'winning_domain': winning_domain,  # S3-02: For Phi_E
     }
     _global_workspace['cycle_history'].append(cycle_entry)
     # Keep last 10 cycles
     _global_workspace['cycle_history'] = _global_workspace['cycle_history'][-10:]
+
+
+def get_coalition_timeseries() -> list:
+    """Return workspace cycle history for Phi_E computation (S3-02).
+
+    Barrett & Seth 2011: approximate Phi on coalition time-series.
+    Returns list of dicts with theme, winning_domain, timestamp.
+    """
+    return list(_global_workspace.get('cycle_history', []))
 
 
 def focus_attention(context: str, depth: str = "normal") -> str:
@@ -101,7 +114,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
     try:
         limits = {'shallow': 3, 'normal': 5, 'deep': 10}
         limit = limits.get(depth, 5)
-        results = memory.search(query=context, user_id=USER_ID, limit=limit * 2)
+        results = search_with_fts_content(query=context, user_id=USER_ID, limit=limit * 2)
 
         if not results or not results.get('results'):
             return f"No encontre memorias relacionadas con: {context}"
@@ -179,9 +192,27 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         spotlight = spotlight_candidates
         update_workspace_spotlight(spotlight, theme=context)
 
-        # GWT-6: Record cognitive cycle
+        # GWT-6: Record cognitive cycle (S3-02: include winning domain for Phi_E)
         if spotlight:
-            record_workspace_cycle(context, spotlight[0].get('content', ''))
+            winning_domain = comp_result.winners[0].source_domain if comp_result.winners else "unknown"
+            record_workspace_cycle(context, spotlight[0].get('content', ''), winning_domain=winning_domain)
+
+        # Proposal #67 Fix 4: Emit retrieval event for focus_attention spotlight winners
+        try:
+            from modules.events import event_bus, Events
+            winner_ids = [m['id'] for m in spotlight if m.get('id')]
+            if winner_ids:
+                event_bus.emit(Events.MEMORY_RETRIEVED, {
+                    'query': context,
+                    'result_count': len(spotlight),
+                    'episodic_count': len(spotlight),
+                    'semantic_count': 0,
+                    'top_activation': spotlight[0].get('attention_score', 0.5) if spotlight else 0,
+                    'retrieved_ids': winner_ids,
+                    'source': 'focus_attention',
+                })
+        except Exception:
+            pass
 
         # Spreading activation: propagar a vecinos de las memorias en spotlight
         try:
@@ -336,7 +367,8 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                     Maps to decay_multiplier = decay_rate / 0.05 for FadeMem.
     """
     from modules.forgetting import (
-        compute_fadem_strength, _get_hours_since_access,
+        compute_fadem_strength, compute_fadem_strength_ss_rs,
+        _get_hours_since_access,
         _get_emotional_arousal, _is_consolidated, _get_memory_type,
         FADEM_FLOOR,
     )
@@ -350,6 +382,13 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         # Map decay_rate to FadeMem multiplier (0.05 = 1.0x, 0.03 = 0.6x)
         decay_multiplier = decay_rate / 0.05
 
+        # Canon v2, S1-5: Load causal chain members for reduced decay
+        try:
+            from modules.spreading import get_chain_member_ids
+            _chain_members = get_chain_member_ids()
+        except Exception:
+            _chain_members = set()
+
         # Pre-filter: only scroll memories that can actually be decayed
         # (salience above floor, not critical/high importance)
         from qdrant_client.models import Filter, FieldCondition, Range, MatchValue
@@ -357,9 +396,10 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
             must=[
                 FieldCondition(key='attention_salience', range=Range(gt=FADEM_FLOOR)),
             ],
+            # Proposal #66 Fix 1: Only critical immune. High decays via FadeMem lambda.
+            # Bjork & Bjork 1992: storage strength != retrieval strength immunity.
             must_not=[
                 FieldCondition(key='narrative_importance', match=MatchValue(value='critical')),
-                FieldCondition(key='narrative_importance', match=MatchValue(value='high')),
             ]
         )
 
@@ -382,27 +422,41 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                 salience = point.payload.get('attention_salience', 0.5)
                 importance = point.payload.get('narrative_importance', 'medium')
 
-                # Try FadeMem curve (needs timing data)
+                # K.1.4: Read SS/RS from payload (defaults for legacy memories)
+                ss = float(point.payload.get('storage_strength', 0.3) or 0.3)
+                rs = float(point.payload.get('retrieval_strength', salience) or salience)
+
+                # Try SS/RS dual strength model (Bjork & Bjork 1992)
                 hours = _get_hours_since_access(point.payload)
                 if hours is not None:
-                    new_salience = compute_fadem_strength(
-                        current_salience=salience,
+                    new_ss, new_rs, effective = compute_fadem_strength_ss_rs(
+                        ss=ss, rs=rs,
                         hours_since_access=hours,
                         importance=importance,
                         consolidated=_is_consolidated(point.payload),
                         memory_type=_get_memory_type(point.payload),
                         emotional_arousal=_get_emotional_arousal(point.payload),
-                        decay_multiplier=decay_multiplier,
                     )
+                    new_salience = effective
                     fadem_count += 1
                 else:
                     # Flat fallback for memories without timing data
                     new_salience = max(FADEM_FLOOR, salience - decay_rate)
+                    new_ss = ss
+                    new_rs = max(FADEM_FLOOR, rs - decay_rate)
+
+                # Canon v2, S1-5: Chain members get halved decay
+                if str(point.id) in _chain_members:
+                    new_salience = salience + (new_salience - salience) * 0.5
+                    new_rs = rs + (new_rs - rs) * 0.5
 
                 if new_salience < salience:
-                    record_access(COLLECTION_NAME, point.id, {
+                    decay_payload = {
                         'attention_salience': new_salience,
-                    })
+                        'storage_strength': new_ss,
+                        'retrieval_strength': new_rs,
+                    }
+                    record_access(COLLECTION_NAME, point.id, decay_payload)
                     decayed_count += 1
 
             total_scanned += len(batch)
@@ -466,7 +520,7 @@ def emotional_focus_attention(context: str) -> str:
     """
     try:
         current_emotion = _emotional_state['current']
-        results = memory.search(query=context, user_id=USER_ID, limit=15)
+        results = search_with_fts_content(query=context, user_id=USER_ID, limit=15)
         if not results or not results.get('results'):
             return json.dumps({'result': 'Sin memorias relacionadas', 'context': context, 'memories': []})
 
@@ -613,10 +667,20 @@ def recalibrate_importance(
             if meta.get('tipo_momento') == 'momento_personal':
                 continue
 
-            # Check last access time
+            # S1-02: Bayesian importance uses SS + access pattern
+            # Low SS = low real importance regardless of LLM label
+            ss = float(payload.get('storage_strength', 1.0) or 1.0)
             timestamps = payload.get('access_timestamps', [])
             last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
-            if last_access and last_access < critical_cutoff:
+
+            # Effective decay threshold: SS < 2.0 means barely accessed, decay sooner
+            effective_cutoff = critical_cutoff
+            if ss < 2.0:
+                # Low SS: halve the grace period (degrade sooner)
+                half_days = critical_decay_days // 2
+                effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+
+            if last_access and last_access < effective_cutoff:
                 record_access(COLLECTION_NAME, point.id, {
                     'narrative_importance': 'high',
                 })
@@ -654,9 +718,17 @@ def recalibrate_importance(
             except (ValueError, TypeError):
                 pass
 
+            # S1-02: Same SS-aware decay for high->medium
+            ss = float(payload.get('storage_strength', 1.0) or 1.0)
             timestamps = payload.get('access_timestamps', [])
             last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
-            if last_access and last_access < high_cutoff:
+
+            effective_cutoff = high_cutoff
+            if ss < 2.0:
+                half_days = high_decay_days // 2
+                effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+
+            if last_access and last_access < effective_cutoff:
                 record_access(COLLECTION_NAME, point.id, {
                     'narrative_importance': 'medium',
                 })

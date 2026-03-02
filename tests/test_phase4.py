@@ -1165,10 +1165,12 @@ class TestSessionStatePersistence:
              patch('modules.session_bridge.load_session_bridge', side_effect=Exception("no bridge")), \
              patch('modules.lifecycle.qdrant') as mock_qdrant, \
              patch('modules.lifecycle.memory') as mock_mem, \
+             patch('modules.memory_smart.memory') as mock_smart_mem, \
              patch('modules.lifecycle._verificar_salud_memoria_interna', return_value={"ok": True}):
 
             mock_qdrant.scroll.return_value = ([], None)
             mock_mem.search.return_value = {"results": []}
+            mock_smart_mem.search.return_value = {"results": []}
 
             from modules.consciousness import despertar_codi
             result = despertar_codi()
@@ -1187,10 +1189,12 @@ class TestSessionStatePersistence:
              patch('modules.session_bridge.load_session_bridge', side_effect=Exception("no bridge")), \
              patch('modules.lifecycle.qdrant') as mock_qdrant, \
              patch('modules.lifecycle.memory') as mock_mem, \
+             patch('modules.memory_smart.memory') as mock_smart_mem, \
              patch('modules.lifecycle._verificar_salud_memoria_interna', return_value={"ok": True}):
 
             mock_qdrant.scroll.return_value = ([], None)
             mock_mem.search.return_value = {"results": []}
+            mock_smart_mem.search.return_value = {"results": []}
 
             from modules.consciousness import despertar_codi
             result = despertar_codi()
@@ -1215,10 +1219,12 @@ class TestSessionStatePersistence:
              patch('modules.session_bridge.load_session_bridge', side_effect=Exception("no bridge")), \
              patch('modules.lifecycle.qdrant') as mock_qdrant, \
              patch('modules.lifecycle.memory') as mock_mem, \
+             patch('modules.memory_smart.memory') as mock_smart_mem, \
              patch('modules.lifecycle._verificar_salud_memoria_interna', return_value={"ok": True}):
 
             mock_qdrant.scroll.return_value = ([], None)
             mock_mem.search.return_value = {"results": []}
+            mock_smart_mem.search.return_value = {"results": []}
 
             from modules.consciousness import despertar_codi
             result = despertar_codi()
@@ -1240,16 +1246,19 @@ class TestSessionStatePersistence:
              patch('modules.session_bridge.load_session_bridge', side_effect=Exception("no bridge")), \
              patch('modules.lifecycle.qdrant') as mock_qdrant, \
              patch('modules.lifecycle.memory') as mock_mem, \
+             patch('modules.memory_smart.memory') as mock_smart_mem, \
              patch('modules.lifecycle._verificar_salud_memoria_interna', return_value={"ok": True}):
 
             mock_qdrant.scroll.return_value = ([], None)
             mock_mem.search.return_value = {"results": []}
+            mock_smart_mem.search.return_value = {"results": []}
 
             from modules.consciousness import despertar_codi
             result = despertar_codi()
 
             # Check that memory.search was called with "trading" not "fullempaques"
-            search_calls = mock_mem.search.call_args_list
+            # search_with_fts_content delegates to memory_smart.memory.search
+            search_calls = mock_smart_mem.search.call_args_list
             project_call = [c for c in search_calls if "proyecto" in str(c)]
             assert len(project_call) >= 1
             assert "trading" in str(project_call[0])

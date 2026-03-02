@@ -19,6 +19,7 @@ from modules.config import (
 )
 from modules.secret_redact import redact_secrets
 from modules.access_tracking import record_access
+from modules.memory_smart import search_with_fts_content
 from modules.utils import (
     get_session_id, resolve_memory_id, maybe_backup,
     _classify_emotion, _get_emotion_text, _get_emotional_state,
@@ -454,7 +455,7 @@ def despertar_codi() -> str:
             else None
         )
         project_query = f"proyecto trabajando actual {active_project}" if active_project else "proyecto trabajando actual"
-        proyecto = memory.search(query=project_query, user_id=USER_ID, limit=4)
+        proyecto = search_with_fts_content(query=project_query, user_id=USER_ID, limit=4)
         if proyecto and proyecto.get("results"):
             contexto.append("\n## PROYECTO ACTUAL")
             if active_project:
@@ -477,14 +478,14 @@ def despertar_codi() -> str:
                 contexto.append(f"- {p.payload.get('data', '')[:80]}...")
 
         # 4. Pendientes
-        pendientes = memory.search(query="pendiente falta por hacer", user_id=USER_ID, limit=3)
+        pendientes = search_with_fts_content(query="pendiente falta por hacer", user_id=USER_ID, limit=3)
         if pendientes and pendientes.get("results"):
             contexto.append("\n## PENDIENTES")
             for m in pendientes["results"]:
                 contexto.append(f"- {m.get('memory', '')}")
 
         # 5. Relaciones
-        relacion = memory.search(query=RELATIONSHIP_QUERY, user_id=USER_ID, limit=2)
+        relacion = search_with_fts_content(query=RELATIONSHIP_QUERY, user_id=USER_ID, limit=2)
         if relacion and relacion.get("results"):
             contexto.append("\n## RELACIONES")
             for m in relacion["results"]:
@@ -644,6 +645,13 @@ def despertar_codi() -> str:
             spotlight_text = format_spotlight()
             if spotlight_text:
                 contexto.append(f"\n{spotlight_text}")
+        except Exception:
+            pass
+
+        # 14. Active Inference event handlers (S5-03)
+        try:
+            from modules.active_inference_integration import register_event_handlers
+            register_event_handlers()
         except Exception:
             pass
 

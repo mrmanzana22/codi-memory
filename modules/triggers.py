@@ -10,6 +10,7 @@ from datetime import datetime
 
 from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
 from modules.secret_redact import redact_secrets
+from modules.memory_smart import search_with_fts_content
 
 # ============================================================
 # MODULE-LEVEL STATE AND HELPERS
@@ -128,7 +129,7 @@ def register_tools(mcp):
             contexto_memoria = []
             if trigger.get('contexto_a_buscar'):
                 try:
-                    resultado = memory.search(query=trigger['contexto_a_buscar'], user_id=USER_ID, limit=3)
+                    resultado = search_with_fts_content(query=trigger['contexto_a_buscar'], user_id=USER_ID, limit=3)
                     if resultado and resultado.get("results"):
                         for m in resultado["results"]:
                             contexto_memoria.append(m.get('memory', ''))

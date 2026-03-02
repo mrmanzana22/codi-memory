@@ -28,12 +28,40 @@ import logging
 _logger = logging.getLogger("codi-memory")
 
 # ============================================================
+# STALE WAL/SHM CLEANUP - remove orphaned lock files on startup
+# ============================================================
+import subprocess
+
+def _cleanup_stale_wal(db_path: str) -> None:
+    """Remove WAL/SHM files if no process has the DB open."""
+    shm = db_path + "-shm"
+    wal = db_path + "-wal"
+    if not os.path.exists(shm):
+        return
+    try:
+        result = subprocess.run(
+            ["lsof", db_path], capture_output=True, text=True, timeout=5
+        )
+        # lsof outputs lines for each process holding the file
+        # If only the header or empty, nobody has it open
+        lines = [l for l in result.stdout.strip().splitlines() if l and not l.startswith("COMMAND")]
+        if not lines:
+            for f in (shm, wal):
+                if os.path.exists(f):
+                    os.remove(f)
+                    _logger.info("Removed stale %s", f)
+    except Exception:
+        pass  # lsof not available or timeout — skip cleanup
+
+# ============================================================
 # SCHEMA MIGRATIONS (D4) - must run BEFORE any module import
 # ============================================================
 from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH
 from modules.migrations import apply_migrations
 
 _server_dir = os.path.dirname(os.path.abspath(__file__))
+_cleanup_stale_wal(FTS_DB_PATH)
+_cleanup_stale_wal(PROSPECTIVE_DB_PATH)
 apply_migrations(FTS_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations"))
 apply_migrations(PROSPECTIVE_DB_PATH, migrations_dir=os.path.join(_server_dir, "migrations_prospective"))
 

@@ -138,42 +138,45 @@ class TestRetrievalWrapping:
 
 class TestFeelingOfKnowing:
     def test_fok_no_history(self):
-        """No failed searches, no WM, no buffer = base 0.35.
+        """No prior data = uninformative Beta(1,1), mean=0.5.
 
-        FOK base was lowered from 0.5 to 0.35 (assume less knowledge,
-        let evidence raise it). Without any signals, may drop further due
-        to FTS metamemory check (fts_count=0 -> -0.10).
+        S1-01: Bayesian FOK uses Beta(a,b) posterior as base.
+        With no observations (uninformative prior), base = 0.5.
+        Without fts_db_path, no FTS adjustment -> stays at 0.5.
         """
         _retrieval_buffer.clear()
         result = feeling_of_knowing("some random query")
-        # Base is 0.35; FTS check may subtract 0.10 -> 0.25, or stay at 0.35
-        assert 0.20 <= result["fok_score"] <= 0.40
-        assert result["recommendation"] in ("uncertain", "ask")
+        # Beta(1,1) -> base = 0.5. No FTS/WM adjustment without db.
+        assert 0.45 <= result["fok_score"] <= 0.55
+        assert result["recommendation"] == "uncertain"
 
     def test_fok_after_failures(self):
-        """Failed searches should reduce FOK."""
+        """Failed searches via Beta prior should reduce FOK below 0.5.
+
+        S1-01: Failures update Beta posterior via update_fok_prior(topic, False).
+        3 failures -> Beta(1, 4) -> mean = 0.2, well below 0.5.
+        """
         _retrieval_buffer.clear()
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
         from modules.migrations import apply_migrations
+        from modules.retrieval_metadata import update_fok_prior
         apply_migrations(db_path, migrations_dir=os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
         try:
-            conn = sqlite3.connect(db_path)
-            init_failed_searches_table(conn)
-            log_failed_search(conn, "kubernetes deployment", 0, 0.0, "kubernetes")
-            log_failed_search(conn, "kubernetes pods", 1, 0.2, "kubernetes")
-            log_failed_search(conn, "kubernetes service", 0, 0.0, "kubernetes")
-            conn.close()
+            # Log 3 failures via Bayesian prior update
+            update_fok_prior("kubernetes", success=False, fts_db_path=db_path)
+            update_fok_prior("kubernetes", success=False, fts_db_path=db_path)
+            update_fok_prior("kubernetes", success=False, fts_db_path=db_path)
 
             result = feeling_of_knowing("kubernetes", fts_db_path=db_path)
             assert result["fok_score"] < 0.5
-            assert "failed_searches" in result["basis"]
+            assert "Beta(" in result["basis"]
         finally:
             os.unlink(db_path)
 
     def test_fok_wm_boost(self):
-        """Topic in working memory should boost FOK above base (0.35)."""
+        """Topic in working memory should boost FOK above base (0.5)."""
         _retrieval_buffer.clear()
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
@@ -184,33 +187,29 @@ class TestFeelingOfKnowing:
             conn.commit()
 
             result = feeling_of_knowing("trading", wm_conn=conn)
-            # Base 0.35 + wm_boost 0.15 = 0.50
-            assert result["fok_score"] >= 0.5
-            assert "in_wm" in result["basis"]
+            # S1-01: Base Beta(1,1)=0.5 + wm_boost 0.12 = 0.62
+            assert result["fok_score"] >= 0.6
+            assert "wm(" in result["basis"]
             conn.close()
         finally:
             os.unlink(db_path)
 
-    def test_fok_buffer_boost(self):
-        """Successful past queries (in fok_calibration_log) should boost FOK."""
+    def test_fok_prior_boost(self):
+        """Successful past retrievals via Beta prior should boost FOK above 0.5.
+
+        S1-01: Past successes update Beta posterior via update_fok_prior().
+        3 successes -> Beta(4, 1) -> mean = 0.8. Plus FTS boost.
+        """
         _retrieval_buffer.clear()
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
         try:
-            # FOK now checks persistent fok_calibration_log table (cross-process)
-            # instead of in-memory _retrieval_buffer.
-            # Also seeds memories_fts so the FTS metamemory check doesn't penalize.
             from modules.migrations import apply_migrations
+            from modules.retrieval_metadata import update_fok_prior
             apply_migrations(db_path, migrations_dir=os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "migrations"))
             conn = sqlite3.connect(db_path)
-            _init_fok_calibration_table(conn)
             now = datetime.now().isoformat()
-            # Seed fok_calibration_log with a past successful retrieval
-            conn.execute(
-                "INSERT INTO fok_calibration_log (query, fok_predicted, actual_coverage, actual_count, actual_top_activation, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                ("fullempaques production", 0.5, "comprehensive", 5, 0.7, now)
-            )
             # Seed memories_fts so FTS metamemory check doesn't penalize (-0.10)
             conn.execute(
                 "INSERT INTO memories_text (memory_id, content, created_at) VALUES (?, ?, ?)",
@@ -219,10 +218,15 @@ class TestFeelingOfKnowing:
             conn.commit()
             conn.close()
 
+            # Log 3 successes via Bayesian prior update
+            update_fok_prior("fullempaques", success=True, fts_db_path=db_path)
+            update_fok_prior("fullempaques", success=True, fts_db_path=db_path)
+            update_fok_prior("fullempaques", success=True, fts_db_path=db_path)
+
             result = feeling_of_knowing("fullempaques prices", fts_db_path=db_path)
-            # base 0.35 + fts boost + buffer_hits boost
-            assert result["fok_score"] > 0.35
-            assert "buffer_hits" in result["basis"]
+            # Beta(~4, 1) -> base ~0.8 + FTS boost
+            assert result["fok_score"] > 0.6
+            assert "Beta(" in result["basis"]
         finally:
             os.unlink(db_path)
 

@@ -297,6 +297,26 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
         except Exception:
             temporal_context = {"time_of_day": "unknown", "day_type": "unknown"}
 
+        # Proposal #63 Fix 2: Causal encoding (Trabasso & van den Broek 1985)
+        # Extract causal links when content contains causal language
+        causal_links = []
+        try:
+            import re
+            _CAUSAL_PATTERNS = [
+                r'(?:porque|because|due to|causa)\s+(.{10,80})',
+                r'(?:result[aó]|led to|caus[aó])\s+(.{10,80})',
+                r'(.{10,60})\s+(?:entonces|therefore|por eso)\s+(.{10,60})',
+            ]
+            content_lower = content.lower()
+            for pattern in _CAUSAL_PATTERNS:
+                matches = re.findall(pattern, content_lower)
+                if matches:
+                    for m in matches[:2]:
+                        causal_links.append(str(m)[:100] if isinstance(m, str) else str(m[0])[:100])
+            causal_links = causal_links[:3]
+        except Exception:
+            pass
+
         ownership_metadata = {
             'category': category,
             'ownership_is_mine': True,
@@ -317,6 +337,8 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'temporal_context': temporal_context,      # 3D: Temporal metadata
             '_v': 4.0  # Phase 3: SDR + temporal context
         }
+        if causal_links:
+            ownership_metadata['causal_links'] = causal_links
 
         record_access(COLLECTION_NAME, memory_id, ownership_metadata)
     except Exception as e:

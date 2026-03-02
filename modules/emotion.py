@@ -384,6 +384,13 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
         except Exception:
             pass
 
+        # Proposal #67 Fix 3: Emit retrieval event for emotion searches
+        try:
+            from modules.memory_core import _emit_retrieval_event
+            _emit_retrieval_event(f"emotion:{emotion_type}", points, source="emotion")
+        except Exception:
+            pass
+
         memories = []
         for p in points:
             memories.append({
@@ -678,6 +685,134 @@ def evolve_pad_from_text(text: str) -> dict:
     }
 
 
+# ============================================================
+# AFFECTIVE CHARGE → PAD (Sprint 4, item 4.2)
+# Joffily & Coricelli 2013, Hesp et al. 2021
+# ============================================================
+# Replace keyword-based PAD with computed values from Active Inference.
+# P = sign(AC) * |AC|, A = Var(AC), D = controllability estimate.
+
+# AC→PAD scaling (AC values are typically small, ~-0.3 to 0.3)
+_AC_PLEASURE_SCALE = 3.0     # Amplify AC to PAD range [-1, 1]
+_AC_AROUSAL_SCALE = 10.0     # Variance is small, need amplification
+_AC_DOMINANCE_SCALE = 2.0    # Controllability scaling
+_AC_PAD_BLEND = 0.6          # Blend: 60% AC-derived, 40% text-inferred
+
+
+def compute_pad_from_ac() -> dict:
+    """Compute PAD dimensions from Affective Charge (Sprint 4, item 4.2).
+
+    P = sign(AC) * |AC| * scale  (valence from policy shift direction)
+    A = sqrt(Var(AC_history)) * scale  (arousal from policy volatility)
+    D = controllability estimate  (how much actions change outcomes)
+
+    Returns {pleasure, arousal, dominance, ac, ac_variance, controllability}.
+    Returns None if AC not available yet.
+    """
+    try:
+        from modules.active_inference_integration import get_last_ac, get_ac_history, get_model
+        from modules.active_inference import get_current_state, ALL_ACTIONS
+
+        ac = get_last_ac()
+        ac_history = get_ac_history()
+
+        if not ac_history:
+            return None
+
+        # P: Pleasure from AC direction and magnitude
+        import math
+        pleasure = max(-1.0, min(1.0, ac * _AC_PLEASURE_SCALE))
+
+        # A: Arousal from AC variance (high variance = volatile = aroused)
+        if len(ac_history) >= 3:
+            mean_ac = sum(ac_history) / len(ac_history)
+            variance = sum((x - mean_ac) ** 2 for x in ac_history) / len(ac_history)
+            arousal = max(-1.0, min(1.0, math.sqrt(variance) * _AC_AROUSAL_SCALE))
+        else:
+            arousal = abs(ac) * 0.5  # Fallback: magnitude as proxy
+
+        # D: Controllability = how much actions differ in EFE
+        # High spread = actions matter = high control (Huys & Dayan 2009)
+        try:
+            model = get_model()
+            state = get_current_state()
+            from modules.active_inference import compute_efe
+            efes = [compute_efe(state, a, model) for a in ALL_ACTIONS]
+            if len(efes) >= 2:
+                efe_spread = max(efes) - min(efes)
+                dominance = max(-1.0, min(1.0, efe_spread * _AC_DOMINANCE_SCALE - 0.5))
+            else:
+                dominance = 0.0
+        except Exception:
+            dominance = 0.0
+
+        return {
+            "pleasure": round(pleasure, 4),
+            "arousal": round(arousal, 4),
+            "dominance": round(dominance, 4),
+            "ac": round(ac, 4),
+            "ac_variance": round(variance if len(ac_history) >= 3 else 0.0, 6),
+            "controllability": round(dominance, 4),
+        }
+    except Exception:
+        return None
+
+
+def _on_affective_charge(data: dict):
+    """Event handler: update PAD from Affective Charge.
+
+    Sprint 4, item 4.2: AC-derived PAD blended with text-inferred PAD.
+    This replaces the purely keyword-driven emotion system with one
+    grounded in inference dynamics.
+    """
+    try:
+        ac_pad = compute_pad_from_ac()
+        if ac_pad is None:
+            return
+
+        global _emotional_state
+        current = _emotional_state["current"]
+
+        # Blend AC-derived PAD with current state
+        new_p = _clamp_pad_value(
+            current["pleasure"] * (1 - _AC_PAD_BLEND) + ac_pad["pleasure"] * _AC_PAD_BLEND
+        )
+        new_a = _clamp_pad_value(
+            current["arousal"] * (1 - _AC_PAD_BLEND) + ac_pad["arousal"] * _AC_PAD_BLEND
+        )
+        new_d = _clamp_pad_value(
+            current["dominance"] * (1 - _AC_PAD_BLEND) + ac_pad["dominance"] * _AC_PAD_BLEND
+        )
+
+        # Only update if there's meaningful change (avoid noise)
+        delta = abs(new_p - current["pleasure"]) + abs(new_a - current["arousal"]) + abs(new_d - current["dominance"])
+        if delta < 0.01:
+            return
+
+        _emotional_state["history"].append(current.copy())
+        _emotional_state["history"] = _emotional_state["history"][-20:]
+
+        _emotional_state["current"] = {
+            "pleasure": new_p,
+            "arousal": new_a,
+            "dominance": new_d,
+            "timestamp": now_iso(),
+            "trigger": f"affective_charge:{data.get('action', '')}",
+        }
+
+        # Emit for downstream (wiring, etc.)
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.EMOTION_CHANGED, {
+            "source": "affective_charge",
+            "pleasure": new_p, "arousal": new_a, "dominance": new_d,
+            "emotion": _classify_emotion(new_p, new_a, new_d),
+            "intensity": round(_calculate_emotional_intensity(new_p, new_a, new_d), 2),
+            "trigger": f"ac={data.get('ac', 0):.3f}",
+        })
+    except Exception:
+        pass
+
+
 def _on_memory_stored(data: dict):
     """Event handler: auto-evolve PAD when a memory is stored.
 
@@ -707,3 +842,6 @@ def register_tools(mcp):
     # Wire PAD auto-evolution to memory storage events
     from modules.events import event_bus, Events
     event_bus.on(Events.MEMORY_STORED, _on_memory_stored)
+
+    # Sprint 4, item 4.2: Wire AC → PAD
+    event_bus.on(Events.AFFECTIVE_CHARGE_COMPUTED, _on_affective_charge)

@@ -77,7 +77,8 @@ def _cosine_similarity(a: list, b: list) -> float:
 
 def _consolidation_conn():
     """Get SQLite connection for consolidation tables."""
-    return sqlite3.connect(FTS_DB_PATH)
+    from modules.config import connect_fts
+    return connect_fts()
 
 
 def init_consolidation_db():

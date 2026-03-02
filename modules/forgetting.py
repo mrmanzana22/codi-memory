@@ -30,12 +30,19 @@ _logger = logging.getLogger(__name__)
 # FADEM CONSTANTS
 # ============================================================
 
-# Base decay rate (per hour^beta). Calibrated so a medium-importance
-# unconsolidated memory loses ~50% salience in 24h with no access.
+# Base decay rate. Calibrated so a medium-importance
+# unconsolidated memory loses ~40-55% salience in 24h with no access.
 FADEM_LAMBDA_BASE = 0.008
 
-# Importance sensitivity: higher = importance protects more
-FADEM_MU = 0.5
+# S0-04: Power-law scaling factor. Power-law form (1+alpha*t)^{-d} needs
+# higher alpha than exp(-lambda*t^beta) to achieve similar 24h targets.
+# Wixted & Ebbesen 1991: power-law fits LTM better than exponential.
+FADEM_PL_SCALE = 6.0
+
+# Importance sensitivity: higher = importance protects more.
+# S0-04: Increased from 0.5 to 1.0 for power-law form (needs wider spread
+# between importance levels since power-law has narrower dynamic range).
+FADEM_MU = 1.0
 
 # Minimum salience floor (memories never fully disappear)
 FADEM_FLOOR = 0.1
@@ -43,15 +50,16 @@ FADEM_FLOOR = 0.1
 # Shape parameter (beta) by consolidation/type
 # Lower beta = slower decay (sub-linear time progression)
 FADEM_BETA = {
-    "consolidated_semantic": 0.5,    # Bahrick 1984 permastore
-    "consolidated_episodic": 0.8,    # Consolidated episodic
+    "consolidated_semantic": 0.25,   # Bahrick 1984 permastore (power-law fat tail)
+    "consolidated_episodic": 0.6,    # Consolidated episodic (lowered from 0.8 for power-law)
     "unconsolidated": 1.2,           # Fast decay (Tononi & Cirelli 2003)
     "default": 1.0,                  # Unknown status
 }
 
 # Importance mapping for decay modulation
+# Proposal #66 Fix 2: Boost critical protection (safety net for future removal of must_not)
 FADEM_IMPORTANCE = {
-    "critical": 1.0,
+    "critical": 1.5,
     "high": 0.8,
     "medium": 0.5,
     "low": 0.2,
@@ -106,8 +114,14 @@ def compute_fadem_strength(
     else:
         beta = FADEM_BETA["unconsolidated"]
 
-    # Step 3: Core FadeMem formula
-    decay_factor = math.exp(-lambda_i * (hours_since_access ** beta))
+    # Step 3: Core FadeMem formula — Power-law (S0-04, G-INV-06)
+    # Was: stretched exponential exp(-λ*t^β) — contradicted docstring.
+    # Now: power-law R(t) = (1 + α*t)^{-β} (Wixted & Ebbesen 1991)
+    # α = lambda_i * PL_SCALE (recalibrated for power-law form)
+    # Properties: faster initial decay, fat tail (slower long-term than exp).
+    # Anderson & Schooler 1991: environmental statistics are power-law.
+    alpha = lambda_i * FADEM_PL_SCALE
+    decay_factor = (1.0 + alpha * hours_since_access) ** (-beta)
 
     # Step 4: Emotional protection (high arousal memories decay slower)
     if emotional_arousal > FADEM_AROUSAL_THRESHOLD:
@@ -119,6 +133,97 @@ def compute_fadem_strength(
 
     new_salience = current_salience * decay_factor
     return max(FADEM_FLOOR, new_salience)
+
+
+# ============================================================
+# K.1.4: DUAL STRENGTH MODEL (SS/RS)
+# Bjork & Bjork 1992: "A New Theory of Disuse"
+# ============================================================
+
+# Learning rate for SS growth per retrieval
+SS_LEARNING_RATE = 0.15
+
+# Base decay rate for RS (before SS modulation)
+RS_BASE_DECAY = 0.01
+
+# RS power-law scale (matches FADEM_PL_SCALE)
+RS_PL_SCALE = 6.0
+
+
+def compute_fadem_strength_ss_rs(
+    ss: float,
+    rs: float,
+    hours_since_access: float,
+    importance: str = "medium",
+    consolidated: bool = False,
+    memory_type: str = "episodic",
+    emotional_arousal: float = 0.0,
+    retrieval_event: bool = False,
+) -> tuple:
+    """Compute dual-strength decay using SS/RS model (Bjork & Bjork 1992).
+
+    K.1.4: Adds Storage Strength (SS) and Retrieval Strength (RS) as
+    independent memory dimensions. SS grows monotonically with retrievals;
+    RS decays with power-law but inversely proportional to SS.
+
+    The "spacing effect" emerges naturally: low RS at retrieval time
+    means higher difficulty bonus for SS growth.
+
+    Args:
+        ss: Storage Strength (0-1, grows monotonically)
+        rs: Retrieval Strength (0-1, decays over time)
+        hours_since_access: Hours since last retrieval
+        importance: narrative_importance level
+        consolidated: Whether the memory has been consolidated
+        memory_type: "episodic" or "semantic"
+        emotional_arousal: abs(arousal) from PAD at encoding (0-1)
+        retrieval_event: If True, update SS and reset RS (retrieval just happened)
+
+    Returns:
+        Tuple of (new_ss, new_rs, effective_strength)
+        effective_strength is the combined accessibility score (0-1).
+    """
+    # Step 1: Handle retrieval event (SS grows, RS resets)
+    if retrieval_event:
+        # Desirable difficulty: low RS → harder retrieval → more SS learning
+        difficulty_bonus = max(0.5, 1.5 - rs)
+        ss_new = ss + (1.0 - ss) * SS_LEARNING_RATE * difficulty_bonus
+        rs_new = 1.0  # Full retrieval strength after successful retrieval
+        effective = rs_new * (0.7 + 0.3 * ss_new)
+        return (min(1.0, ss_new), rs_new, min(1.0, effective))
+
+    if hours_since_access <= 0:
+        effective = rs * (0.7 + 0.3 * ss)
+        return (ss, rs, min(1.0, effective))
+
+    # Step 2: RS decay — inversely proportional to SS (Bjork & Bjork 1992)
+    # High SS → slower RS decay (well-stored memories are easier to re-access)
+    imp = FADEM_IMPORTANCE.get(importance, 0.5)
+    lambda_rs = RS_BASE_DECAY * math.exp(-FADEM_MU * imp) * max(0.1, ss) ** (-0.5)
+
+    # Beta by consolidation status
+    if consolidated:
+        beta = FADEM_BETA["consolidated_semantic"] if memory_type == "semantic" else FADEM_BETA["consolidated_episodic"]
+    else:
+        beta = FADEM_BETA["unconsolidated"]
+
+    # Power-law RS decay: RS(t) = RS_0 * (1 + α*t)^{-β}
+    alpha = lambda_rs * RS_PL_SCALE
+    decay_factor = (1.0 + alpha * hours_since_access) ** (-beta)
+
+    # Emotional protection (same as FadeMem)
+    if emotional_arousal > FADEM_AROUSAL_THRESHOLD:
+        shield = (emotional_arousal - FADEM_AROUSAL_THRESHOLD) / (1.0 - FADEM_AROUSAL_THRESHOLD)
+        shield *= FADEM_AROUSAL_SHIELD_MAX
+        decay_factor = 1.0 - (1.0 - decay_factor) * (1.0 - shield)
+
+    rs_new = max(FADEM_FLOOR, rs * decay_factor)
+
+    # SS is unchanged (only grows on retrieval)
+    # Effective strength: RS determines accessibility, SS adds resilience
+    effective = rs_new * (0.7 + 0.3 * ss)
+
+    return (ss, rs_new, min(1.0, effective))
 
 
 def _get_hours_since_access(payload: dict) -> Optional[float]:
@@ -250,12 +355,19 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
             with_payload=True,
         )
 
-        # Identify competitors: similar but NOT retrieved, not critical
+        # Identify competitors: similar but NOT retrieved, not critical, not chain members
+        # Sprint 1 spec: causal chain members resist inhibition (preserve causal structure)
         retrieved_set = set(str(rid) for rid in retrieved_ids)
+        try:
+            from modules.spreading import get_chain_member_ids
+            _chain_ids = get_chain_member_ids()
+        except Exception:
+            _chain_ids = set()
         competitors = [
             n for n in neighbors
             if str(n.id) not in retrieved_set
             and n.payload.get('narrative_importance') != 'critical'
+            and str(n.id) not in _chain_ids
         ]
 
         if not competitors:

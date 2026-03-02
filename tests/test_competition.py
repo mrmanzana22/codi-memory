@@ -9,6 +9,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import random
 import pytest
 from modules.competition import (
     CompetitionCandidate,
@@ -19,9 +20,24 @@ from modules.competition import (
     ATTENTION_FOCUS_BONUS,
     IGNITION_THRESHOLD,
     COALITION_TOPIC_BONUS,
-    AMPLIFICATION_GAIN,
-    LATERAL_INHIBITION,
+    N_AMPLIFICATION_PASSES,
+    W_RECURRENT,
+    W_LATERAL_INHIBITION,
 )
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_softmax(monkeypatch):
+    """Make softmax near-deterministic for tests (S2-03).
+
+    Temperature=100 makes P(argmax) > 99.99%, so tests can assert
+    deterministic ordering while production uses T=8 for exploration.
+    """
+    import modules.competition as comp
+    monkeypatch.setattr(comp, "SOFTMAX_TEMPERATURE", 100.0)
+    random.seed(42)
+    yield
+    random.seed()
 
 
 def _make_candidate(domain="episodic", activation=0.5, content="test", **kwargs):
@@ -40,7 +56,7 @@ def _make_candidate(domain="episodic", activation=0.5, content="test", **kwargs)
 
 class TestBasicCompetition:
     def test_winners_are_highest_activation(self):
-        """Top N by activation should win (top winner gets amplified)."""
+        """Top N by activation should win (top winner ignites via S3-01)."""
         candidates = [
             _make_candidate(activation=0.3),
             _make_candidate(activation=0.9),
@@ -50,8 +66,8 @@ class TestBasicCompetition:
         ]
         result = run_workspace_competition(candidates, slots=3)
         assert len(result.winners) == 3
-        # Top winner gets amplified (0.9 + 0.15 = 1.0 capped)
-        assert result.winners[0].activation == pytest.approx(min(1.0, 0.9 + AMPLIFICATION_GAIN))
+        # S3-01: Top winner ignites to near 1.0 via iterative amplification
+        assert result.winners[0].activation >= 0.99
         assert result.winners[1].activation == pytest.approx(0.7)
         assert result.winners[2].activation == pytest.approx(0.5)
 
@@ -95,7 +111,7 @@ class TestSlotConfig:
         assert len(result.winners) == 2
 
     def test_slots_one(self):
-        """Single slot = only the absolute winner (amplified)."""
+        """Single slot = only the absolute winner (ignited via S3-01)."""
         candidates = [
             _make_candidate(activation=0.3),
             _make_candidate(activation=0.9),
@@ -103,7 +119,7 @@ class TestSlotConfig:
         ]
         result = run_workspace_competition(candidates, slots=1)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == pytest.approx(min(1.0, 0.9 + AMPLIFICATION_GAIN))
+        assert result.winners[0].activation >= 0.99  # Ignited
 
 
 # ============================================================
@@ -164,11 +180,11 @@ class TestAttentionBonus:
         assert c.activation <= 1.0
 
     def test_no_focus_no_bonus(self):
-        """Without current_focus, no attention bonus (but amplification still applies)."""
+        """Without current_focus, no attention bonus (but ignition still applies)."""
         c = _make_candidate(activation=0.50, metadata={"topic": "trading"})
         run_workspace_competition([c], slots=1, current_focus=None)
-        # No attention bonus, but top winner gets amplification
-        assert c.activation == pytest.approx(0.50 + AMPLIFICATION_GAIN)
+        # No attention bonus, but top winner ignites via S3-01
+        assert c.activation >= 0.90
 
 
 # ============================================================
@@ -218,14 +234,15 @@ class TestIgnitionThreshold:
         assert len(result.losers) == 3
 
     def test_threshold_boundary(self):
-        """Candidate at exactly IGNITION_THRESHOLD should be a winner (amplified)."""
+        """Candidate at exactly IGNITION_THRESHOLD should ignite (S3-01)."""
         candidates = [
             _make_candidate(activation=IGNITION_THRESHOLD),
             _make_candidate(activation=0.1),
         ]
         result = run_workspace_competition(candidates, slots=5)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == pytest.approx(IGNITION_THRESHOLD + AMPLIFICATION_GAIN)
+        # S3-01: Even at threshold, iterative amplification ignites to > 0.7
+        assert result.winners[0].activation >= 0.7
 
     def test_mix_above_below(self):
         """Only above-threshold candidates compete for slots."""
@@ -237,7 +254,8 @@ class TestIgnitionThreshold:
         ]
         result = run_workspace_competition(candidates, slots=1)
         assert len(result.winners) == 1
-        assert result.winners[0].activation == pytest.approx(0.8 + AMPLIFICATION_GAIN)
+        # S3-01: Winner ignites to near 1.0
+        assert result.winners[0].activation >= 0.95
         assert len(result.losers) == 3  # 1 above-threshold loser + 2 below
 
     def test_threshold_value(self):
@@ -250,27 +268,28 @@ class TestIgnitionThreshold:
 # ============================================================
 
 class TestCoalitionFormation:
-    def test_coalition_boosts_shared_topic(self):
-        """Candidates from 2+ domains on same topic get COALITION_TOPIC_BONUS."""
+    def test_coalition_boosts_diverse_topics(self):
+        """S0-03: Domain with 2+ different topics gets diversity bonus."""
+        # episodic domain covers trading AND fullempaques -> diversity bonus
         c1 = _make_candidate(domain="episodic", activation=0.40, metadata={"topic": "trading"})
-        c2 = _make_candidate(domain="prospective", activation=0.40, metadata={"topic": "trading"})
-        c3 = _make_candidate(domain="semantic", activation=0.50, metadata={"topic": "fullempaques"})
+        c2 = _make_candidate(domain="episodic", activation=0.40, metadata={"topic": "fullempaques"})
+        # semantic domain only covers one topic -> no bonus
+        c3 = _make_candidate(domain="semantic", activation=0.45, metadata={"topic": "consciencia"})
 
         result = run_workspace_competition([c1, c2, c3], slots=2)
-        # c1 and c2 share "trading" from 2 domains -> each gets +0.10 -> 0.50
-        # c3 is alone on "fullempaques" -> stays 0.50
-        # All three at 0.50, but c1 and c2 got boosted. Winners are the coalition members.
-        winner_topics = [w.metadata.get("topic") for w in result.winners]
-        assert winner_topics.count("trading") == 2
+        # c1 and c2 are episodic with 2 different topics -> each gets +0.10 -> 0.50
+        # c3 is alone in semantic -> stays 0.45
+        winner_domains = [w.source_domain for w in result.winners]
+        assert winner_domains.count("episodic") == 2
 
-    def test_no_coalition_same_domain(self):
-        """Same domain on same topic does NOT form coalition (need 2+ domains)."""
+    def test_no_coalition_single_topic(self):
+        """Same domain with only one topic does NOT get diversity bonus."""
         c1 = _make_candidate(domain="episodic", activation=0.40, metadata={"topic": "trading"})
         c2 = _make_candidate(domain="episodic", activation=0.40, metadata={"topic": "trading"})
         c3 = _make_candidate(domain="semantic", activation=0.45, metadata={"topic": "fullempaques"})
 
         result = run_workspace_competition([c1, c2, c3], slots=1)
-        # c1 and c2 are same domain, no coalition bonus
+        # episodic has 2 candidates but same topic -> no diversity bonus
         # c3 at 0.45 > c1/c2 at 0.40
         assert result.winners[0].metadata["topic"] == "fullempaques"
 
@@ -284,20 +303,22 @@ class TestCoalitionFormation:
 # ============================================================
 
 class TestRecurrentAmplification:
-    def test_winner_boosted(self):
-        """Top winner gets AMPLIFICATION_GAIN boost."""
+    def test_winner_ignites(self):
+        """S3-01: Top winner ignites to near 1.0 via iterative amplification."""
         winner = _make_candidate(activation=0.5)
         loser = _make_candidate(activation=0.3)
         apply_recurrent_amplification([winner], [loser])
-        assert winner.activation == pytest.approx(0.5 + AMPLIFICATION_GAIN)
+        assert winner.activation >= 0.90  # Ignited
+        assert winner.activation <= 1.0
 
     def test_losers_suppressed(self):
-        """All losers get LATERAL_INHIBITION penalty."""
+        """S3-01: All losers get lateral inhibition across N passes."""
         winner = _make_candidate(activation=0.8)
         losers = [_make_candidate(activation=0.4), _make_candidate(activation=0.3)]
         apply_recurrent_amplification([winner], losers)
-        assert losers[0].activation == pytest.approx(0.4 - LATERAL_INHIBITION)
-        assert losers[1].activation == pytest.approx(0.3 - LATERAL_INHIBITION)
+        # After 3 passes of inhibition proportional to winner, heavily suppressed
+        assert losers[0].activation < 0.15
+        assert losers[1].activation < 0.10
 
     def test_winner_capped_at_one(self):
         """Winner activation cannot exceed 1.0."""
@@ -316,7 +337,7 @@ class TestRecurrentAmplification:
         w1 = _make_candidate(activation=0.8)
         w2 = _make_candidate(activation=0.7)
         apply_recurrent_amplification([w1, w2], [])
-        assert w1.activation == pytest.approx(0.8 + AMPLIFICATION_GAIN)
+        assert w1.activation >= 0.95  # Ignited
         assert w2.activation == pytest.approx(0.7)  # Unchanged
 
     def test_empty_winners_no_crash(self):
@@ -329,17 +350,26 @@ class TestRecurrentAmplification:
         c2 = _make_candidate(activation=0.5)
         c3 = _make_candidate(activation=0.3)
         result = run_workspace_competition([c1, c2, c3], slots=1)
-        # Winner should be boosted above original 0.8
-        assert result.winners[0].activation > 0.8
-        # Losers should be suppressed below original
+        # S3-01: Winner ignites, losers suppressed to near 0
+        assert result.winners[0].activation >= 0.95
         for loser in result.losers:
-            if loser.activation > 0:  # Some may have hit floor
-                assert loser.activation < 0.5
+            assert loser.activation < 0.25
+
+    def test_bistable_ignition(self):
+        """S3-01: Even low activation above threshold ignites (Dehaene 2003)."""
+        winner = _make_candidate(activation=0.3)
+        losers = [_make_candidate(activation=0.25)]
+        apply_recurrent_amplification([winner], losers)
+        # Low activation still ignites through iterative passes
+        assert winner.activation >= 0.7
+        # Losers suppressed
+        assert losers[0].activation < 0.1
 
     def test_amplification_constants(self):
-        """Constants should be within expected ranges."""
-        assert 0.1 <= AMPLIFICATION_GAIN <= 0.3
-        assert 0.05 <= LATERAL_INHIBITION <= 0.25
+        """S3-01: Recurrent constants within expected ranges."""
+        assert N_AMPLIFICATION_PASSES >= 2
+        assert 0.5 <= W_RECURRENT <= 2.0
+        assert 0.05 <= W_LATERAL_INHIBITION <= 0.5
 
 
 # ============================================================

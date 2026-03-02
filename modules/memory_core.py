@@ -276,6 +276,88 @@ def _score_semantic_fact(fact: dict, current_pleasure: float = 0.0) -> float:
     return combined
 
 
+# Sprint 10: Default retrieval weights (fallback when topic has < 10 obs)
+_DEFAULT_W_VECTOR = 0.40
+_DEFAULT_W_BM25 = 0.15
+_DEFAULT_W_ACTIVATION = 0.45
+_MIN_OBS_FOR_ADAPTATION = 10  # Require at least 10 observations per topic
+
+
+def _get_retrieval_weights(topic: str) -> tuple:
+    """Sprint 10.4: Read per-topic retrieval weights from DB.
+
+    Returns (w_vector, w_bm25, w_activation). Falls back to defaults
+    if topic has fewer than MIN_OBS_FOR_ADAPTATION observations.
+
+    Gershman & Daw 2017: multi-armed bandit for retrieval channel selection.
+    """
+    try:
+        from modules.config import FTS_DB_PATH
+        from modules.db_pool import get_conn
+        import os
+        db = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
+        conn = get_conn(db)
+        row = conn.execute(
+            "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = ?",
+            (topic,)
+        ).fetchone()
+        if row and int(row[3]) >= _MIN_OBS_FOR_ADAPTATION:
+            return float(row[0]), float(row[1]), float(row[2])
+    except Exception:
+        pass
+    return _DEFAULT_W_VECTOR, _DEFAULT_W_BM25, _DEFAULT_W_ACTIVATION
+
+
+def _update_retrieval_weights(topic: str, winner_channel: str) -> None:
+    """Sprint 10.3: Bayesian multiplicative weight update for winning channel.
+
+    winner_channel: 'vector' | 'bm25' | 'activation'
+    Update: w_channel *= (1 + lr), then renormalize to sum=1.
+
+    Gershman & Daw 2017: reward-based weight adaptation.
+    """
+    _LEARNING_RATE = 0.05
+    try:
+        from modules.config import FTS_DB_PATH
+        from modules.db_pool import get_conn
+        from modules.utils import now_iso
+        import os
+        db = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
+        conn = get_conn(db)
+
+        # Read current weights
+        row = conn.execute(
+            "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = ?",
+            (topic,)
+        ).fetchone()
+
+        if row:
+            wv, wb, wa, n = float(row[0]), float(row[1]), float(row[2]), int(row[3])
+        else:
+            wv, wb, wa, n = _DEFAULT_W_VECTOR, _DEFAULT_W_BM25, _DEFAULT_W_ACTIVATION, 0
+
+        # Multiplicative reward update
+        if winner_channel == 'vector':
+            wv *= (1 + _LEARNING_RATE)
+        elif winner_channel == 'bm25':
+            wb *= (1 + _LEARNING_RATE)
+        elif winner_channel == 'activation':
+            wa *= (1 + _LEARNING_RATE)
+
+        # Renormalize to sum = 1
+        total = wv + wb + wa
+        if total > 0:
+            wv, wb, wa = wv / total, wb / total, wa / total
+
+        conn.execute("""
+            INSERT OR REPLACE INTO retrieval_weights (topic, w_vector, w_bm25, w_activation, n_updates, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (topic, round(wv, 4), round(wb, 4), round(wa, 4), n + 1, now_iso()))
+        conn.commit()
+    except Exception:
+        pass
+
+
 def search_memory(query: str, limit: int = 5) -> str:
     """
     Busca recuerdos relacionados con una consulta.
@@ -292,6 +374,9 @@ def search_memory(query: str, limit: int = 5) -> str:
     Semantic facts are labeled [FACT] in output for transparency.
     """
     try:
+        import time as _time
+        _search_start = _time.monotonic()
+
         # ============================================================
         # METACOGNITIVE CONTROL (HOT-3): FOK -> strategy adjustment
         # ============================================================
@@ -317,14 +402,38 @@ def search_memory(query: str, limit: int = 5) -> str:
             pass
 
         # ============================================================
+        # CHANNEL ALLOCATION: Thompson Sampling (S1-04, CC-8 per-topic)
+        # ============================================================
+        # Compute topic early for per-topic TS allocation (Canon v2, CC-8)
+        _query_topic = None
+        try:
+            from modules.retrieval_metadata import _get_topic_from_query
+            _query_topic = _get_topic_from_query(query)
+        except Exception:
+            pass
+
+        try:
+            from modules.thompson_sampling import sample_allocation
+            _alloc = sample_allocation(base_limit=limit, topic=_query_topic)
+            _k_vector = _alloc.get("vector", max(3, limit))
+            _k_bm25 = _alloc.get("bm25", max(4, limit))
+            _k_semantic = _alloc.get("semantic", max(2, limit // 2))
+        except Exception:
+            _k_vector = max(3, limit)
+            _k_bm25 = max(4, limit)
+            _k_semantic = max(2, limit // 2)
+
+        # ============================================================
         # CHANNEL 1: EPISODIC (vector + BM25 + ACT-R)
         # ============================================================
 
         # 1a. Busqueda vectorial (semantica) via mem0
-        vector_results = memory.search(query=query, user_id=USER_ID, limit=limit * 2)
+        # S1-04: K allocated by Thompson Sampling (was hardcoded S0-01).
+        vector_results = memory.search(query=query, user_id=USER_ID, limit=_k_vector)
 
         # 1b. Busqueda BM25 (keywords) via FTS5
-        bm25_results = search_fts(query, limit=limit * 4)
+        # S1-04: K allocated by Thompson Sampling.
+        bm25_results = search_fts(query, limit=_k_bm25)
 
         # 1c. Construir mapas de scores por memory_id
         vector_map = {}
@@ -351,7 +460,8 @@ def search_memory(query: str, limit: int = 5) -> str:
         # ============================================================
 
         # 2a. Search semantic store (safe: returns [] if empty or error)
-        semantic_results = search_semantic(query, limit=limit)
+        # S1-04: K allocated by Thompson Sampling.
+        semantic_results = search_semantic(query, limit=_k_semantic)
 
         # ============================================================
         # FUSION: Score and merge both channels
@@ -383,6 +493,9 @@ def search_memory(query: str, limit: int = 5) -> str:
         merged = []
         _emotion_gating_count = 0  # Track emotion influence on ranking (HOT-4)
 
+        # Sprint 10.4: Load per-topic retrieval weights (adaptive, falls back to defaults)
+        _w_vector, _w_bm25, _w_activation = _get_retrieval_weights(_query_topic or "general")
+
         # Score episodic memories
         for mid in episodic_ids:
             v_score = vector_map.get(mid, {}).get("vector_score", 0)
@@ -408,11 +521,11 @@ def search_memory(query: str, limit: int = 5) -> str:
             )
             activation = act_result.total
 
-            # Simplified fusion: unified scorer absorbs importance + emotion
+            # Sprint 10.4: Use adaptive per-topic weights (Gershman & Daw 2017)
             combined = (
-                0.40 * v_score +
-                0.15 * b_score +
-                0.45 * activation
+                _w_vector * v_score +
+                _w_bm25 * b_score +
+                _w_activation * activation
             )
 
             # 3C: State-dependent retrieval bonus (Godden & Baddeley 1975)
@@ -560,10 +673,18 @@ def search_memory(query: str, limit: int = 5) -> str:
                     except Exception:
                         mem_conf = None
 
+                    # S1-03: Storage Strength (Bjork & Bjork 1992)
+                    # SS is monotonically non-decreasing: +1/sqrt(n) diminishing returns
+                    import math
+                    old_ss = float(payload.get('storage_strength', 1.0) or 1.0)
+                    new_ss = old_ss + 1.0 / math.sqrt(max(1, access_count + 1))
+
                     update_fields = {
                         'attention_access_count': access_count + 1,
                         'attention_last_accessed': ts,
                         'access_timestamps': access_ts,
+                        'storage_strength': round(new_ss, 4),
+                        'retrieval_strength': 1.0,  # RS resets to max on access
                     }
                     if mem_conf is not None:
                         update_fields['memory_confidence'] = mem_conf
@@ -592,6 +713,57 @@ def search_memory(query: str, limit: int = 5) -> str:
         except Exception:
             pass
 
+        # S1-05: Log channel attributions for reward tracking
+        try:
+            from modules.reward_tracking import log_retrieval
+            channel_attrs = []
+            for item in merged:
+                mid = item["id"]
+                channels = []
+                if mid in vector_map:
+                    channels.append("vector")
+                if mid in bm25_map:
+                    channels.append("bm25")
+                if item["memory_type"] == "semantic":
+                    channels.append("semantic")
+                if channels:
+                    channel_attrs.append({"memory_id": mid, "channels": channels})
+            if channel_attrs:
+                log_retrieval(query, channel_attrs, topic=_query_topic or "general")
+        except Exception:
+            pass
+
+        # Sprint 10.2 + 10.3: Reward signal extraction + weight update
+        # Determine which channel dominated the top-3 results and reward it
+        try:
+            if merged:
+                _topic_key = _query_topic or "general"
+                # Count channel presence in top-3 results
+                _ch_counts = {"vector": 0, "bm25": 0, "activation": 0}
+                for item in merged[:3]:
+                    mid = item["id"]
+                    v = vector_map.get(mid, {}).get("vector_score", 0)
+                    b = bm25_map.get(mid, {}).get("bm25_score", 0)
+                    a = item.get("activation", 0)
+                    # Award the channel with highest individual contribution
+                    scores = {"vector": v * _w_vector, "bm25": b * _w_bm25, "activation": a * _w_activation}
+                    winner = max(scores, key=scores.get)
+                    _ch_counts[winner] += 1
+                # Top winner gets the reward
+                _overall_winner = max(_ch_counts, key=_ch_counts.get)
+                _update_retrieval_weights(_topic_key, _overall_winner)
+        except Exception:
+            pass
+
+        # S1-01: Update Beta-Binomial FOK prior with retrieval outcome
+        try:
+            from modules.retrieval_metadata import update_fok_prior
+            _topic = _query_topic or "general"
+            _success = retrieval_meta.coverage in ("comprehensive", "partial")
+            update_fok_prior(_topic, _success)
+        except Exception:
+            pass
+
         # Emit RETRIEVAL_QUALITY event (WIRING-7.4)
         try:
             event_bus.emit(Events.RETRIEVAL_QUALITY, {
@@ -606,9 +778,8 @@ def search_memory(query: str, limit: int = 5) -> str:
         # Log failed/weak searches for FOK estimation (WIRING-7.2)
         if retrieval_meta.result_count < 2 or retrieval_meta.top_activation < 0.3:
             try:
-                import sqlite3
-                from modules.config import FTS_DB_PATH
-                fts_conn = sqlite3.connect(FTS_DB_PATH)
+                from modules.config import connect_fts
+                fts_conn = connect_fts()
                 init_failed_searches_table(fts_conn)
                 topic = query.split()[0] if query.split() else ""
                 log_failed_search(fts_conn, query, retrieval_meta.result_count, retrieval_meta.top_activation, topic)
@@ -637,7 +808,7 @@ def search_memory(query: str, limit: int = 5) -> str:
                 )
             else:
                 # Format episodic memories (original format)
-                text = item["vector_result"].get("memory", "") if item["vector_result"] else item["bm25_text"]
+                text = item["bm25_text"] or (item["vector_result"].get("memory", "") if item["vector_result"] else "")
 
                 try:
                     payload = payload_map.get(str(mem_id), {}) or {}
@@ -713,6 +884,34 @@ def search_memory(query: str, limit: int = 5) -> str:
                 )
             except Exception:
                 pass
+
+        # ============================================================
+        # DECLARATIVE REASONING TRACE (Sprint 3, item 3.6)
+        # ============================================================
+        try:
+            from modules.self_model import log_reasoning_trace
+            _duration = (_time.monotonic() - _search_start) * 1000
+            _strategy = fok_control.get("strategy", "default") if fok_control else "default"
+            _fok_s = fok_control["fok"]["fok_score"] if fok_control else None
+            _fok_b = fok_control["fok"].get("basis", "") if fok_control else ""
+            _reason = (
+                f"FOK={_fok_s:.2f}" if _fok_s is not None else "no FOK"
+            ) + f" -> {_strategy}"
+            _outcome = retrieval_meta.coverage if retrieval_meta else "unknown"
+            _top = merged[0]["combined_score"] if merged else 0.0
+            log_reasoning_trace(
+                query=query,
+                strategy=_strategy,
+                strategy_reason=_reason,
+                fok_score=_fok_s,
+                fok_basis=_fok_b,
+                result_count=len(merged),
+                top_score=_top,
+                outcome=_outcome,
+                duration_ms=_duration,
+            )
+        except Exception:
+            pass
 
         header = "Recuerdos encontrados (hybrid+ACT-R+semantic):"
         if confidence_flag:
@@ -802,6 +1001,7 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
         # Proposal #54: Access tracking for timeline retrieves
         if _timeline_points:
             _track_scroll_access(_timeline_points)
+            _emit_retrieval_event(project, _timeline_points, source="timeline")
 
         # Ordenar por fecha (mas reciente primero)
         memories_with_dates.sort(key=lambda x: x['date_key'] or '', reverse=True)
@@ -1050,6 +1250,36 @@ def _track_scroll_access(points):
         pass
 
 
+def _emit_retrieval_event(query: str, points, source: str = "scroll"):
+    """Emit MEMORY_RETRIEVED event for non-search_memory retrieval paths.
+
+    Proposal #67: Makes all retrieval paths visible to event bus so
+    spreading activation, RIF, and attention schema see all retrievals.
+    Anderson, Bjork & Bjork 1994: RIF should apply to ALL retrieval paths.
+
+    Args:
+        query: Search context or function name
+        points: Qdrant ScoredPoint or Record list
+        source: Retrieval type for downstream discrimination
+    """
+    if not points:
+        return
+    try:
+        from modules.events import event_bus, Events
+        retrieved_ids = [str(p.id) for p in points[:20]]
+        event_bus.emit(Events.MEMORY_RETRIEVED, {
+            'query': query,
+            'result_count': len(points),
+            'episodic_count': len(points),
+            'semantic_count': 0,
+            'top_activation': 0.5,
+            'retrieved_ids': retrieved_ids,
+            'source': source,
+        })
+    except Exception:
+        pass
+
+
 # ============================================================
 # OWNERSHIP TOOLS
 # ============================================================
@@ -1102,6 +1332,7 @@ def search_by_ownership(source: str = None, min_confidence: float = 0.0,
             return "No encontre memorias con esos filtros."
 
         _track_scroll_access(points)
+        _emit_retrieval_event(f"ownership:{source}", points, source="ownership")
 
         lines = [f"Encontradas {len(points)} memorias:"]
         for p in points:
@@ -1135,6 +1366,7 @@ def get_my_experiences(limit: int = 10) -> str:
             return "No encontre experiencias propias."
 
         _track_scroll_access(points)
+        _emit_retrieval_event("my_experiences", points, source="experiences")
 
         lines = [f"Mis {len(points)} experiencias vividas:"]
         for p in points:
@@ -1166,6 +1398,7 @@ def get_critical_memories() -> str:
             return "No hay memorias criticas."
 
         _track_scroll_access(points)
+        _emit_retrieval_event("critical_memories", points, source="critical")
 
         lines = [f"Memorias CRITICAS ({len(points)}):"]
         for p in points:
@@ -1200,6 +1433,7 @@ def search_by_theme(theme: str, limit: int = 10) -> str:
             return f"No encontre memorias sobre '{theme}'."
 
         _track_scroll_access(points)
+        _emit_retrieval_event(f"theme:{theme}", points, source="theme")
 
         lines = [f"Memorias sobre '{theme}' ({len(points)}):"]
         for p in points:

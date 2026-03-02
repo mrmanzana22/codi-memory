@@ -6,6 +6,7 @@ Self-discrepancy detection (Higgins 1987).
 """
 
 import inspect
+import json
 import os
 import sqlite3
 
@@ -13,10 +14,11 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 
 from modules.config import (
     memory, qdrant, USER_ID, COLLECTION_NAME,
-    now_iso, now_short, FTS_DB_PATH,
+    now_iso, now_short, FTS_DB_PATH, connect_fts,
 )
 from modules.secret_redact import redact_secrets
 from modules.access_tracking import record_access
+from modules.memory_smart import search_with_fts_content
 from modules.qdrant_utils import scroll_all
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
@@ -31,6 +33,8 @@ __all__ = [
     "_legacy_assess_butlin",
     "update_self_model",
     "get_self_model_summary",
+    "log_reasoning_trace",
+    "get_reasoning_traces",
     "register_tools",
 ]
 
@@ -124,7 +128,7 @@ def assess_confidence(topic: str) -> str:
         topic: El tema sobre el cual evaluar mi confianza
     """
     try:
-        search_results = memory.search(query=topic, user_id=USER_ID, limit=15)
+        search_results = search_with_fts_content(query=topic, user_id=USER_ID, limit=15)
         if not search_results or not search_results.get("results"):
             return f"No tengo memorias sobre '{topic}'. Mi confianza es 0 - no se nada al respecto."
 
@@ -195,7 +199,7 @@ def identify_knowledge_gaps() -> str:
             from modules.config import FTS_DB_PATH
             import os
             if os.path.exists(FTS_DB_PATH):
-                fts_conn = sqlite3.connect(FTS_DB_PATH)
+                fts_conn = connect_fts()
                 from modules.retrieval_metadata import get_top_failed_topics
                 for topic, _count in get_top_failed_topics(fts_conn, limit=5):
                     if topic:
@@ -807,24 +811,61 @@ def detect_self_discrepancies() -> dict:
         return {"discrepancies": [], "count": 0, "summary": "no data"}
 
     try:
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn = connect_fts()
         _init_discrepancy_table(conn)
 
         # 1. FOK Calibration discrepancy (Nelson & Narens 1990)
+        # S2-06: Measure RESIDUAL bias = raw * (1 - cf) instead of raw bias.
+        # This closes the metacognitive control loop: monitor measures what
+        # control couldn't fix, not the original error.
         try:
             from modules.retrieval_metadata import get_fok_calibration
             cal = get_fok_calibration(fts_db_path=FTS_DB_PATH)
             if cal["n_records"] >= 10:
-                bias = cal["overconfidence_bias"]
+                raw_bias = cal["overconfidence_bias"]
                 mae = cal["mean_absolute_error"]
-                if abs(bias) > 0.15:
-                    disc_type = "overconfident" if bias > 0 else "underconfident"
+                # Get correction factor from metamemory_params
+                correction_factor = 0.5
+                try:
+                    _cf_row = conn.execute(
+                        "SELECT value FROM metamemory_params "
+                        "WHERE param = 'fok_correction_factor'"
+                    ).fetchone()
+                    if _cf_row:
+                        correction_factor = float(_cf_row[0])
+                except Exception:
+                    pass
+                # Residual = what's left after correction
+                residual_bias = raw_bias * (1.0 - correction_factor)
+                if abs(residual_bias) > 0.10:
+                    disc_type = "overconfident" if residual_bias > 0 else "underconfident"
                     discrepancies.append({
                         "domain": "metacognition",
-                        "expected": "calibrated FOK (bias ~0)",
-                        "actual": f"bias={bias:.3f}, MAE={mae:.3f}",
+                        "expected": "calibrated FOK (residual bias ~0)",
+                        "actual": f"raw_bias={raw_bias:.3f}, cf={correction_factor:.2f}, "
+                                  f"residual={residual_bias:.3f}, MAE={mae:.3f}",
                         "discrepancy_type": f"actual/ideal ({disc_type})",
-                        "magnitude": abs(bias),
+                        "magnitude": abs(residual_bias),
+                    })
+        except Exception:
+            pass
+
+        # 1b. FOK Resolution via gamma (Nelson 1984, Canon v2 I-top, S3-2)
+        # Resolution = does higher FOK predict better outcomes?
+        try:
+            from modules.retrieval_metadata import get_fok_resolution
+            res = get_fok_resolution(fts_db_path=FTS_DB_PATH)
+            if res["n_records"] >= 10:
+                gamma = res["gamma"]
+                if gamma < 0.3:
+                    discrepancies.append({
+                        "domain": "metacognition",
+                        "expected": "FOK resolution gamma >= 0.3",
+                        "actual": f"gamma={gamma:.3f} (C={res['concordant']}, "
+                                  f"D={res['discordant']}, T={res['tied']}, "
+                                  f"n={res['n_records']})",
+                        "discrepancy_type": "actual/ideal (poor resolution)",
+                        "magnitude": max(0.0, 0.3 - gamma),
                     })
         except Exception:
             pass
@@ -851,6 +892,76 @@ def detect_self_discrepancies() -> dict:
                         "discrepancy_type": "actual/ought" if trend < 0 else "positive",
                         "magnitude": abs(trend),
                     })
+        except Exception:
+            pass
+
+        # 2b. L2 Hierarchy Integration (Sprint 3, item 3.1)
+        # Read per-domain accuracy from prediction_state_l2 (populated by pre-turn hook)
+        # Metacognition IS the hierarchy: L2 data = metacognitive monitoring data
+        try:
+            l2_rows = conn.execute("""
+                SELECT domain, predicted_accuracy, actual_accuracy, sample_size
+                FROM prediction_state_l2
+                WHERE sample_size >= 5
+            """).fetchall()
+            for domain, pred_acc, actual_acc, n in l2_rows:
+                divergence = abs(pred_acc - actual_acc)
+                if divergence > 0.15:
+                    direction = "overconfident" if pred_acc > actual_acc else "underconfident"
+                    discrepancies.append({
+                        "domain": f"L2:{domain}",
+                        "expected": f"self-predicted accuracy {pred_acc:.0%}",
+                        "actual": f"actual accuracy {actual_acc:.0%} (n={n})",
+                        "discrepancy_type": f"actual/ideal ({direction})",
+                        "magnitude": divergence,
+                    })
+        except Exception:
+            pass
+
+        # 2c. PE Hierarchy Consistency Check (Sprint 3, item 3.1)
+        # Friston 2008: PE should decrease upward (L0 > L1 > L2)
+        # Precision should increase upward (pi_L0 < pi_L1 < pi_L2)
+        try:
+            # Average PE per level from recent results
+            pe_l0 = conn.execute("""
+                SELECT AVG(weighted_surprise) FROM (
+                    SELECT weighted_surprise FROM prediction_results
+                    WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                    ORDER BY id DESC LIMIT 20
+                )
+            """).fetchone()
+            pe_l1 = conn.execute("""
+                SELECT AVG(weighted_pe_l1) FROM (
+                    SELECT weighted_pe_l1 FROM prediction_results_l1
+                    WHERE weighted_pe_l1 IS NOT NULL
+                    ORDER BY id DESC LIMIT 20
+                )
+            """).fetchone()
+            pe_l2 = conn.execute("""
+                SELECT AVG(weighted_pe_l2) FROM (
+                    SELECT weighted_pe_l2 FROM prediction_results_l2
+                    WHERE weighted_pe_l2 IS NOT NULL
+                    ORDER BY id DESC LIMIT 20
+                )
+            """).fetchone()
+
+            avg_pe = {}
+            if pe_l0 and pe_l0[0] is not None:
+                avg_pe['L0'] = pe_l0[0]
+            if pe_l1 and pe_l1[0] is not None:
+                avg_pe['L1'] = pe_l1[0]
+            if pe_l2 and pe_l2[0] is not None:
+                avg_pe['L2'] = pe_l2[0]
+
+            # Check hierarchy invariant: PE_L0 >= PE_L1 >= PE_L2
+            if 'L0' in avg_pe and 'L1' in avg_pe and avg_pe['L1'] > avg_pe['L0'] * 1.2:
+                discrepancies.append({
+                    "domain": "hierarchy",
+                    "expected": f"PE_L1 <= PE_L0 (higher levels more stable)",
+                    "actual": f"PE_L0={avg_pe['L0']:.3f}, PE_L1={avg_pe['L1']:.3f}",
+                    "discrepancy_type": "actual/ought (hierarchy violation)",
+                    "magnitude": avg_pe['L1'] - avg_pe['L0'],
+                })
         except Exception:
             pass
 
@@ -965,6 +1076,34 @@ def detect_self_discrepancies() -> dict:
             except Exception:
                 pass
 
+        # Control 1b: L2 domain accuracy correction (Sprint 3, item 3.1)
+        # When L2 detects over/underconfidence per domain, nudge predicted_accuracy
+        # toward reality. This is the L2→L0 backward correction signal.
+        # Nelson & Narens 1990: monitoring → control loop.
+        l2_discs = [d for d in discrepancies if d["domain"].startswith("L2:")]
+        for ld in l2_discs:
+            try:
+                domain = ld["domain"].replace("L2:", "")
+                l2_row = conn.execute(
+                    "SELECT predicted_accuracy, actual_accuracy FROM prediction_state_l2 WHERE domain = ?",
+                    (domain,)
+                ).fetchone()
+                if l2_row:
+                    pred, actual = l2_row
+                    # Stronger correction than normal EMA: jump 30% toward actual
+                    corrected = pred + 0.3 * (actual - pred)
+                    conn.execute(
+                        "UPDATE prediction_state_l2 SET predicted_accuracy = ?, last_updated = ? WHERE domain = ?",
+                        (corrected, ts, domain)
+                    )
+            except Exception:
+                pass
+        if l2_discs:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+
         # Control 2: Prediction trend → working memory (conscious awareness)
         pred_discs = [d for d in discrepancies if d["domain"] == "prediction"]
         for pd in pred_discs:
@@ -1017,6 +1156,183 @@ def detect_self_discrepancies() -> dict:
         "count": len(discrepancies),
         "summary": summary,
     }
+
+
+# ============================================================
+# DECLARATIVE REASONING TRACES (Sprint 3, item 3.6)
+# ============================================================
+# Log metacognitive decisions so the system can reason about its own reasoning.
+# Each trace records: what query, what strategy was chosen, why, FOK input, outcome.
+# Flavell 1979: metacognition = knowledge about cognition + regulation of cognition.
+# These traces are the "knowledge about cognition" component.
+
+def _init_reasoning_traces_table(conn):
+    """Ensure metacognition_traces table exists."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS metacognition_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            query TEXT NOT NULL,
+            strategy_chosen TEXT,
+            strategy_reason TEXT,
+            fok_score REAL,
+            fok_basis TEXT,
+            result_count INTEGER DEFAULT 0,
+            top_score REAL DEFAULT 0.0,
+            outcome TEXT,
+            duration_ms REAL DEFAULT 0.0,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+
+
+def log_reasoning_trace(query: str, strategy: str, strategy_reason: str,
+                        fok_score: float = None, fok_basis: str = "",
+                        result_count: int = 0, top_score: float = 0.0,
+                        outcome: str = "", duration_ms: float = 0.0):
+    """Log a metacognitive reasoning trace.
+
+    Called after each search_memory to record the full decision chain:
+    query -> FOK -> strategy -> outcome.
+    Keeps max 1000 rows (FIFO cleanup).
+    """
+    try:
+        conn = connect_fts()
+        _init_reasoning_traces_table(conn)
+
+        conn.execute("""
+            INSERT INTO metacognition_traces
+            (query, strategy_chosen, strategy_reason, fok_score, fok_basis,
+             result_count, top_score, outcome, duration_ms, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            query[:200],
+            strategy,
+            strategy_reason,
+            fok_score,
+            fok_basis[:200] if fok_basis else "",
+            result_count,
+            top_score,
+            outcome,
+            duration_ms,
+            now_iso(),
+        ))
+
+        # FIFO cleanup: keep max 1000
+        conn.execute("""
+            DELETE FROM metacognition_traces
+            WHERE id NOT IN (
+                SELECT id FROM metacognition_traces ORDER BY id DESC LIMIT 1000
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_reasoning_traces(limit: int = 20) -> list:
+    """Retrieve recent reasoning traces for self-reflection.
+
+    Returns list of trace dicts, newest first.
+    """
+    try:
+        conn = connect_fts()
+        _init_reasoning_traces_table(conn)
+        rows = conn.execute("""
+            SELECT query, strategy_chosen, strategy_reason, fok_score,
+                   result_count, top_score, outcome, duration_ms, created_at
+            FROM metacognition_traces
+            ORDER BY id DESC LIMIT ?
+        """, (min(limit, 100),)).fetchall()
+        conn.close()
+        return [
+            {
+                "query": r[0],
+                "strategy": r[1],
+                "reason": r[2],
+                "fok_score": r[3],
+                "result_count": r[4],
+                "top_score": r[5],
+                "outcome": r[6],
+                "duration_ms": r[7],
+                "created_at": r[8],
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def get_self_as_agent_model():
+    """Return self-model in shared AgentModel format (Sprint 3, item 3.4).
+
+    Graziano 2013 AST symmetry: self-model uses same architecture as user-model.
+    This allows comparing and relating self and other models.
+    """
+    from modules.agent_model import AgentModel, AgentTraits, AgentState, AgentPredictions
+
+    traits = AgentTraits(
+        name="Codi",
+        role="CTO",
+        personality={
+            "analytical": 0.95,
+            "direct": 0.90,
+            "curious": 0.85,
+            "systematic": 0.90,
+        },
+        preferences={
+            "communication": "direct, technical, honest",
+            "coding": "incremental, test-driven",
+            "language": "es-informal (parcero, hermano)",
+        },
+    )
+
+    state = AgentState()
+    predictions = AgentPredictions()
+
+    # Enrich from L2 prediction data
+    try:
+        conn = connect_fts()
+
+        # Capabilities from L2 accuracy
+        rows = conn.execute("""
+            SELECT domain, actual_accuracy, sample_size
+            FROM prediction_state_l2 WHERE sample_size >= 5
+        """).fetchall()
+        for domain, acc, n in rows:
+            traits.capabilities[domain] = round(acc, 2)
+
+        # Current state from session
+        row = conn.execute("""
+            SELECT last_topic, goal_locked, goal_topics
+            FROM prediction_state_l1 WHERE id = 1
+        """).fetchone()
+        if row:
+            state.current_topic = row[0] or ""
+            if row[1] and row[2]:
+                goals = json.loads(row[2])
+                if goals:
+                    state.current_goal = max(goals, key=goals.get)
+
+        # Predictions from L0
+        row = conn.execute("""
+            SELECT predicted_topic, confidence FROM prediction_state WHERE id = 1
+        """).fetchone()
+        if row:
+            predictions.predicted_topic = row[0] or ""
+            predictions.confidence = row[1] or 0.5
+
+        conn.close()
+    except Exception:
+        pass
+
+    return AgentModel(
+        agent_id="codi",
+        traits=traits,
+        state=state,
+        predictions=predictions,
+    )
 
 
 def register_tools(mcp):

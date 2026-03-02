@@ -148,6 +148,7 @@ def _on_memory_retrieved(event_name: str, data: dict):
                 focus=query_topic,
                 driver="memory_retrieval",
                 strength=0.5,
+                value=0.3,  # V: retrieval has moderate informational value
             )
     except Exception as e:
         _logger.warning("_on_memory_retrieved error: %s", e)
@@ -183,6 +184,7 @@ def _on_workspace_broadcast(event_name: str, data: dict):
             focus=themes[0] if themes else "unknown",
             driver="workspace_broadcast",
             strength=0.8,
+            value=0.7,  # V: broadcast items won competition, high informational value
         )
     except Exception as e:
         _logger.error("_on_workspace_broadcast error: %s", redact_secrets(str(e)))
@@ -209,6 +211,7 @@ def _on_emotion_changed(event_name: str, data: dict):
                 focus=f"emotion:{emotion}",
                 driver=f"emotion_shift:{trigger}",
                 strength=min(1.0, abs(arousal)),
+                value=min(1.0, abs(arousal) * 0.8),  # V: emotional salience (Damasio somatic marker)
             )
     except Exception as e:
         _logger.error("_on_emotion_changed error: %s", redact_secrets(str(e)))
@@ -245,10 +248,13 @@ def _on_consolidation_complete(event_name: str, data: dict):
 
 # Internal model of what the system is attending to
 _attention_schema = {
-    "current_focus": None,       # Topic currently being attended
-    "focus_strength": 0.0,       # How strongly focused (0-1)
+    "current_focus": None,       # S: Topic currently being attended (Subject)
+    "focus_strength": 0.0,       # A: How strongly focused (0-1) (Attention intensity)
     "focus_started": None,       # When current focus began
     "driver": None,              # What caused current focus
+    "focus_value": 0.0,          # V: Value/relevance score (Sprint 3, item 3.5)
+    # V = PE magnitude or EFE, measures WHY this deserves attention
+    # Graziano 2013: complete attention schema = S (what) + A (how much) + V (why)
     "history": [],               # Last 20 focus states
     "topic_transitions": [],     # Topic A -> Topic B log (last 30)
     "interrupted_topics": [],    # Topics displaced by new focus
@@ -259,12 +265,14 @@ _attention_schema = {
 }
 
 
-def _update_attention_schema(focus: str, driver: str = "unknown", strength: float = 0.5):
+def _update_attention_schema(focus: str, driver: str = "unknown", strength: float = 0.5,
+                             value: float = 0.0):
     """Update the attention schema with a new focus.
 
     Tracks topic transitions and interrupted topics.
     AST-1 closed loop: captures prediction BEFORE update, computes PE AFTER.
-    (Graziano 2013 -- attention schema must predict and self-correct.)
+    S+A+V (Graziano 2013): S=focus (what), A=strength (how much), V=value (why).
+    V represents information value -- PE magnitude, EFE, or goal relevance.
     """
     global _attention_schema
     now = now_iso()
@@ -298,15 +306,17 @@ def _update_attention_schema(focus: str, driver: str = "unknown", strength: floa
         _attention_schema["history"].append({
             "focus": _attention_schema["current_focus"],
             "strength": _attention_schema["focus_strength"],
+            "value": _attention_schema["focus_value"],  # V in history
             "started": _attention_schema["focus_started"],
             "ended": now,
             "driver": _attention_schema["driver"],
         })
         _attention_schema["history"] = _attention_schema["history"][-20:]
 
-    # Update current focus
-    _attention_schema["current_focus"] = focus
-    _attention_schema["focus_strength"] = strength
+    # Update current focus (S + A + V)
+    _attention_schema["current_focus"] = focus       # S: what
+    _attention_schema["focus_strength"] = strength   # A: how much
+    _attention_schema["focus_value"] = value          # V: why (PE, EFE, relevance)
     _attention_schema["focus_started"] = now
     _attention_schema["driver"] = driver
 
@@ -342,6 +352,7 @@ def get_attention_schema() -> dict:
     return {
         "current_focus": _attention_schema["current_focus"],
         "focus_strength": _attention_schema["focus_strength"],
+        "focus_value": _attention_schema["focus_value"],  # V: why
         "focus_started": _attention_schema["focus_started"],
         "driver": _attention_schema["driver"],
         "recent_transitions": _attention_schema["topic_transitions"][-5:],
@@ -364,14 +375,15 @@ def describe_attention() -> str:
     """
     focus = _attention_schema["current_focus"]
     strength = _attention_schema["focus_strength"]
+    value = _attention_schema["focus_value"]
     driver = _attention_schema["driver"]
     suppressed = _attention_schema["suppressed_items"]
 
     if not focus:
         return "No tengo foco de atencion activo. Estoy en estado difuso."
 
-    # Build self-description
-    parts = [f"Estoy atendiendo a '{focus}' (fuerza: {strength:.2f})"]
+    # Build self-description (S + A + V)
+    parts = [f"Estoy atendiendo a '{focus}' (fuerza: {strength:.2f}, valor: {value:.2f})"]
 
     if driver:
         parts.append(f"porque {driver}")
@@ -460,6 +472,7 @@ def _on_prediction_error(event_name: str, data: dict):
                 focus=f"surprise:{topic}",
                 driver="prediction_error",
                 strength=min(1.0, error_magnitude),
+                value=min(1.0, error_magnitude),  # V: PE IS the information value signal
             )
         except Exception as e:
             _logger.error("_on_prediction_error attention error: %s", redact_secrets(str(e)))
@@ -608,6 +621,7 @@ def _on_competition_complete(event_name: str, data: dict):
                 focus=winners[0],
                 driver="workspace_competition",
                 strength=min(1.0, top_activation),
+                value=min(1.0, top_activation * 0.9),  # V: competitive activation as value
             )
 
         # 3B: Track suppressed items (Graziano AST - what we're NOT attending)
@@ -740,21 +754,36 @@ def _on_contradiction_detected(event_name: str, data: dict):
                 except Exception:
                     pass
 
-                # Queue correction suggestion (suggest mode -- Nader 2000 window)
-                try:
-                    from modules.consolidation import queue_correction_suggestion
-                    channels = data.get("channels", {})
-                    queue_correction_suggestion(
-                        old_memory_id=old_memory_id,
-                        old_text=old_text,
-                        new_text=new_text,
-                        prediction_error=pe,
-                        new_memory_id=data.get("new_memory_id", ""),
-                        shared_entities=shared_entities,
-                        channels=channels,
-                    )
-                except Exception:
-                    pass
+                # Proposal #65 Fix 2: Auto-reconsolidation for high-PE contradictions
+                # Nader 2000: PE during reactivation → labile → reconsolidate with new content
+                # Sevenster et al. 2013: contradiction PE (not topic PE) is the correct trigger
+                if pe >= 0.6:
+                    try:
+                        from modules.reconsolidation import correct_memory
+                        result = correct_memory(
+                            memory_id=old_memory_id,
+                            correction=new_text,
+                            force=True,  # PE already validated
+                        )
+                        _logger.info("Auto-reconsolidation: %s", result)
+                    except Exception:
+                        pass
+                else:
+                    # Moderate PE (0.3-0.6): queue for review (suggest mode)
+                    try:
+                        from modules.consolidation import queue_correction_suggestion
+                        channels = data.get("channels", {})
+                        queue_correction_suggestion(
+                            old_memory_id=old_memory_id,
+                            old_text=old_text,
+                            new_text=new_text,
+                            prediction_error=pe,
+                            new_memory_id=data.get("new_memory_id", ""),
+                            shared_entities=shared_entities,
+                            channels=channels,
+                        )
+                    except Exception:
+                        pass
         else:
             # Moderate PE: silent note
             push_to_working_memory(
@@ -769,6 +798,7 @@ def _on_contradiction_detected(event_name: str, data: dict):
             focus=f"contradiction:{','.join(shared_entities[:3])}",
             driver="contradiction_detected",
             strength=min(1.0, pe),
+            value=min(1.0, pe),  # V: contradiction PE = high destabilizing signal
         )
 
     except Exception as e:
@@ -796,9 +826,95 @@ def _on_reconsolidation_triggered(event_name: str, data: dict):
             focus=f"reconsolidation:{memory_id}",
             driver="reconsolidation",
             strength=0.6,
+            value=min(1.0, abs(new_conf - old_conf) * 2.0),  # V: confidence change magnitude
         )
     except Exception as e:
         _logger.error("_on_reconsolidation_triggered error: %s", redact_secrets(str(e)))
+
+
+# ============================================================
+# S3-04: ORPHAN EVENT HANDLERS
+# ============================================================
+
+def _on_session_close(event_name: str, data: dict):
+    """S3-04: Session closing — push checkpoint to WM for persistence."""
+    try:
+        from modules.working_memory import push_to_working_memory
+        reason = data.get("reason", "unknown")
+        push_to_working_memory(
+            content=f"[SESSION CLOSE] Session ended: {reason}",
+            topic="session",
+            relevance=0.6,
+            source="session_close",
+        )
+    except Exception as e:
+        _logger.error("_on_session_close error: %s", redact_secrets(str(e)))
+
+
+def _on_session_open(event_name: str, data: dict):
+    """S3-04: Session opening — push bridge context to WM."""
+    try:
+        from modules.working_memory import push_to_working_memory
+        bridge_summary = data.get("summary", "")
+        if bridge_summary:
+            push_to_working_memory(
+                content=f"[SESSION BRIDGE] {bridge_summary[:200]}",
+                topic="session",
+                relevance=0.7,
+                source="session_open",
+            )
+    except Exception as e:
+        _logger.error("_on_session_open error: %s", redact_secrets(str(e)))
+
+
+def _on_sleep_loop_complete(event_name: str, data: dict):
+    """S3-04: Sleep loop finished — push maintenance summary to WM."""
+    try:
+        from modules.working_memory import push_to_working_memory
+        ticks = data.get("ticks_completed", 0)
+        duration = data.get("duration_seconds", 0)
+        push_to_working_memory(
+            content=f"[SLEEP LOOP] {ticks} ticks completed in {duration:.0f}s",
+            topic="maintenance",
+            relevance=0.5,
+            source="sleep_loop_complete",
+        )
+    except Exception as e:
+        _logger.error("_on_sleep_loop_complete error: %s", redact_secrets(str(e)))
+
+
+def _on_perf_budget_violation(event_name: str, data: dict):
+    """S3-04: Performance budget exceeded — log warning, push to WM."""
+    try:
+        from modules.working_memory import push_to_working_memory
+        tool = data.get("tool", "unknown")
+        elapsed_ms = data.get("elapsed_ms", 0)
+        budget_ms = data.get("budget_ms", 0)
+        push_to_working_memory(
+            content=f"[PERF ALERT] {tool} took {elapsed_ms}ms (budget: {budget_ms}ms)",
+            topic="performance",
+            relevance=0.6,
+            source="perf_budget_violation",
+        )
+        _logger.warning("Performance budget violation: %s took %dms (budget: %dms)",
+                        tool, elapsed_ms, budget_ms)
+    except Exception as e:
+        _logger.error("_on_perf_budget_violation error: %s", redact_secrets(str(e)))
+
+
+def _on_emotion_gating_applied(event_name: str, data: dict):
+    """S3-04: Emotion gating applied — update attention schema (Bower 1981)."""
+    try:
+        emotion = data.get("emotion", "neutral")
+        effect = data.get("effect", "")
+        _update_attention_schema(
+            focus=f"emotion_gating:{emotion}",
+            driver="emotion_gating",
+            strength=0.6,
+            value=0.5,  # V: gating modulation has moderate informational value
+        )
+    except Exception as e:
+        _logger.error("_on_emotion_gating_applied error: %s", redact_secrets(str(e)))
 
 
 def wire_event_bus():
@@ -824,6 +940,13 @@ def wire_event_bus():
     event_bus.on(Events.CONTRADICTION_DETECTED, _on_contradiction_detected)
     event_bus.on(Events.RECONSOLIDATION_TRIGGERED, _on_reconsolidation_triggered)
 
+    # S3-04: Connect orphan events
+    event_bus.on(Events.SESSION_CLOSE, _on_session_close)
+    event_bus.on(Events.SESSION_OPEN, _on_session_open)
+    event_bus.on(Events.SLEEP_LOOP_COMPLETE, _on_sleep_loop_complete)
+    event_bus.on(Events.PERF_BUDGET_VIOLATION, _on_perf_budget_violation)
+    event_bus.on(Events.EMOTION_GATING_APPLIED, _on_emotion_gating_applied)
+
     # Bloque 2: PE -> Action handlers (flag-gated inside pe_actions)
     try:
         from modules.pe_actions import get_handlers as _pe_handlers
@@ -838,6 +961,13 @@ def wire_event_bus():
         register_forgetting_handlers()
     except Exception as e:
         _logger.warning("Forgetting handlers not loaded: %s", redact_secrets(str(e)))
+
+    # Bloque 4: Reward tracking (S1-05)
+    try:
+        from modules.reward_tracking import register_reward_handlers
+        register_reward_handlers()
+    except Exception as e:
+        _logger.warning("Reward handlers not loaded: %s", redact_secrets(str(e)))
 
     _wired = True
     stats = event_bus.get_stats()

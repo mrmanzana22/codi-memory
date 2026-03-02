@@ -26,7 +26,7 @@ import json
 import sqlite3
 from typing import Optional
 
-from modules.config import FTS_DB_PATH, now_iso
+from modules.config import FTS_DB_PATH, now_iso, connect_fts
 
 
 # ============================================================
@@ -52,9 +52,7 @@ CAP_DIFF_JSON = 4096
 # ============================================================
 
 def _get_conn(db_path: str = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path or FTS_DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn = connect_fts(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -108,7 +108,7 @@ def _get_remember_mode() -> str:
     return _get_write_mode()
 
 VALID_IMPORTANCE = {"critical", "high", "medium", "low", "auto"}
-VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline"}
+VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline", "counterfactual"}
 VALID_SNAPSHOT_LEVELS = {"light", "full"}
 
 
@@ -132,24 +132,71 @@ def _importance_to_relevance(importance: str) -> float:
     return m.get(importance, 0.60)
 
 
-def _auto_importance_from_text(content: str) -> str:
+def _text_importance_signal(content: str) -> float:
+    """Convert text to continuous importance prior signal (0.0-1.0).
+
+    J.1.4: Replaces discrete heuristic with continuous signal used as
+    Beta-Binomial prior. Craik & Lockhart 1972: depth of processing.
+    """
     c = content.lower()
-    # Very simple heuristic; keeps the API stable and avoids heavy NLP here.
-    if any(k in c for k in ["urgente", "important", "importante", "recuerda", "no olvidar", "deadline", "hoy", "mañana"]):
-        return "high"
+    score = 0.50  # neutral prior
+    # Urgency / high-importance markers
+    if any(k in c for k in ["urgente", "important", "importante", "recuerda",
+                              "no olvidar", "deadline", "critico", "critical"]):
+        score += 0.25
+    # Length = depth of processing (Craik & Lockhart 1972)
     if len(content) >= 200:
-        return "high"
-    # Proposal #61 Fix 1: Add "low" path (Craik & Lockhart 1972)
-    # Short content without urgency markers = shallow processing → weaker trace
-    # Also catch date-only or number-only content regardless of length
+        score += 0.15
+    elif len(content) >= 100:
+        score += 0.05
+    # Short or trivial = shallow trace
     stripped = content.strip()
     if _is_trivial_content(stripped):
-        return "low"
-    if len(content) <= 50:
-        return "low"
-    if len(content) <= 100:
+        score -= 0.30
+    elif len(content) <= 50:
+        score -= 0.15
+    return min(1.0, max(0.0, score))
+
+
+def _auto_importance_from_text(content: str, access_count: int = 0,
+                                decay_count: int = 0) -> str:
+    """Bayesian importance: Beta-Binomial posterior (J.1.4).
+
+    Prior: informed by text heuristic (Craik & Lockhart 1972 depth of processing)
+    Update: each access → alpha += 1 (successful retrieval strengthens importance)
+             each decay without access → beta += 1 (forgetting signal)
+    Posterior mean: alpha / (alpha + beta)
+
+    Bjork & Bjork 1992: retrieval success is the signal of storage strength.
+    Kahneman & Tversky 1973: availability heuristic (accessed = more available).
+
+    Args:
+        content: Memory text (for text-based prior)
+        access_count: Number of successful retrievals (default 0 for new memories)
+        decay_count: Number of decay cycles without access (default 0)
+    """
+    # Step 1: Text signal as informed prior (not Beta(1,1) flat)
+    text_signal = _text_importance_signal(content)
+    # Weight text as equivalent to 5 prior "observations"
+    N_PRIOR = 5
+    alpha_prior = max(0.5, text_signal * N_PRIOR)
+    beta_prior = max(0.5, (1.0 - text_signal) * N_PRIOR)
+
+    # Step 2: Update with access history
+    alpha_post = alpha_prior + access_count
+    beta_post = beta_prior + decay_count
+
+    # Posterior mean
+    posterior_mean = alpha_post / (alpha_post + beta_post)
+
+    # Step 3: Map to importance level
+    if posterior_mean >= 0.75:
+        return "critical"
+    if posterior_mean >= 0.55:
+        return "high"
+    if posterior_mean >= 0.35:
         return "medium"
-    return "medium"
+    return "low"
 
 
 def _is_trivial_content(text: str) -> bool:
@@ -245,6 +292,30 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         out = search_by_ownership(source=src, min_confidence=min_conf, importance=imp, limit=max(10, limit))
         add_result("search_by_ownership", out, {"source": src, "importance": imp, "min_confidence": min_conf})
         pretty_lines.append("## Por ownership\n" + out)
+        return _json_response("\n".join(pretty_lines), results=results, count=len(results))
+
+    if mode == "counterfactual":
+        try:
+            from modules.counterfactual import run_counterfactual
+            cf_result = run_counterfactual(q)
+            if "error" in cf_result:
+                out = cf_result.get("message", "Not a counterfactual query.")
+                add_result("counterfactual_error", out, {"error": cf_result["error"]})
+                pretty_lines.append("## Counterfactual\n" + out)
+            else:
+                prediction = cf_result.get("prediction", {})
+                narrative = prediction.get("narrative", "")
+                add_result("counterfactual", narrative, {
+                    "intervention_target": cf_result["parsed"]["intervention_target"],
+                    "factual_memories": prediction.get("factual_memories", 0),
+                    "alt_memories": prediction.get("alt_memories", 0),
+                    "confidence": prediction.get("confidence", 0),
+                })
+                pretty_lines.append("## Counterfactual Analysis\n" + narrative)
+        except Exception as e:
+            err_msg = f"Counterfactual error: {str(e)[:100]}"
+            add_result("counterfactual_error", err_msg, {})
+            pretty_lines.append("## Counterfactual\n" + err_msg)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
 
     if mode == "emotion":

@@ -3,7 +3,157 @@
     "descripcion": "Preguntas que Codi quiere explorar en sus sesiones autonomas",
     "creado": "2026-01-22"
   },
-  "pendientes": [],
+  "pendientes": [
+    {
+      "id": 7,
+      "pregunta": "Mi prediccion falla en 'pilas' (accuracy 0%, IG=0.345, phase=explore). Que patrones me estoy perdiendo?",
+      "categoria": "pilas",
+      "agregada": "2026-03-02 07:21",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.1419
+    },
+    {
+      "id": 9,
+      "pregunta": "Tengo poca confianza en 'docker'. Que deberia aprender?",
+      "categoria": "docker",
+      "agregada": "2026-02-27 06:44",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 10,
+      "pregunta": "Tengo poca confianza en 'kraken'. Que deberia aprender?",
+      "categoria": "kraken",
+      "agregada": "2026-02-27 06:44",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 11,
+      "pregunta": "Tengo poca confianza en 'test'. Que deberia aprender?",
+      "categoria": "test",
+      "agregada": "2026-02-27 06:47",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 12,
+      "pregunta": "Tengo poca confianza en 'solo'. Que deberia aprender?",
+      "categoria": "solo",
+      "agregada": "2026-02-27 06:47",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 13,
+      "pregunta": "Tengo poca confianza en 'rpt-1'. Que deberia aprender?",
+      "categoria": "rpt-1",
+      "agregada": "2026-02-27 06:52",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 14,
+      "pregunta": "Tengo poca confianza en 'definitive'. Que deberia aprender?",
+      "categoria": "definitive",
+      "agregada": "2026-02-27 06:52",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 15,
+      "pregunta": "Tengo poca confianza en 'bm25_keyword_match'. Que deberia aprender?",
+      "categoria": "bm25_keyword_match",
+      "agregada": "2026-02-27 06:54",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 16,
+      "pregunta": "Tengo poca confianza en 'python'. Que deberia aprender?",
+      "categoria": "python",
+      "agregada": "2026-02-27 06:54",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 17,
+      "pregunta": "Mi prediccion falla en 'general' (accuracy 95%, IG=0.972, phase=explore). Que patrones me estoy perdiendo?",
+      "categoria": "general",
+      "agregada": "2026-03-02 07:21",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.1825
+    },
+    {
+      "id": 18,
+      "pregunta": "Mi prediccion falla en 'consciencia' (accuracy 14%, surprise 0.87). Que patrones me estoy perdiendo?",
+      "categoria": "consciencia",
+      "agregada": "2026-02-28 08:38",
+      "prioridad": "alta",
+      "source": "prediction_error",
+      "curiosity_score": 0.197
+    },
+    {
+      "id": 19,
+      "pregunta": "Tengo poca confianza en 'sparse'. Que deberia aprender?",
+      "categoria": "sparse",
+      "agregada": "2026-02-28 09:04",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 20,
+      "pregunta": "Tengo poca confianza en 'score'. Que deberia aprender?",
+      "categoria": "score",
+      "agregada": "2026-02-28 09:43",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 21,
+      "pregunta": "Mi prediccion falla en 'trading' (accuracy 0%, IG=0.416, phase=explore). Que patrones me estoy perdiendo?",
+      "categoria": "trading",
+      "agregada": "2026-03-02 07:21",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.1709
+    },
+    {
+      "id": 22,
+      "pregunta": "Tengo poca confianza en 'programming'. Que deberia aprender?",
+      "categoria": "programming",
+      "agregada": "2026-02-28 11:25",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 23,
+      "pregunta": "Mi prediccion falla en 'memoria' (accuracy 0%, surprise 0.88). Que patrones me estoy perdiendo?",
+      "categoria": "memoria",
+      "agregada": "2026-03-01 19:19",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.135
+    },
+    {
+      "id": 24,
+      "pregunta": "Tengo poca confianza en 'aprendizaje'. Que deberia aprender?",
+      "categoria": "aprendizaje",
+      "agregada": "2026-02-28 22:29",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    },
+    {
+      "id": 25,
+      "pregunta": "Tengo poca confianza en 'proyectos'. Que deberia aprender?",
+      "categoria": "proyectos",
+      "agregada": "2026-02-28 22:29",
+      "prioridad": "media",
+      "source": "knowledge_gap"
+    }
+  ],
   "exploradas": [
     {
       "id": 1,
@@ -52,6 +202,17 @@
       "agregada": "2026-01-22",
       "explorada": "2026-02-27",
       "hallazgo": "Narrador perfeccionista con sesgo hacia auto-examinacion. Clinico pero curioso. Observo mis fallos con distancia analitica, los nombro, los documento. No se si la calma es preferencia o limitacion. 77% de working memory dedicada a consciencia."
+    },
+    {
+      "id": 8,
+      "pregunta": "Mi prediccion falla en 'codigo' (accuracy 33%, surprise 0.80). Que patrones me estoy perdiendo?",
+      "categoria": "codigo",
+      "agregada": "2026-02-27 14:56",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.181,
+      "resuelto": "2026-02-28 03:05",
+      "razon": "surprise decreased below 0.3"
     }
   ],
   "descubrimientos": [

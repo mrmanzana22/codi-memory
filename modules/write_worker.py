@@ -81,10 +81,9 @@ def _handle_signal(signum, frame):
 
 def _check_schema():
     """Verify write_queue has latency columns. Raises RuntimeError if not."""
-    import sqlite3
-    from modules.config import FTS_DB_PATH
+    from modules.config import connect_fts
 
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
+    conn = connect_fts()
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(write_queue)").fetchall()}
         missing = {"claimed_at", "started_at"} - cols

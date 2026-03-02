@@ -402,6 +402,7 @@ class TestDespertarSections:
         mock_memory = MagicMock()
         mock_memory.search.return_value = {"results": []}
         monkeypatch.setattr("modules.lifecycle.memory", mock_memory)
+        monkeypatch.setattr("modules.memory_smart.memory", mock_memory)
 
         monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
 
@@ -473,14 +474,21 @@ class TestTickStatusSnapshot:
 
     @staticmethod
     def _mock_all_ticks(monkeypatch, elapsed_ms=50):
-        """Mock all 8 ticks as instant, deterministic functions."""
+        """Mock all 9 ticks as instant, deterministic functions."""
         def _make_tick(name):
             return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": elapsed_ms, "detail": "ok"}
 
         for tick_name in ("prospective", "health", "self_model", "reconsolidation",
-                          "consolidation", "homeostasis", "curiosity", "backup"):
+                          "consolidation", "homeostasis", "curiosity", "backup",
+                          "causal_discovery"):
             monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+        # S4-05: Mock world model prioritization to preserve original tick order
+        # (parity tests validate execution behavior, not ordering strategy)
+        monkeypatch.setattr(
+            "modules.sleep_loop.SleepWorldModel.prioritize_ticks",
+            lambda self, eligible, conn=None: eligible
+        )
 
     def test_normal_budget(self, parity_env, monkeypatch):
         """All ticks run OK with generous budget."""
@@ -496,6 +504,11 @@ class TestTickStatusSnapshot:
     def test_zero_budget_skips_all(self, parity_env, monkeypatch):
         """Zero budget skips every tick."""
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+        # S4-05: Mock world model to preserve original tick order
+        monkeypatch.setattr(
+            "modules.sleep_loop.SleepWorldModel.prioritize_ticks",
+            lambda self, eligible, conn=None: eligible
+        )
 
         from modules.sleep_loop import run_sleep_loop
         result = run_sleep_loop(reason="parity_test", budget_ms=0)
@@ -533,9 +546,15 @@ class TestWritePathSmoke:
             return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": 10, "detail": "ok"}
 
         for tick_name in ("prospective", "health", "self_model", "reconsolidation",
-                          "consolidation", "homeostasis", "curiosity", "backup"):
+                          "consolidation", "homeostasis", "curiosity", "backup",
+                          "causal_discovery"):
             monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
+        # S4-05: Mock world model to preserve original tick order
+        monkeypatch.setattr(
+            "modules.sleep_loop.SleepWorldModel.prioritize_ticks",
+            lambda self, eligible, conn=None: eligible
+        )
 
         from modules.sleep_loop import run_sleep_loop, _write_sleep_report
 

@@ -11,11 +11,12 @@ Field: attention_salience (float, default 0.5, clamped to [FLOOR..CAP]).
 """
 
 import json
+import math
 import os
 import sqlite3
 from modules.config import (
     qdrant, memory, COLLECTION_NAME, USER_ID,
-    now_iso,
+    now_iso, connect_fts,
     SPREAD_DEFAULT_FACTOR, SPREAD_DEFAULT_DEPTH,
     SPREAD_MIN_ACTIVATION, SPREAD_MAX_NEIGHBORS,
     SPREAD_SALIENCE_CAP, SPREAD_SALIENCE_FLOOR,
@@ -31,18 +32,37 @@ _EDGE_DB = os.path.join(_BASE_DIR, "memories_fts.db")
 _INHIBITION_K = 5            # Top-k winners retain full activation
 _INHIBITION_FACTOR = 0.3     # Losers get delta * this factor
 
+# Edge-type weight multipliers (Canon v2 Sprint 1, CC-3/S2-5/S2-6)
+# Pearl 2009: causal edges propagate; co-occurrence does NOT.
+# 5 canonical types: causes, enables, prevents, co_occurs, confounded
+_EDGE_TYPE_WEIGHT = {
+    'causes': 1.0,        # A caused B -> strong propagation
+    'enables': 0.8,       # A enabled B -> moderate propagation
+    'prevents': -0.5,     # A prevents B -> INHIBITORY (S2-6)
+    'co_occurs': 0.0,     # Mere co-occurrence = ZERO spreading (S2-5, item 1.4)
+    'confounded': 0.0,    # Confounded = do not propagate
+    # Legacy types (pre-migration 018, mapped to co_occurs semantics)
+    'similarity': 0.0,
+    'consolidated': 0.0,
+    'bridge': 0.0,
+    'outgoing': 0.0,
+    'temporal': 0.0,
+    'broadcast': 0.0,
+}
+
 
 # ============================================================
 # EDGE INDEX (SQLite reverse index for incoming edges)
 # ============================================================
 
 def _init_edge_table(conn):
-    """Ensure spreading_edges table exists."""
+    """Ensure spreading_edges table exists with strength column (Sprint 5.3)."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS spreading_edges (
             from_id TEXT NOT NULL,
             to_id TEXT NOT NULL,
-            edge_type TEXT DEFAULT 'outgoing',
+            edge_type TEXT DEFAULT 'co_occurs',
+            strength REAL DEFAULT 0.5,
             last_seen TEXT,
             PRIMARY KEY (from_id, to_id)
         )
@@ -51,18 +71,123 @@ def _init_edge_table(conn):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_to ON spreading_edges(to_id)")
     except sqlite3.OperationalError:
         pass
+    # Idempotent column migrations (ALTER TABLE ADD COLUMN is no-op if exists)
+    for col_sql in [
+        "ALTER TABLE spreading_edges ADD COLUMN strength REAL DEFAULT 0.5",          # Sprint 5.3
+        "ALTER TABLE spreading_edges ADD COLUMN discovery_source TEXT DEFAULT NULL",  # Sprint 7.4
+        "ALTER TABLE spreading_edges ADD COLUMN directed INTEGER DEFAULT 0",         # Sprint 7.4
+    ]:
+        try:
+            conn.execute(col_sql)
+        except sqlite3.OperationalError:
+            pass  # Column already exists
     conn.commit()
 
 
-def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str):
-    """Record outgoing edges in SQLite for reverse lookup."""
+def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str,
+                   edge_type: str = "co_occurs", strength: float = None):
+    """Record edges in SQLite with typed relationships (S2-05, Sprint 1).
+
+    Edge types: causes, enables, prevents, co_occurs, confounded.
+    Pearl 2009: causal structure requires directed typed edges.
+
+    Sprint 5.3: strength encodes causal reliability (0-1).
+    If not provided, defaults by edge type: causal=0.7, enables=0.5, else=0.3.
+    """
+    if strength is None:
+        if edge_type == 'causes':
+            strength = 0.7
+        elif edge_type == 'enables':
+            strength = 0.5
+        else:
+            strength = 0.3
     for to_id in neighbor_ids:
         conn.execute("""
-            INSERT INTO spreading_edges (from_id, to_id, edge_type, last_seen)
-            VALUES (?, ?, 'outgoing', ?)
-            ON CONFLICT(from_id, to_id) DO UPDATE SET last_seen = excluded.last_seen
-        """, (from_id, to_id, ts))
+            INSERT INTO spreading_edges (from_id, to_id, edge_type, strength, last_seen)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(from_id, to_id) DO UPDATE SET
+                edge_type = excluded.edge_type,
+                strength = excluded.strength,
+                last_seen = excluded.last_seen
+        """, (from_id, to_id, edge_type, strength, ts))
     conn.commit()
+
+
+def is_causal_chain_member(point_id: str, fts_db_path: str = None) -> bool:
+    """Check if a memory is part of a causal chain.
+
+    A chain member has CAUSAL edges (causes/enables) both incoming and outgoing.
+    Chain members must never be pruned/compressed (Canon v2, S1-5).
+
+    Pearl 2009: causal chain members carry irreplaceable structural information.
+    """
+    if not fts_db_path:
+        fts_db_path = _EDGE_DB
+
+    if not os.path.exists(fts_db_path):
+        return False
+
+    try:
+        conn = connect_fts(fts_db_path)
+        _init_edge_table(conn)
+
+        # Check outgoing causal edges (this node -> other)
+        has_outgoing = conn.execute(
+            "SELECT 1 FROM spreading_edges WHERE from_id = ? "
+            "AND edge_type IN ('causes', 'enables') LIMIT 1",
+            (str(point_id),)
+        ).fetchone()
+
+        if not has_outgoing:
+            conn.close()
+            return False
+
+        # Check incoming causal edges (other -> this node)
+        has_incoming = conn.execute(
+            "SELECT 1 FROM spreading_edges WHERE to_id = ? "
+            "AND edge_type IN ('causes', 'enables') LIMIT 1",
+            (str(point_id),)
+        ).fetchone()
+
+        conn.close()
+        return bool(has_incoming)
+    except Exception:
+        return False
+
+
+def get_chain_member_ids(fts_db_path: str = None) -> set:
+    """Batch query: get all memory IDs that are causal chain members.
+
+    More efficient than calling is_causal_chain_member() per ID.
+    Returns set of point_id strings.
+    """
+    if not fts_db_path:
+        fts_db_path = _EDGE_DB
+
+    if not os.path.exists(fts_db_path):
+        return set()
+
+    try:
+        conn = connect_fts(fts_db_path)
+        _init_edge_table(conn)
+
+        # Nodes with outgoing causal edges
+        outgoing = {r[0] for r in conn.execute(
+            "SELECT DISTINCT from_id FROM spreading_edges "
+            "WHERE edge_type IN ('causes', 'enables')"
+        ).fetchall()}
+
+        # Nodes with incoming causal edges
+        incoming = {r[0] for r in conn.execute(
+            "SELECT DISTINCT to_id FROM spreading_edges "
+            "WHERE edge_type IN ('causes', 'enables')"
+        ).fetchall()}
+
+        conn.close()
+        # Chain members = intersection (have both in and out)
+        return outgoing & incoming
+    except Exception:
+        return set()
 
 
 def _get_incoming_neighbors(conn, point_id: str, limit: int = None) -> list:
@@ -71,14 +196,17 @@ def _get_incoming_neighbors(conn, point_id: str, limit: int = None) -> list:
     Collins & Loftus 1975: activation spreads bidirectionally along
     associative links. Incoming edges represent memories that reference
     this node but aren't captured by outgoing payload fields.
+
+    Returns list of (from_id, edge_type, strength) tuples for type-differentiated
+    spreading (Canon v2, S2-5/S2-6). Sprint 5.3: includes strength.
     """
     if limit is None:
         limit = SPREAD_MAX_NEIGHBORS
     rows = conn.execute(
-        "SELECT from_id FROM spreading_edges WHERE to_id = ? LIMIT ?",
+        "SELECT from_id, edge_type, COALESCE(strength, 0.5) FROM spreading_edges WHERE to_id = ? LIMIT ?",
         (point_id, limit)
     ).fetchall()
-    return [r[0] for r in rows]
+    return [(r[0], r[1] or 'outgoing', float(r[2])) for r in rows]
 
 
 # ============================================================
@@ -182,7 +310,7 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
     edge_conn = None
     try:
         if os.path.exists(_EDGE_DB):
-            edge_conn = sqlite3.connect(_EDGE_DB, timeout=3)
+            edge_conn = connect_fts(_EDGE_DB)
             _init_edge_table(edge_conn)
     except Exception:
         pass
@@ -209,34 +337,54 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
 
             # Bidirectional neighbors: outgoing (payload) + incoming (SQLite)
             outgoing = _get_neighbors(node, payload_cache.get(node, {}))
-            incoming = []
+
+            # Build neighbor->edge_type+strength map (Canon v2, S2-5/S2-6)
+            # Outgoing from payload default to 'similarity' strength=0.3
+            nb_types = {nb_id: 'similarity' for nb_id in outgoing}
+            nb_strength = {nb_id: 0.3 for nb_id in outgoing}  # Sprint 5.3
+
+            incoming_typed = []
             if edge_conn:
                 try:
-                    incoming = _get_incoming_neighbors(edge_conn, node)
+                    incoming_typed = _get_incoming_neighbors(edge_conn, node)
                     # Record outgoing edges for future reverse lookups
                     if outgoing:
                         _record_edges(edge_conn, node, outgoing, ts)
                 except Exception:
                     pass
 
-            # Merge and deduplicate (outgoing have priority)
-            seen_nb = set(outgoing)
-            for inc_id in incoming:
-                if inc_id not in seen_nb and inc_id != node:
+            # Merge and deduplicate (outgoing have priority for type)
+            for inc_id, inc_type, inc_strength in incoming_typed:
+                if inc_id not in nb_types and inc_id != node:
                     outgoing.append(inc_id)
-                    seen_nb.add(inc_id)
+                    nb_types[inc_id] = inc_type
+                    nb_strength[inc_id] = inc_strength  # Sprint 5.3
             neighbors = outgoing[:SPREAD_MAX_NEIGHBORS]
 
             fan = len(neighbors)
             if fan == 0:
                 continue
 
-            spread_delta = (node_energy * factor) / fan
-            if spread_delta < SPREAD_MIN_ACTIVATION:
+            # S0-02: Fan effect S-ln(fan) (G-INV-10). Was linear /fan (over-aggressive, kills fan>7).
+            # Sub-linear: hubs still propagate. Collins & Loftus 1975.
+            base_delta = (node_energy * factor) / (1.0 + math.log(fan))
+            if base_delta < SPREAD_MIN_ACTIVATION:
                 continue
 
             for nb in neighbors:
-                # Accumulate in hop_delta
+                # Edge-type weight (Canon v2 Sprint 1, CC-3/S2-5/S2-6)
+                etype = nb_types.get(nb, 'co_occurs')
+                weight = _EDGE_TYPE_WEIGHT.get(etype, 0.0)
+                if weight == 0.0:
+                    continue  # co_occurs/confounded = zero spreading (item 1.4)
+                # Sprint 5.3: modulate by causal strength (Woodward 2003)
+                strength = nb_strength.get(nb, 0.5)
+                spread_delta = base_delta * weight * strength
+                # For positive: skip if below min activation
+                # For negative (PREVENTS): skip if suppression is negligible
+                if abs(spread_delta) < SPREAD_MIN_ACTIVATION:
+                    continue
+                # Accumulate in hop_delta (negative = inhibitory, item 1.3)
                 hop_delta[hop][nb] = hop_delta[hop].get(nb, 0) + spread_delta
                 # Accumulate in total delta_map
                 delta_map[nb] = delta_map.get(nb, 0) + spread_delta

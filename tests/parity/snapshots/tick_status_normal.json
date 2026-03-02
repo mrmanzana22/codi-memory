@@ -38,5 +38,10 @@
     "ok": true,
     "status": "ok",
     "tick": "backup"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "causal_discovery"
   }
 ]

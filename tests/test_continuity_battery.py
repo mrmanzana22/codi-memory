@@ -776,7 +776,7 @@ class TestSleepLoopMechanics:
     """Bucket 8: tick ordering and report format cap."""
 
     def test_ticks_execute_in_order(self, continuity_db, monkeypatch):
-        """Tick execution order == TICK_ORDER: [prospective, health, consolidation, homeostasis]."""
+        """All eligible ticks execute (order may vary due to S4-05 world model)."""
         from modules.sleep_loop import TICK_ORDER
 
         execution_order = []
@@ -793,6 +793,12 @@ class TestSleepLoopMechanics:
                 f"modules.sleep_loop._tick_{tick_name}",
                 make_tick_mock(tick_name)
             )
+
+        # S4-05: Mock world model to preserve original order for deterministic test
+        monkeypatch.setattr(
+            "modules.sleep_loop.SleepWorldModel.prioritize_ticks",
+            lambda self, eligible, conn=None: eligible
+        )
 
         from modules.sleep_loop import run_sleep_loop
         result = run_sleep_loop(reason="test", budget_ms=8000)

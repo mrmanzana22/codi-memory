@@ -22,7 +22,7 @@ from datetime import datetime
 
 from modules.config import (
     FTS_DB_PATH, _emotional_state, _current_session,
-    now_col, now_iso, TZ_COL,
+    now_col, now_iso, TZ_COL, connect_fts,
 )
 from modules.tracing import get_trace_id
 from modules.events import event_bus, Events
@@ -45,10 +45,8 @@ REMINDERS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "recor
 
 def _get_conn():
     """Get a WAL-mode SQLite connection to FTS DB."""
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = connect_fts(FTS_DB_PATH)
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=3000")
     return conn
 
 

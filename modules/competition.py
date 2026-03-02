@@ -12,6 +12,8 @@ Design: Pure logic, no Qdrant/SQLite dependencies. Fully unit-testable.
 Created: 2026-02-13 (WIRING-6 - Phase 6.1)
 """
 
+import math
+import random
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,10 +28,17 @@ ATTENTION_FOCUS_BONUS = 0.12      # Top-down attentional gain (Desimone & Duncan
 IGNITION_THRESHOLD = 0.25         # Min activation for workspace access (Dehaene & Changeux 2011)
 COALITION_TOPIC_BONUS = 0.10      # Bonus when multiple domains converge on same topic
 
-# GWT-4: Recurrent amplification (Dehaene & Changeux 2003)
-# Models NMDA-mediated bistable dynamics: winner self-excites, losers suppressed
-AMPLIFICATION_GAIN = 0.15         # Winner recurrent self-excitation
-LATERAL_INHIBITION = 0.12         # Loser suppression (strong lateral inhibition)
+# GWT-4 / S3-01: Iterative nonlinear ignition (Dehaene & Changeux 2003)
+# N passes of logistic self-excitation + lateral inhibition.
+# Creates bistable phase transition: above threshold → ignites to ~1.0,
+# losers suppressed to ~0.0. NMDA-mediated recurrence.
+N_AMPLIFICATION_PASSES = 3       # Iterations of recurrent dynamics
+W_RECURRENT = 0.8                # Self-excitation weight per pass (logistic growth)
+W_LATERAL_INHIBITION = 0.15      # Lateral inhibition weight per pass
+
+# S2-03: Softmax policy selection (Luce 1959, Sutton & Barto 2018)
+# Temperature controls exploration: high T = more random, low T = more greedy
+SOFTMAX_TEMPERATURE = 8.0         # Gamma: inverse temperature for softmax (higher = more greedy)
 
 VALID_DOMAINS = frozenset([
     "episodic", "semantic", "working_memory",
@@ -105,11 +114,13 @@ def run_workspace_competition(
     above_threshold = [c for c in candidates if c.activation >= IGNITION_THRESHOLD]
     below_threshold = [c for c in candidates if c.activation < IGNITION_THRESHOLD]
 
-    # Sort survivors by activation descending (highest wins)
-    ranked = sorted(above_threshold, key=lambda c: c.activation, reverse=True)
-
-    winners = ranked[:slots]
-    losers = ranked[slots:] + below_threshold
+    # S2-03: Softmax policy selection (Luce 1959, Sutton & Barto 2018)
+    # Replaces deterministic argmax with probabilistic sampling.
+    # P(i) = exp(gamma * a_i) / sum(exp(gamma * a_j))
+    # This preserves exploration while favoring high-activation candidates.
+    winners = _softmax_select(above_threshold, slots)
+    winner_set = set(id(w) for w in winners)
+    losers = [c for c in above_threshold if id(c) not in winner_set] + below_threshold
 
     # GWT-4: Recurrent amplification (phase transition / ignition)
     apply_recurrent_amplification(winners, losers)
@@ -127,52 +138,116 @@ def run_workspace_competition(
     return result
 
 
-def _apply_coalition_bonus(candidates: list) -> None:
-    """LIDA-inspired coalition formation.
+def _softmax_select(candidates: list, k: int) -> list:
+    """Softmax-weighted sampling without replacement (S2-03).
 
-    When candidates from 2+ different domains share a topic,
-    they form a coalition and each gets a bonus. This models
-    the binding of multi-source signals converging on one theme.
+    P(i) = exp(gamma * a_i) / Z, where gamma = SOFTMAX_TEMPERATURE.
+    Higher gamma -> more deterministic (approaches argmax).
+    Lower gamma -> more exploration (approaches uniform).
+
+    Luce 1959: choice axiom. Sutton & Barto 2018: softmax action selection.
+
+    Falls back to argmax if sampling fails.
+    """
+    if not candidates or k <= 0:
+        return []
+    if len(candidates) <= k:
+        return list(candidates)
+
+    try:
+        selected = []
+        remaining = list(candidates)
+        for _ in range(k):
+            if not remaining:
+                break
+            # Compute softmax weights
+            max_a = max(c.activation for c in remaining)
+            weights = []
+            for c in remaining:
+                # Shift by max for numerical stability
+                w = math.exp(SOFTMAX_TEMPERATURE * (c.activation - max_a))
+                weights.append(w)
+            total_w = sum(weights)
+            if total_w <= 0:
+                # Fallback: pick highest
+                remaining.sort(key=lambda c: c.activation, reverse=True)
+                selected.append(remaining.pop(0))
+                continue
+            # Weighted random selection
+            probs = [w / total_w for w in weights]
+            r = random.random()
+            cumulative = 0.0
+            chosen_idx = len(remaining) - 1
+            for i, p in enumerate(probs):
+                cumulative += p
+                if r <= cumulative:
+                    chosen_idx = i
+                    break
+            selected.append(remaining.pop(chosen_idx))
+        return selected
+    except Exception:
+        # Fallback: deterministic argmax
+        ranked = sorted(candidates, key=lambda c: c.activation, reverse=True)
+        return ranked[:k]
+
+
+def _apply_coalition_bonus(candidates: list) -> None:
+    """PID-synergy coalition formation (S0-03, CL-06, G-INV-13).
+
+    Reward DIVERSITY: candidates from a single domain that cover
+    different topics get a bonus. This models cross-domain synergy
+    (Partial Information Decomposition) — a coalition is more valuable
+    when its members bring non-redundant information.
+
+    Previous (broken): same-topic convergence rewarded redundancy.
     """
     from collections import defaultdict
 
-    # Group by topic
-    topic_map = defaultdict(list)
+    # Group by source_domain
+    domain_map = defaultdict(list)
     for c in candidates:
-        topic = c.metadata.get("topic", "")
-        if topic:
-            topic_map[topic.lower()].append(c)
+        domain_map[c.source_domain].append(c)
 
-    # Apply bonus where 2+ domains converge on same topic
-    for topic, members in topic_map.items():
-        domains = set(m.source_domain for m in members)
-        if len(domains) >= 2:
+    # Apply bonus when a domain has candidates covering 2+ different topics
+    for domain, members in domain_map.items():
+        topics = set()
+        for m in members:
+            topic = m.metadata.get("topic", "")
+            if topic:
+                topics.add(topic.lower())
+        if len(topics) >= 2:
+            # Diversity bonus: each member in a diverse domain gets rewarded
             for m in members:
                 m.activation = min(1.0, m.activation + COALITION_TOPIC_BONUS)
 
 
 def apply_recurrent_amplification(winners: list, losers: list) -> None:
-    """GWT-4: Nonlinear ignition dynamics (Dehaene & Changeux 2003).
+    """GWT-4 / S3-01: Iterative nonlinear ignition (Dehaene & Changeux 2003).
 
-    After initial ranking, the primary winner gets recurrent self-excitation
-    while ALL losers suffer lateral inhibition. This creates a phase transition
-    (bistable dynamics): above threshold -> explosive amplification + suppression.
+    N passes of recurrent amplification create bistable phase transition:
+    the winner gets logistic self-excitation (fastest growth at a=0.5,
+    saturates near 0 and 1), while ALL losers suffer lateral inhibition
+    proportional to winner strength.
 
-    NMDA-mediated recurrence makes workspace access all-or-none:
-    the winner becomes much stronger, losers become much weaker.
+    After N passes the system settles into one of two attractors:
+    - Above ignition threshold → winner near 1.0 ("conscious access")
+    - Below → stays low ("unconscious processing")
 
+    NMDA-mediated recurrence makes workspace access all-or-none.
     Only the top winner gets amplified (single content in spotlight).
-    All losers get suppressed equally (uniform lateral inhibition).
     """
     if not winners:
         return
 
-    # Recurrent self-excitation: top winner gets boosted
-    winners[0].activation = min(1.0, winners[0].activation + AMPLIFICATION_GAIN)
+    for _ in range(N_AMPLIFICATION_PASSES):
+        a = winners[0].activation
+        # Logistic self-excitation: fastest growth at a=0.5, saturates near 0 and 1
+        boost = W_RECURRENT * a * (1.0 - a)
+        winners[0].activation = min(1.0, a + boost)
 
-    # Lateral inhibition: all losers suppressed
-    for loser in losers:
-        loser.activation = max(0.0, loser.activation - LATERAL_INHIBITION)
+        # Lateral inhibition proportional to winner's current activation
+        for loser in losers:
+            loser.activation = max(0.0, loser.activation - W_LATERAL_INHIBITION * winners[0].activation)
 
 
 def _emit_competition_event(result: CompetitionResult):

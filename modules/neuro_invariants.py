@@ -99,7 +99,7 @@ def check_static_invariants() -> list:
             FADEM_LAMBDA_BASE, FADEM_MU, FADEM_FLOOR,
             FADEM_BETA, FADEM_AROUSAL_THRESHOLD, RIF_BASE,
         )
-        _v("forgetting", "FADEM_MU", 0.5, FADEM_MU, "FadeMem importance sensitivity")
+        _v("forgetting", "FADEM_MU", 1.0, FADEM_MU, "FadeMem importance sensitivity (S0-04: power-law form)")
         _r("forgetting", "FADEM_FLOOR", 0.05, 0.15, FADEM_FLOOR, "Minimum salience floor")
         _r("forgetting", "FADEM_LAMBDA_BASE", 0.001, 0.05, FADEM_LAMBDA_BASE, "Ebbinghaus 1885")
         # Beta ordering: unconsolidated > episodic > semantic (faster decay = higher beta)
@@ -212,7 +212,8 @@ def check_runtime_invariants() -> list:
         return violations
 
     try:
-        conn = sqlite3.connect(fts_db, timeout=3)
+        from modules.config import connect_fts
+        conn = connect_fts(fts_db)
 
         # 1. Transition stats must exist and be populated (Friston 2010)
         try:

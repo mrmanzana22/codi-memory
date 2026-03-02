@@ -96,7 +96,7 @@ class TestDbPool:
             assert sync == 1, f"Expected synchronous=1 (NORMAL), got {sync}"
 
             timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
-            assert timeout == 5000, f"Expected busy_timeout=5000, got {timeout}"
+            assert timeout == 10000, f"Expected busy_timeout=10000, got {timeout}"
 
             fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
             assert fk == 1, f"Expected foreign_keys=1 (ON), got {fk}"
@@ -178,9 +178,11 @@ class TestDbPool:
     def test_concurrent_access_no_crash(self, tmp_path):
         """Multiple threads using pool concurrently should not crash."""
         from modules.db_pool import get_conn, close_thread_connections
+        import time
 
         db_path = str(tmp_path / "concurrent.db")
         conn_setup = sqlite3.connect(db_path)
+        conn_setup.execute("PRAGMA journal_mode=WAL")
         conn_setup.execute("CREATE TABLE counter (id INTEGER PRIMARY KEY, val INTEGER)")
         conn_setup.execute("INSERT INTO counter VALUES (1, 0)")
         conn_setup.commit()
@@ -192,8 +194,22 @@ class TestDbPool:
             try:
                 conn = get_conn(db_path)
                 for _ in range(10):
-                    conn.execute("UPDATE counter SET val = val + 1 WHERE id = 1")
-                    conn.commit()
+                    # Use BEGIN IMMEDIATE so busy_timeout applies at lock acquisition
+                    # (DEFERRED can fail with "database is locked" on upgrade)
+                    for attempt in range(3):
+                        try:
+                            conn.execute("BEGIN IMMEDIATE")
+                            conn.execute("UPDATE counter SET val = val + 1 WHERE id = 1")
+                            conn.commit()
+                            break
+                        except sqlite3.OperationalError:
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
+                            if attempt == 2:
+                                raise
+                            time.sleep(0.01 * (attempt + 1))
             except Exception as e:
                 errors.append(str(e))
             finally:

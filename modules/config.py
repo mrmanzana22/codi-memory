@@ -38,8 +38,12 @@ def now_display() -> str:
 def now_short() -> str:
     """Retorna timestamp corto: '2026-02-07 07:30'"""
     return now_col().strftime("%Y-%m-%d %H:%M")
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
+try:
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.transport_security import TransportSecuritySettings
+    _HAS_MCP = True
+except ImportError:
+    _HAS_MCP = False
 from mem0 import Memory
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
@@ -58,6 +62,24 @@ BACKUP_FILE = os.path.join(BACKUP_DIR, "memories_backup.json")
 TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
 FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 PROSPECTIVE_DB_PATH = os.path.join(os.path.dirname(FTS_DB_PATH), "prospective.db")
+
+# ---------------------------------------------------------------------------
+# Centralized SQLite connection factory
+# ---------------------------------------------------------------------------
+_SQLITE_TIMEOUT = 10          # seconds to wait for lock
+_SQLITE_BUSY_TIMEOUT = 10000  # ms — PRAGMA busy_timeout
+
+def connect_fts(db_path: str = None) -> sqlite3.Connection:
+    """Create a SQLite connection with consistent timeout and WAL settings.
+
+    Use this instead of raw sqlite3.connect() throughout the codebase.
+    The caller is responsible for closing the connection.
+    For pooled (thread-local, never-close) connections, use db_pool.get_conn().
+    """
+    conn = sqlite3.connect(db_path or FTS_DB_PATH, timeout=_SQLITE_TIMEOUT)
+    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT}")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
 JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
 CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
@@ -393,12 +415,15 @@ if SUPABASE_URL and SUPABASE_KEY:
 # MCP SERVER
 # ============================================================
 
-mcp = FastMCP(
-    "codi-memory",
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=False,
+if _HAS_MCP:
+    mcp = FastMCP(
+        "codi-memory",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
     )
-)
+else:
+    mcp = None  # Tests/scripts without mcp installed
 
 # ============================================================
 # SHARED IN-MEMORY STATE

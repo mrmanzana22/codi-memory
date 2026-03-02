@@ -26,6 +26,10 @@ from modules.destructive_guard import (
 from modules.db_pool import get_conn
 from modules.secret_redact import redact_secrets
 
+# Sprint 13: EFE-gated active learning threshold
+# Adaptive: high when model confident, low when uncertain
+EFE_GATE_BASE_THRESHOLD = 0.3
+
 
 def _fts_conn():
     """Return a pooled SQLite connection. Callers should NOT close it."""
@@ -270,6 +274,58 @@ def bm25_rank_to_score(rank: float) -> float:
     return normalized / (normalized + 1.0)
 
 
+def get_texts_by_ids(memory_ids: list) -> dict:
+    """Bulk fetch original texts from FTS store.
+
+    Returns {memory_id: {content, category, source, importance}}.
+    Uses db_pool (no connection churn). Single SELECT ... WHERE IN.
+    """
+    if not memory_ids:
+        return {}
+    conn = get_conn()
+    placeholders = ",".join("?" for _ in memory_ids)
+    rows = conn.execute(
+        f"SELECT memory_id, content, category, source, importance "
+        f"FROM memories_text WHERE memory_id IN ({placeholders})",
+        memory_ids,
+    ).fetchall()
+    return {
+        row["memory_id"]: {
+            "content": row["content"],
+            "category": row["category"],
+            "source": row["source"],
+            "importance": row["importance"],
+        }
+        for row in rows
+    }
+
+
+def get_text_by_id(memory_id: str):
+    """Single-ID convenience wrapper. Returns dict or None."""
+    result = get_texts_by_ids([memory_id])
+    return result.get(memory_id)
+
+
+def search_with_fts_content(query, user_id, limit=5) -> dict:
+    """Vector ranking from mem0, original text from FTS.
+
+    Calls memory.search() for ranking, then bulk-replaces compressed
+    text with FTS originals. Preserves id, score, and all ranking metadata.
+    """
+    results = memory.search(query=query, user_id=user_id, limit=limit)
+    if not results or not results.get("results"):
+        return results
+    ids = [r["id"] for r in results["results"] if r.get("id")]
+    if not ids:
+        return results
+    fts_map = get_texts_by_ids(ids)
+    for r in results["results"]:
+        fts = fts_map.get(r.get("id"))
+        if fts:
+            r["memory"] = fts["content"]
+    return results
+
+
 def sync_fts_from_backup():
     """Sincroniza todas las memorias existentes al indice FTS5."""
     if not os.path.exists(BACKUP_FILE):
@@ -487,29 +543,125 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
             record_access(COLLECTION_NAME, new_id, {
                 'related_memories': connections,
             })
+            # S2-05: Record typed edges in SQLite
+            try:
+                from modules.config import connect_fts
+                from modules.utils import now_iso
+                edge_conn = connect_fts()
+                from modules.spreading import _init_edge_table, _record_edges
+                _init_edge_table(edge_conn)
+                _record_edges(edge_conn, new_id, connections, now_iso(),
+                              edge_type="co_occurs")
+                edge_conn.close()
+            except Exception:
+                pass
     except Exception:
         pass
+
+
+def _compute_efe_informativeness(content: str, category: str, importance: str) -> float:
+    """Sprint 13: Compute EFE-based informativeness score for a memory.
+
+    Answers: "Would storing this memory reduce uncertainty in the generative model?"
+
+    Components:
+      1. Novelty: how different is this from existing knowledge? (epistemic)
+      2. Utility: how likely to be retrieved in future? (pragmatic)
+      3. Importance weight: critical/high memories always pass
+
+    Returns:
+        Informativeness score [0, 1]. Higher = more informative.
+
+    References:
+        Canon v4 PN-19: BMR + EFE for memory operations
+        Friston 2017: Expected Free Energy = pragmatic + epistemic
+        Maxwell's Demon (Eq.7): only record if it reduces model uncertainty
+    """
+    import math
+
+    # Component 1: Importance prior (critical always informative)
+    importance_score = {
+        "critical": 1.0,
+        "high": 0.8,
+        "medium": 0.5,
+        "low": 0.2,
+    }.get(importance, 0.5)
+
+    # Component 2: Content richness proxy (longer, more specific = more informative)
+    words = content.split()
+    word_count = len(words)
+    richness = min(1.0, word_count / 50.0)  # Saturates at 50 words
+
+    # Component 3: Category utility (some categories more useful for retrieval)
+    category_utility = {
+        "identidad": 0.9,
+        "aprendizaje": 0.8,
+        "proyecto": 0.7,
+        "episodio": 0.5,
+        "general": 0.4,
+    }.get(category, 0.5)
+
+    # Combined informativeness (weighted average)
+    informativeness = (
+        0.4 * importance_score +
+        0.3 * richness +
+        0.3 * category_utility
+    )
+
+    return min(1.0, max(0.0, informativeness))
+
+
+def _get_efe_gate_threshold() -> float:
+    """Adaptive EFE gate threshold.
+
+    High global precision → high threshold (model confident, be selective).
+    Low global precision → low threshold (model uncertain, accept more).
+    """
+    try:
+        from modules.config import connect_fts, FTS_DB_PATH
+        import os
+        if not os.path.exists(FTS_DB_PATH):
+            return EFE_GATE_BASE_THRESHOLD
+        conn = connect_fts(FTS_DB_PATH)
+        # Get recent average precision as proxy for model confidence
+        row = conn.execute("""
+            SELECT AVG(precision_weight) FROM (
+                SELECT precision_weight FROM prediction_results
+                ORDER BY id DESC LIMIT 20
+            )
+        """).fetchone()
+        conn.close()
+        if row and row[0]:
+            precision = row[0]
+            # High precision → higher threshold (be more selective)
+            # Low precision → lower threshold (accept more data)
+            return EFE_GATE_BASE_THRESHOLD * (0.5 + precision)
+        return EFE_GATE_BASE_THRESHOLD
+    except Exception:
+        return EFE_GATE_BASE_THRESHOLD
+
+
+def _get_arousal() -> float:
+    """Get current emotional arousal for BMR modulation."""
+    try:
+        from modules.config import _emotional_state
+        return abs(_emotional_state["current"].get("arousal", 0.0))
+    except Exception:
+        return 0.0
 
 
 def _compute_dedup_threshold(importance: str = "medium") -> float:
     """Hippocampal-inspired dynamic dedup threshold.
 
+    LEGACY: Kept as fallback. Primary dedup now uses BMR scoring (Sprint 9).
+
     Emotional arousal and importance raise the bar for dedup,
     mirroring amygdala-modulated encoding (LaBar & Cabeza 2006).
-
-    Base:  0.90
-    Arousal boost:  up to +0.05 when |arousal| > 0.3
-    Importance boost:  critical +0.05, high +0.03
-    Clamped to [0.85, 0.97]
     """
     base = 0.90
-    try:
-        from modules.config import _emotional_state
-        arousal = abs(_emotional_state["current"].get("arousal", 0.0))
-        if arousal > 0.3:
-            base += min(0.05, (arousal - 0.3) * 0.07)
-    except Exception:
-        pass
+    arousal = _get_arousal()
+    if arousal > 0.3:
+        base += min(0.05, (arousal - 0.3) * 0.07)
     base += {"critical": 0.05, "high": 0.03}.get(importance, 0.0)
     return min(0.97, max(0.85, round(base, 3)))
 
@@ -534,12 +686,17 @@ def add_memory_smart(content: str, category: str = "general",
         Resultado de la operacion con explicacion
     """
     try:
-        # Resolve dynamic dedup threshold (amygdala-modulated encoding)
+        # Sprint 9: BMR-scored dedup (replaces cosine threshold)
+        from modules.bmr import compute_log_bayes_factor
+
+        # Resolve dynamic dedup threshold (legacy fallback)
         if dedup_threshold <= 0:
             dedup_threshold = _compute_dedup_threshold(importance)
 
-        # 1. Buscar memorias similares
-        similar_results = memory.search(query=content, user_id=USER_ID, limit=3)
+        arousal = _get_arousal()
+
+        # 1. Buscar memorias similares (FTS-enriched for accurate dedup)
+        similar_results = search_with_fts_content(query=content, user_id=USER_ID, limit=3)
         contradiction_result = None  # Phase 5: set by inline check if similar found
 
         if similar_results and similar_results.get("results"):
@@ -548,16 +705,29 @@ def add_memory_smart(content: str, category: str = "general",
             top_id = top_result.get("id", "")
             top_text = top_result.get("memory", "")[:80]
 
-            # 2. Decidir accion segun similitud
-            if top_score > dedup_threshold:
-                # DUPLICADO - no guardar
+            # 2. BMR-scored dedup decision (Sprint 9, PN-19)
+            # Replaces: `if top_score > dedup_threshold`
+            # Now: compute log Bayes factor considering importance + arousal
+            top_metadata = {k: v for k, v in top_result.items()
+                           if k not in ('memory', 'score', 'id')}
+            log_bf = compute_log_bayes_factor(
+                cosine_score=top_score,
+                metadata_a=top_metadata,
+                importance_a=top_metadata.get("importance", "medium"),
+                importance_b=importance,
+                arousal=arousal,
+            )
+
+            if log_bf > 0:
+                # DUPLICADO — BMR says merged model is better
                 return json.dumps({
                     "action": "skipped_duplicate",
                     "score": round(top_score, 3),
-                    "dedup_threshold_used": dedup_threshold,
+                    "bmr_log_bf": round(log_bf, 3),
+                    "dedup_method": "bmr",
                     "existing_memory": top_text,
                     "existing_id": top_id,
-                    "message": f"Memoria ya existe (similitud {top_score:.2f}, threshold {dedup_threshold:.2f})"
+                    "message": f"BMR dedup: log_bf={log_bf:.2f} (cosine={top_score:.2f}, importance={importance})"
                 }, ensure_ascii=False)
 
             # Phase 5: Inline contradiction check (Kumaran & Maguire 2007)
@@ -676,6 +846,18 @@ def add_memory_smart(content: str, category: str = "general",
                     "score": round(top_score, 3),
                     "message": f"Memoria guardada y relacionada con existente (similitud {top_score:.2f})"
                 }, ensure_ascii=False)
+
+        # Sprint 13: EFE-gated active learning (PN-19)
+        # Only record memories that are informative (reduce noise)
+        efe_score = _compute_efe_informativeness(content, category, importance)
+        efe_threshold = _get_efe_gate_threshold()
+        if efe_score < efe_threshold and importance not in ("critical", "high"):
+            return json.dumps({
+                "action": "skipped_low_informativeness",
+                "efe_score": round(efe_score, 3),
+                "efe_threshold": round(efe_threshold, 3),
+                "message": f"EFE gate: informativeness {efe_score:.2f} < threshold {efe_threshold:.2f}"
+            }, ensure_ascii=False)
 
         # 3. NUEVA - guardar normal
         result = memory.add(

@@ -38,7 +38,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from modules.config import FTS_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso
+from modules.config import FTS_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso, connect_fts
 from modules.events import event_bus, Events
 from modules.secret_redact import redact_secrets
 
@@ -81,7 +81,342 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "backup"]
+TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "backup", "causal_discovery", "sharpe_insights"]
+
+# S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
+# Tier 1 (every tick): fast, high-value maintenance
+# Tier 2 (every 3rd tick): medium-weight model updates
+# Tier 3 (every 6th tick): heavy consolidation + exploration
+TICK_TIER = {
+    "prospective": 1,    # Fast, high-value (intention maintenance)
+    "health": 1,          # Fast, critical (FTS sync, health check)
+    "self_model": 2,      # Medium (reflection, ~500ms)
+    "reconsolidation": 2, # Medium (labile memory processing)
+    "homeostasis": 2,     # Medium (salience decay)
+    "consolidation": 3,         # Heavy (clustering, extraction)
+    "curiosity": 3,             # Heavy (LLM call for question generation)
+    "backup": 3,                # Heavy (Qdrant snapshots)
+    "causal_discovery": 4,      # Very heavy (NOTEARS optimization, every 12th tick ~6h)
+    "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
+}
+
+# ============================================================
+# S4-05: SLEEP WORLD MODEL (Active Inference for maintenance)
+# Friston 2017: select actions that minimize expected free energy
+# ============================================================
+
+WORLD_MODEL_DIMS = (
+    "new_memories",        # Pending memories not yet consolidated [0,1]
+    "fts_gap",             # FTS index out-of-sync ratio [0,1]
+    "labile_count",        # Memories in reconsolidation window [0,1]
+    "hours_since_consol",  # Normalized hours since full consolidation [0,1]
+    "hours_since_backup",  # Normalized hours since last backup [0,1]
+    "curiosity_pending",   # Pending curiosity questions ratio [0,1]
+    "decay_debt",          # Hours since last homeostasis tick [0,1]
+    "intention_staleness", # Hours since last prospective maintenance [0,1]
+)
+
+
+class SleepWorldModel:
+    """World model for sleep loop tick prioritization (S4-05).
+
+    Learns how each tick affects the 8D system state, then uses
+    forward simulation to prioritize ticks by expected state improvement.
+
+    Active Inference: select maintenance actions (ticks) that minimize
+    expected free energy (deviation from preferred homeostatic state).
+
+    Friston 2017, Parr & Friston 2019.
+    """
+
+    # Preferred state: homeostatic set points
+    PREFERRED = {
+        "new_memories": 0.0,
+        "fts_gap": 0.0,
+        "labile_count": 0.0,
+        "hours_since_consol": 0.1,
+        "hours_since_backup": 0.1,
+        "curiosity_pending": 0.3,   # Some curiosity is healthy (Loewenstein 1994)
+        "decay_debt": 0.0,
+        "intention_staleness": 0.0,
+    }
+
+    # Prior beliefs about tick effects (before learning).
+    # Negative delta = reduces dimension (moves toward 0 = improvement).
+    PRIOR_EFFECTS = {
+        "consolidation":   {"new_memories": -0.5, "hours_since_consol": -0.8},
+        "health":          {"fts_gap": -0.7},
+        "reconsolidation": {"labile_count": -0.6},
+        "homeostasis":     {"decay_debt": -0.5},
+        "backup":          {"hours_since_backup": -0.8},
+        "curiosity":       {"curiosity_pending": -0.3},
+        "prospective":        {"intention_staleness": -0.5},
+        "self_model":         {},  # Metacognitive — no direct state effect
+        "causal_discovery":   {},  # Structural learning — no direct homeostatic effect
+    }
+
+    LEARNING_RATE = 0.3  # EMA alpha for learned effects
+    MIN_OBS_FOR_LEARNED = 3  # Observations needed before trusting learned over prior
+
+    def __init__(self):
+        self._learned_effects = {}   # tick -> {dim: running_mean_delta}
+        self._learn_counts = {}      # tick -> observation count
+
+    def read_state(self, conn=None) -> dict:
+        """Read live 8D state vector from SQLite. No Qdrant calls."""
+        state = {d: 0.5 for d in WORLD_MODEL_DIMS}
+        close_conn = False
+
+        try:
+            if conn is None:
+                conn = _get_conn()
+                close_conn = True
+            now = datetime.now()
+
+            # new_memories: count since last full consolidation / 100
+            try:
+                row = conn.execute(
+                    "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
+                ).fetchone()
+                if row and row[0]:
+                    n = conn.execute(
+                        "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
+                        (str(row[0]),)
+                    ).fetchone()[0]
+                else:
+                    n = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()[0]
+                state["new_memories"] = min(1.0, n / 100.0)
+            except Exception:
+                pass
+
+            # fts_gap: use cached qdrant_count from health tick
+            try:
+                fts_count = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()[0]
+                qrow = conn.execute(
+                    "SELECT value FROM sleep_loop_state WHERE key = 'qdrant_count'"
+                ).fetchone()
+                if qrow and int(qrow[0]) > 0:
+                    gap = (int(qrow[0]) - fts_count) / max(1, int(qrow[0]))
+                    state["fts_gap"] = min(1.0, max(0.0, gap))
+                else:
+                    state["fts_gap"] = 0.1
+            except Exception:
+                pass
+
+            # labile_count: pending reconsolidations / 10
+            try:
+                labile = conn.execute(
+                    "SELECT COUNT(*) FROM labile_memories WHERE window_expires > ?",
+                    (now.isoformat(),)
+                ).fetchone()[0]
+                state["labile_count"] = min(1.0, labile / 10.0)
+            except Exception:
+                pass
+
+            # hours_since_consol: normalized by 48h
+            try:
+                row = conn.execute(
+                    "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
+                ).fetchone()
+                if row and row[0]:
+                    last = datetime.fromisoformat(str(row[0]).replace('+00:00', ''))
+                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                    state["hours_since_consol"] = min(1.0, hours / 48.0)
+            except Exception:
+                pass
+
+            # hours_since_backup: from marker files
+            try:
+                import glob as _g
+                backup_dir = os.path.join(BASE_DIR, 'backups', 'qdrant')
+                markers = sorted(_g.glob(os.path.join(backup_dir, ".backup-*.done")))
+                if markers:
+                    hours = (time.time() - os.path.getmtime(markers[-1])) / 3600
+                    state["hours_since_backup"] = min(1.0, hours / 24.0)
+                else:
+                    state["hours_since_backup"] = 1.0
+            except Exception:
+                pass
+
+            # curiosity_pending: from curiosity.json / 20
+            try:
+                cpath = os.path.join(DATA_DIR, "curiosity.json")
+                if os.path.exists(cpath):
+                    with open(cpath) as f:
+                        cdata = json.load(f)
+                    pending = len([q for q in cdata.get("questions", [])
+                                   if q.get("status") == "pending"])
+                    state["curiosity_pending"] = min(1.0, pending / 20.0)
+            except Exception:
+                pass
+
+            # decay_debt: hours since last homeostasis / 12
+            try:
+                row = conn.execute(
+                    "SELECT value FROM sleep_loop_state WHERE key = 'last_homeostasis'"
+                ).fetchone()
+                if row:
+                    last = datetime.fromisoformat(row[0])
+                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                    state["decay_debt"] = min(1.0, hours / 12.0)
+            except Exception:
+                pass
+
+            # intention_staleness: hours since last prospective tick / 6
+            try:
+                row = conn.execute(
+                    "SELECT value FROM sleep_loop_state WHERE key = 'last_prospective'"
+                ).fetchone()
+                if row:
+                    last = datetime.fromisoformat(row[0])
+                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                    state["intention_staleness"] = min(1.0, hours / 6.0)
+            except Exception:
+                pass
+
+            if close_conn:
+                conn.close()
+        except Exception:
+            if close_conn and conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        return state
+
+    def compute_free_energy(self, state: dict) -> float:
+        """Free energy = mean squared deviation from preferred state.
+
+        Friston 2010: Free energy is an upper bound on surprise.
+        Lower = system closer to homeostatic set points.
+        """
+        fe = 0.0
+        for dim in WORLD_MODEL_DIMS:
+            current = state.get(dim, 0.5)
+            preferred = self.PREFERRED.get(dim, 0.0)
+            fe += (current - preferred) ** 2
+        return fe / len(WORLD_MODEL_DIMS)
+
+    def simulate_tick(self, state: dict, tick_name: str) -> dict:
+        """Predict state after running tick (learned effects if available, else prior)."""
+        new_state = dict(state)
+
+        if (tick_name in self._learned_effects
+                and self._learn_counts.get(tick_name, 0) >= self.MIN_OBS_FOR_LEARNED):
+            effects = self._learned_effects[tick_name]
+        else:
+            effects = self.PRIOR_EFFECTS.get(tick_name, {})
+
+        for dim, delta in effects.items():
+            new_state[dim] = max(0.0, min(1.0, new_state.get(dim, 0.5) + delta))
+
+        return new_state
+
+    def prioritize_ticks(self, eligible_ticks: list, conn=None) -> list:
+        """Rank ticks by expected free energy reduction (Active Inference).
+
+        Returns ticks ordered best-first. Ticks with no expected
+        improvement keep their original order.
+        """
+        state = self.read_state(conn)
+        current_fe = self.compute_free_energy(state)
+
+        ranked = []
+        for tick_name in eligible_ticks:
+            predicted = self.simulate_tick(state, tick_name)
+            predicted_fe = self.compute_free_energy(predicted)
+            improvement = current_fe - predicted_fe
+            ranked.append((tick_name, improvement))
+
+        ranked.sort(key=lambda x: x[1], reverse=True)
+        return [name for name, _ in ranked]
+
+    def learn_from_tick(self, tick_name: str, state_before: dict, state_after: dict):
+        """Update learned effects from observed state transition (EMA).
+
+        Bayesian spirit: more observations → more trust in learned effects.
+        """
+        observed = {}
+        for dim in WORLD_MODEL_DIMS:
+            delta = state_after.get(dim, 0.5) - state_before.get(dim, 0.5)
+            if abs(delta) > 0.01:
+                observed[dim] = delta
+
+        if not observed:
+            return
+
+        if tick_name not in self._learned_effects:
+            self._learned_effects[tick_name] = {}
+            self._learn_counts[tick_name] = 0
+
+        prior = self.PRIOR_EFFECTS.get(tick_name, {})
+        for dim, delta in observed.items():
+            old = self._learned_effects[tick_name].get(dim, prior.get(dim, 0.0))
+            self._learned_effects[tick_name][dim] = (
+                self.LEARNING_RATE * delta + (1 - self.LEARNING_RATE) * old
+            )
+
+        self._learn_counts[tick_name] = self._learn_counts.get(tick_name, 0) + 1
+
+    def persist(self, conn):
+        """Save learned effects to SQLite for persistence across runs."""
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS world_model_effects (
+                    tick_name TEXT NOT NULL,
+                    dimension TEXT NOT NULL,
+                    effect REAL NOT NULL,
+                    observations INTEGER DEFAULT 0,
+                    updated_at TEXT,
+                    PRIMARY KEY (tick_name, dimension)
+                )
+            """)
+            now_str = datetime.now().isoformat()
+            for tick_name, effects in self._learned_effects.items():
+                count = self._learn_counts.get(tick_name, 0)
+                for dim, effect in effects.items():
+                    conn.execute("""
+                        INSERT INTO world_model_effects
+                            (tick_name, dimension, effect, observations, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(tick_name, dimension) DO UPDATE SET
+                            effect = excluded.effect,
+                            observations = excluded.observations,
+                            updated_at = excluded.updated_at
+                    """, (tick_name, dim, effect, count, now_str))
+            conn.commit()
+        except Exception:
+            pass
+
+    def load(self, conn):
+        """Load learned effects from SQLite."""
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS world_model_effects (
+                    tick_name TEXT NOT NULL,
+                    dimension TEXT NOT NULL,
+                    effect REAL NOT NULL,
+                    observations INTEGER DEFAULT 0,
+                    updated_at TEXT,
+                    PRIMARY KEY (tick_name, dimension)
+                )
+            """)
+            rows = conn.execute(
+                "SELECT tick_name, dimension, effect, observations "
+                "FROM world_model_effects"
+            ).fetchall()
+            for tick_name, dim, effect, obs in rows:
+                if tick_name not in self._learned_effects:
+                    self._learned_effects[tick_name] = {}
+                    self._learn_counts[tick_name] = 0
+                self._learned_effects[tick_name][dim] = effect
+                self._learn_counts[tick_name] = max(
+                    self._learn_counts.get(tick_name, 0), obs
+                )
+        except Exception:
+            pass
+
 
 # Minimum ms required to even attempt a tick (below this, skip)
 TICK_MIN_MS = {
@@ -92,6 +427,8 @@ TICK_MIN_MS = {
     "consolidation": 1500,
     "homeostasis": 200,
     "curiosity": 200,
+    "causal_discovery": 500,
+    "sharpe_insights": 300,
 }
 
 
@@ -138,11 +475,38 @@ def _release_lock():
 
 def _get_conn():
     """Get WAL-mode SQLite connection."""
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = connect_fts()
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=3000")
     return conn
+
+
+def _get_and_increment_tick_counter() -> int:
+    """Get current tick counter and increment it. Persists across runs in SQLite.
+
+    S0-05: VOC tiering uses this to decide which ticks to run.
+    Returns the counter value BEFORE incrementing (0-indexed).
+    """
+    conn = _get_conn()
+    try:
+        # Table created by migration 013_sleep_loop_state.sql
+        # Ensure it exists as safety net (idempotent)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sleep_loop_state"
+            " (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        row = conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = 'tick_counter'"
+        ).fetchone()
+        counter = int(row[0]) if row else 0
+        next_val = counter + 1
+        conn.execute("""
+            INSERT INTO sleep_loop_state (key, value) VALUES ('tick_counter', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (str(next_val),))
+        conn.commit()
+        return counter
+    finally:
+        conn.close()
 
 
 def _get_target_checkpoint(max_age_min: int) -> int | None:
@@ -206,27 +570,53 @@ def _write_sleep_report(checkpoint_id: int, report_text: str) -> bool:
 # ============================================================
 
 def _should_run_full_consolidation() -> bool:
-    """Check if full consolidation should run (once per day, during night hours)."""
+    """Check if full consolidation should run based on info-debt (S0-06, CL-11).
+
+    Was: fixed 20h cooldown (ignores memory load).
+    Now: info-debt formula: log(1+n) * (1-exp(-0.1*h)) > 2.0
+      n = new memories since last full consolidation
+      h = hours since last full consolidation
+
+    Still gated to night hours (10pm-6am) to minimize interference.
+    """
+    import math
+
     try:
         from modules.config import now_col
         now = now_col()
         # Only during night hours (10pm-6am) to minimize interference
         if not (22 <= now.hour or now.hour < 6):
             return False
-        # Check if full ran in last 20 hours
+
         conn = _get_conn()
+
+        # Get last full consolidation time
         row = conn.execute(
             "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
         ).fetchone()
+
+        if not row or not row[0]:
+            conn.close()
+            return True  # never ran, should run
+
+        last = datetime.fromisoformat(str(row[0]))
+        if last.tzinfo:
+            last = last.replace(tzinfo=None)
+        hours_since = max(0.01, (datetime.now() - last).total_seconds() / 3600)
+
+        # Count new memories since last consolidation
+        new_memories_row = conn.execute(
+            "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
+            (str(row[0]),)
+        ).fetchone()
         conn.close()
-        if row and row[0]:
-            from datetime import datetime
-            last = datetime.fromisoformat(str(row[0]))
-            if last.tzinfo:
-                last = last.replace(tzinfo=None)
-            hours_since = (datetime.now() - last).total_seconds() / 3600
-            return hours_since >= 20
-        return True  # never ran, should run
+
+        new_memories = new_memories_row[0] if new_memories_row else 0
+
+        # Info-debt formula: high memory load + enough time elapsed = consolidate
+        debt = math.log(1 + new_memories) * (1 - math.exp(-0.1 * hours_since))
+        return debt > 2.0
+
     except Exception:
         return False  # fail safe: don't run full on error
 
@@ -244,7 +634,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
     try:
         from modules.config import FTS_DB_PATH, qdrant, COLLECTION_NAME
 
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
+        conn = connect_fts()
         now = datetime.now().isoformat()
         processed = 0
         expired_count = 0
@@ -342,6 +732,90 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 pass
 
         conn.commit()
+
+        # --- Sprint 14.4: Closed-loop memory validation (M-INV-14) ---
+        # Use L2 domain accuracy as signal: if a domain consistently has
+        # high meta_pe, memories in that domain may need reconsolidation.
+        # Rationale: Nader 2000 + Clark 2013 (predictive processing).
+        validated = 0
+        try:
+            L2_PE_THRESHOLD = 0.5    # Domains with avg meta_pe above this are flagged
+            L2_MIN_SAMPLES = 5       # Need enough L2 data to trust the signal
+            MAX_FLAG_PER_CYCLE = 3   # Cap to prevent mass destabilization
+
+            # Find domains with consistently high L2 prediction error
+            flagged_domains = conn.execute("""
+                SELECT domain, AVG(meta_pe) as avg_pe, COUNT(*) as cnt
+                FROM prediction_results_l2
+                WHERE created_at > datetime('now', '-7 days')
+                GROUP BY domain
+                HAVING cnt >= ? AND AVG(meta_pe) > ?
+                ORDER BY avg_pe DESC
+                LIMIT 5
+            """, (L2_MIN_SAMPLES, L2_PE_THRESHOLD)).fetchall()
+
+            if flagged_domains:
+                flagged_count = 0
+                recon_window = (datetime.now() + timedelta(hours=6)).isoformat()
+
+                for domain, avg_pe, sample_count in flagged_domains:
+                    if flagged_count >= MAX_FLAG_PER_CYCLE:
+                        break
+
+                    # Find high-confidence memories in this domain from Qdrant
+                    try:
+                        from qdrant_client.models import Filter, FieldCondition, MatchValue
+                        hits = qdrant.scroll(
+                            COLLECTION_NAME,
+                            scroll_filter=Filter(must=[
+                                FieldCondition(key="category", match=MatchValue(value=domain)),
+                            ]),
+                            limit=10,
+                            with_payload=True,
+                        )[0]  # scroll returns (points, next_offset)
+
+                        for point in hits:
+                            if flagged_count >= MAX_FLAG_PER_CYCLE:
+                                break
+                            payload = point.payload or {}
+                            confidence = payload.get("confidence", 0.5)
+                            importance = payload.get("narrative_importance", "normal")
+
+                            # Only flag high-confidence, non-critical memories
+                            if confidence < 0.7 or importance in ("critical", "high"):
+                                continue
+
+                            # Check not already labile
+                            already = conn.execute(
+                                "SELECT 1 FROM labile_memories WHERE memory_id = ?",
+                                (str(point.id),)
+                            ).fetchone()
+                            if already:
+                                continue
+
+                            # Flag for reconsolidation
+                            conn.execute("""
+                                INSERT OR IGNORE INTO labile_memories
+                                (memory_id, marked_at, window_expires, prediction_error, trigger_context)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (
+                                str(point.id),
+                                now,
+                                recon_window,
+                                avg_pe,
+                                f"closed_loop_l2: domain={domain} avg_pe={avg_pe:.3f} n={sample_count}",
+                            ))
+                            flagged_count += 1
+
+                    except Exception:
+                        pass  # Qdrant scroll might fail, continue with other domains
+
+                validated = flagged_count
+                if validated > 0:
+                    conn.commit()
+        except Exception:
+            pass  # L2 table might not exist yet
+
         conn.close()
 
         elapsed = (time.monotonic() - start) * 1000
@@ -351,6 +825,8 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
             detail_parts.append(f"{processed} reconsolidated")
         if expired_count > 0:
             detail_parts.append(f"{expired_count} expired")
+        if validated > 0:
+            detail_parts.append(f"{validated} flagged by L2")
         if not detail_parts and not rows:
             detail_parts.append("no labiles")
         result["detail"] = ", ".join(detail_parts) if detail_parts else "idle"
@@ -705,6 +1181,85 @@ def _tick_backup(budget_ms: int) -> dict:
     return result
 
 
+def _tick_causal_discovery(budget_ms: int) -> dict:
+    """Sprint 7.5: NOTEARS causal discovery — runs every 12 ticks (~6h).
+
+    Learns causal DAG structure from attention_transitions + prediction_results.
+    Only runs if >= 50 new transitions since last discovery run.
+    Zheng et al. 2018: continuous DAG learning via augmented Lagrangian.
+    """
+    start = time.monotonic()
+    result = {"tick": "causal_discovery", "ok": False, "detail": ""}
+
+    try:
+        from modules.causal_discovery import run_causal_discovery, _count_new_transitions, _MIN_TRANSITIONS
+
+        # Check if enough new data since last run
+        last_ts_key = "last_causal_discovery"
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = ?", (last_ts_key,)
+        ).fetchone()
+        conn.close()
+
+        last_ts = row[0] if row else "1970-01-01T00:00:00"
+        new_count = _count_new_transitions(FTS_DB_PATH, last_ts)
+
+        if new_count < _MIN_TRANSITIONS:
+            result["ok"] = True
+            result["detail"] = f"skip: only {new_count} new transitions (need {_MIN_TRANSITIONS})"
+            result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+            return result
+
+        # Run discovery
+        disc_result = run_causal_discovery(FTS_DB_PATH)
+
+        # Record timestamp
+        _record_tick_timestamp(last_ts_key.replace("last_", ""))
+
+        elapsed = (time.monotonic() - start) * 1000
+        result["ok"] = disc_result.get("ran", False)
+        result["detail"] = (
+            f"topics={disc_result.get('topics', 0)} "
+            f"discovered={disc_result.get('edges_discovered', 0)} "
+            f"integrated={disc_result.get('edges_integrated', 0)} "
+            f"h={disc_result.get('h_value', 1.0):.2e}"
+        )
+        result["elapsed_ms"] = round(elapsed)
+
+    except Exception as e:
+        result["detail"] = f"error: {str(e)[:80]}"
+        result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+
+    return result
+
+
+def _tick_sharpe_insights(budget_ms: int) -> dict:
+    """K.1.3: Cross-domain insight discovery via Sharpe cognitive analysis.
+
+    Read-only analysis that finds cross-topic bridges and generates
+    novel connections between domains. Lightweight, runs in sleep loop
+    to discover emergent patterns across memory domains.
+    """
+    start = time.monotonic()
+    result = {"tick": "sharpe_insights", "ok": False, "detail": ""}
+
+    try:
+        from modules.sharpe_insights import discover_cross_domain_insights
+        insights = discover_cross_domain_insights()
+        result["ok"] = True
+        result["detail"] = (
+            f"bridges={insights.get('bridges_found', 0)} "
+            f"pairs={insights.get('anchor_pairs', 0)} "
+            f"insights={insights.get('insights_generated', 0)}"
+        )
+    except Exception as e:
+        result["detail"] = f"error: {str(e)[:80]}"
+
+    result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+    return result
+
+
 def _tick_prospective(budget_ms: int) -> dict:
     """Tick 3: Prospective memory -- intention decay + maintenance."""
     start = time.monotonic()
@@ -760,7 +1315,7 @@ def _tick_health(budget_ms: int) -> dict:
         from modules.config import qdrant as _qdrant, COLLECTION_NAME as _COLL
 
         fts_db_path = os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db')
-        fts_conn = sqlite3.connect(fts_db_path)
+        fts_conn = connect_fts(fts_db_path)
 
         # Get IDs already in FTS
         fts_ids = set(
@@ -850,8 +1405,25 @@ def format_sleep_report(tick_results: list, total_ms: int, reason: str) -> str:
 # MAIN SLEEP LOOP
 # ============================================================
 
+def _record_tick_timestamp(tick_name: str):
+    """Record when a tick last ran (for world model state reading)."""
+    try:
+        conn = _get_conn()
+        conn.execute("""
+            INSERT INTO sleep_loop_state (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (f"last_{tick_name}", datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> dict:
-    """Execute the full sleep loop with 4 ticks.
+    """Execute the full sleep loop with prioritized ticks.
+
+    S4-05: Uses SleepWorldModel to prioritize ticks by expected
+    free energy reduction, complementing the S0-05 VOC tiering.
 
     Args:
         reason: Why this run was triggered ('launchd', 'idle', 'manual')
@@ -861,6 +1433,21 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         dict with ok, report, checkpoint_id, elapsed_ms
     """
     start = time.monotonic()
+
+    # S0-05: VOC tiering — get tick counter to determine which tiers run
+    try:
+        tick_counter = _get_and_increment_tick_counter()
+    except Exception:
+        tick_counter = 0  # Fallback: run everything
+
+    # S4-05: Load world model for tick prioritization
+    world_model = SleepWorldModel()
+    try:
+        wm_conn = _get_conn()
+        world_model.load(wm_conn)
+        wm_conn.close()
+    except Exception:
+        pass  # World model works with priors if load fails
 
     # Tick dispatch table
     tick_dispatch = {
@@ -872,10 +1459,47 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "homeostasis": _tick_homeostasis,
         "curiosity": _tick_curiosity,
         "backup": _tick_backup,
+        "causal_discovery": _tick_causal_discovery,
+        "sharpe_insights": _tick_sharpe_insights,
     }
 
+    # Phase 1: Separate eligible ticks from VOC-tiered skips
     tick_results = []
+    eligible_ticks = []
+
     for name in TICK_ORDER:
+        tier = TICK_TIER.get(name, 1)
+        if tier == 2 and tick_counter % 3 != 0:
+            tick_results.append({
+                "tick": name, "ok": True,
+                "detail": f"tier-2 skip (tick #{tick_counter}, runs every 3rd)",
+                "elapsed_ms": 0, "status": "tiered_skip",
+            })
+            continue
+        if tier == 3 and tick_counter % 6 != 0:
+            tick_results.append({
+                "tick": name, "ok": True,
+                "detail": f"tier-3 skip (tick #{tick_counter}, runs every 6th)",
+                "elapsed_ms": 0, "status": "tiered_skip",
+            })
+            continue
+        if tier == 4 and tick_counter % 12 != 0:
+            tick_results.append({
+                "tick": name, "ok": True,
+                "detail": f"tier-4 skip (tick #{tick_counter}, runs every 12th)",
+                "elapsed_ms": 0, "status": "tiered_skip",
+            })
+            continue
+        eligible_ticks.append(name)
+
+    # Phase 2: S4-05 — Reorder eligible ticks by expected free energy reduction
+    try:
+        ordered_ticks = world_model.prioritize_ticks(eligible_ticks)
+    except Exception:
+        ordered_ticks = eligible_ticks  # Fallback to original order
+
+    # Phase 3: Execute ticks in world-model-prioritized order
+    for name in ordered_ticks:
         func = tick_dispatch[name]
         min_required = TICK_MIN_MS.get(name, 200)
 
@@ -894,6 +1518,12 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
                              "skipped", "budget_exhausted")
             continue
 
+        # S4-05: Read state before tick (for learning)
+        try:
+            state_before = world_model.read_state()
+        except Exception:
+            state_before = None
+
         try:
             result = func(int(remaining_ms))
             tick_elapsed = result.get("elapsed_ms", 0)
@@ -909,6 +1539,16 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
                                  int(remaining_ms), "ok")
 
             tick_results.append(result)
+
+            # S4-05: Record tick timestamp + learn from observation
+            _record_tick_timestamp(name)
+            if state_before and result.get("ok"):
+                try:
+                    state_after = world_model.read_state()
+                    world_model.learn_from_tick(name, state_before, state_after)
+                except Exception:
+                    pass
+
         except Exception as e:
             tick_results.append({
                 "tick": name, "ok": False,
@@ -918,6 +1558,14 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
             })
             _log_tick_metric(name, 0, budget_ms, int(remaining_ms),
                              "error", type(e).__name__)
+
+    # S4-05: Persist learned effects for next run
+    try:
+        wm_conn = _get_conn()
+        world_model.persist(wm_conn)
+        wm_conn.close()
+    except Exception:
+        pass
 
     total_ms = round((time.monotonic() - start) * 1000)
     report_text = format_sleep_report(tick_results, total_ms, reason)

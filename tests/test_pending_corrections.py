@@ -36,15 +36,13 @@ def correction_db(tmp_path, monkeypatch):
     from modules.migrations import apply_migrations
     apply_migrations(db_path, migrations_dir)
 
-    # Patch consolidation_common to use our test DB
+    # Patch FTS_DB_PATH in both consolidation_common and config (connect_fts reads config)
     monkeypatch.setattr(
         "modules.consolidation_common.FTS_DB_PATH", db_path, raising=False
     )
-    # Close any cached connections so they reconnect to new path
-    try:
-        from modules.consolidation_common import _consolidation_conn
-    except Exception:
-        pass
+    monkeypatch.setattr(
+        "modules.config.FTS_DB_PATH", db_path, raising=False
+    )
 
     return db_path
 

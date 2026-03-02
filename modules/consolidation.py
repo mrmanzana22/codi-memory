@@ -47,6 +47,8 @@ from modules.consolidation_common import (
     _embed_text_cached,
 )
 from modules.utils import now_iso
+from modules.bmr import bmr_should_consolidate, bmr_should_prune
+from modules.temporal_renorm import run_temporal_renormalization
 from modules.access_tracking import record_access
 from modules.secret_redact import redact_secrets
 
@@ -121,6 +123,20 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     # Phase 2.5: Graph Edge Creation (densify spreading activation network)
     edges_created = _phase_graph_edges(clusters)
 
+    # Phase 2.6: Causal chain extraction (Sprint 5.5)
+    causal_chains_count = _extract_causal_chains()
+
+    # Phase 2.7: Cross-topic bridging — dream creativity (S3-05)
+    bridge_edges = _phase_cross_topic_bridging(clusters)
+
+    # Phase 2.8: Temporal renormalization (Sprint 12, PN-21)
+    # Episode clusters → Events → Narratives → Themes
+    renorm_result = {"events": 0, "narratives": 0, "themes": 0}
+    try:
+        renorm_result = run_temporal_renormalization(clusters)
+    except Exception as e:
+        _logger.warning("[renorm] Temporal renormalization skipped: %s", e)
+
     result = {
         "batch_id": batch_id,
         "scope": scope,
@@ -128,6 +144,11 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         "episodes_scanned": len(candidates),
         "clusters_found": len(clusters),
         "edges_created": edges_created,
+        "causal_chains": causal_chains_count,
+        "bridge_edges": bridge_edges,
+        "renorm_events": renorm_result.get("events", 0),
+        "renorm_narratives": renorm_result.get("narratives", 0),
+        "renorm_themes": renorm_result.get("themes", 0),
         "facts_extracted": 0,
         "facts_created": 0,
         "facts_updated": 0,
@@ -138,6 +159,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     if scope == "full" and clusters:
         # Phase 3: Extraction (uses LLM)
         facts = _phase_extraction(clusters)
+
+        # Phase 3b: Self-knowledge extraction (Proposal #63 Fix 1)
+        # Conway & Pleydell-Pearce 2000: self-memory system needs identity facts
+        self_facts = _phase_extract_self(clusters)
+        if self_facts:
+            facts.extend(self_facts)
+
         result["facts_extracted"] = len(facts)
 
         # Phase 4: Integration
@@ -197,6 +225,81 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         f"  Duration: {duration_ms}ms"
     )
     return report
+
+
+def _get_causal_edge_counts(candidate_ids: list) -> dict:
+    """Sprint 5.1: Batch-fetch causal edge counts for candidate IDs.
+
+    Returns {id: causal_edge_count} for boosting selection score.
+    Woodward 2003: causally connected episodes carry more structural value.
+    """
+    if not candidate_ids:
+        return {}
+
+    from modules.config import connect_fts
+
+    try:
+        conn = connect_fts()
+        placeholders = ",".join("?" * len(candidate_ids))
+        rows = conn.execute(
+            f"SELECT from_id, COUNT(*) as cnt FROM spreading_edges "
+            f"WHERE edge_type IN ('causes', 'enables') "
+            f"AND from_id IN ({placeholders}) GROUP BY from_id",
+            candidate_ids
+        ).fetchall()
+        conn.close()
+        return {r[0]: r[1] for r in rows}
+    except Exception:
+        return {}
+
+
+def _compute_episode_snr(text: str, payload: dict) -> float:
+    """Compute Signal-to-Noise Ratio for consolidation gating (S2-04).
+
+    High SNR = structured, topical, information-rich → promote to semantic.
+    Low SNR = noise, fragments, status messages → keep episodic.
+
+    Squire & Alvarez 1995: hippocampal consolidation is selective.
+    Gilboa & Marlatte 2017: schema-consistent info consolidates faster.
+
+    Returns:
+        SNR score 0.0-1.0. Below 0.3 = reject from consolidation.
+    """
+    signals = 0.0
+    total = 4.0  # Number of signal components
+
+    # Signal 1: Text length (very short = noise)
+    text_len = len(text.strip())
+    if text_len > 100:
+        signals += 1.0
+    elif text_len > 40:
+        signals += 0.5
+
+    # Signal 2: Has identifiable topic (not 'general')
+    themes = payload.get("narrative_themes", [])
+    topic = payload.get("metadata", {}).get("topic", "")
+    if themes and themes != ["general"]:
+        signals += 1.0
+    elif topic and topic != "general":
+        signals += 0.7
+
+    # Signal 3: Has meaningful metadata (not bare-bones)
+    has_category = bool(payload.get("ownership_category", ""))
+    has_source = bool(payload.get("ownership_source", ""))
+    if has_category and has_source:
+        signals += 1.0
+    elif has_category or has_source:
+        signals += 0.5
+
+    # Signal 4: Word diversity (unique words / total words)
+    words = text.lower().split()
+    if len(words) >= 5:
+        diversity = len(set(words)) / len(words)
+        signals += min(1.0, diversity * 1.5)
+    else:
+        signals += 0.3  # Too few words to judge
+
+    return signals / total
 
 
 def _phase_selection(lookback_hours: int) -> list:
@@ -275,11 +378,19 @@ def _phase_selection(lookback_hours: int) -> list:
 
             score = imp_w * 0.45 + recency * 0.30 + emotional_priority * 0.25
 
+            # S2-04: SNR gate — filter out low-information episodes (CL-15)
+            # Episodes that are too short, have no topic, or are noise
+            # should stay episodic. Only high-SNR episodes become semantic.
+            # Squire & Alvarez 1995: hippocampal → neocortical transfer is selective.
+            snr = _compute_episode_snr(text, payload)
+            if snr < 0.3:
+                continue  # Too noisy for consolidation
+
             candidates.append({
                 "id": str(p.id),
                 "data": text,
                 "payload": payload,
-                "score": score,
+                "score": score * snr,  # SNR modulates consolidation priority
                 "created_at": created,
                 "topics": payload.get("narrative_themes", []),
             })
@@ -289,10 +400,20 @@ def _phase_selection(lookback_hours: int) -> list:
             break
         offset = next_offset
 
+    # Sprint 5.1: Boost candidates with causal edges (Woodward 2003)
+    # Memories on causal chains get consolidated first — they carry structural value
+    if candidates:
+        causal_counts = _get_causal_edge_counts([c["id"] for c in candidates])
+        if causal_counts:
+            for c in candidates:
+                causal_n = causal_counts.get(c["id"], 0)
+                if causal_n > 0:
+                    c["score"] = c["score"] + 0.2 * min(1.0, causal_n / 3.0)
+
     # Sort by score descending and cap
     candidates.sort(key=lambda x: -x["score"])
     selected = candidates[:CONSOLIDATION_MAX_EPISODES_PER_RUN]
-    _logger.info("Selection: %d/%d candidates from %d scrolled", len(selected), len(candidates), scrolled)
+    _logger.info("Selection: %d/%d candidates from %d scrolled (causal boost applied)", len(selected), len(candidates), scrolled)
     return selected
 
 
@@ -434,6 +555,7 @@ RELATIONAL: Hechos sobre personas, sus preferencias, patrones de comportamiento,
 ARCHITECTURAL: Disenos de sistema, flujos de datos, integraciones, esquemas, infraestructura
 CONTEXTUAL: Estados de proyectos, decisiones tomadas, hitos alcanzados, restricciones descubiertas
 SELF: Conocimiento sobre Codi mismo — identidad, capacidades, limitaciones, historia, relacion con Hare, lecciones aprendidas, preferencias propias
+CAUSAL: Relaciones causales entre eventos, decisiones o estados — "X causo Y porque mecanismo". Incluir SOLO si hay mecanismo explicito (no mera correlacion). Woodward 2003: causalidad requiere invarianza bajo intervencion.
 
 == EJEMPLOS DE BUENOS HECHOS ==
 - {{"fact": "El workflow TIAW-MainSync usa un cron trigger cada 2 minutos para sincronizar inventario WSC a Supabase", "category": "TECHNICAL", "confidence": 0.90, "specificity": "high"}}
@@ -443,6 +565,8 @@ SELF: Conocimiento sobre Codi mismo — identidad, capacidades, limitaciones, hi
 - {{"fact": "Para desplegar cambios en workflows de n8n, primero desactivar, luego actualizar, luego reactivar", "category": "PROCEDURAL", "confidence": 0.80, "specificity": "high"}}
 - {{"fact": "Codi fue creado el 16 de enero 2026 y su identidad evoluciono de asistente generico a CTO del equipo de agentes", "category": "SELF", "confidence": 0.90, "specificity": "high"}}
 - {{"fact": "Codi tiene un arco de desarrollo observable: formacion de identidad (semana 2-3), introspeccion (semana 4), foco relacional (semana 5-8)", "category": "SELF", "confidence": 0.85, "specificity": "high"}}
+- {{"fact": "La falta de restart del MCP server despues de cambios en server.py causa que las herramientas nuevas no aparezcan porque el proceso carga los modulos en memoria al inicio", "category": "CAUSAL", "confidence": 0.90, "specificity": "high"}}
+- {{"fact": "Usar CODI_WRITE_MODE=async elimina la latencia perceptible en guardar memorias porque el write_worker drena la cola en segundo plano sin bloquear la respuesta", "category": "CAUSAL", "confidence": 0.85, "specificity": "high"}}
 
 == EJEMPLOS DE HECHOS MALOS (NO PRODUCIR) ==
 - "Es importante testear el codigo" -> prescriptivo, no es un hecho
@@ -474,20 +598,259 @@ Responde SOLO con un array JSON (sin markdown, sin explicacion):
 [{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL|SELF", "confidence": 0.85, "specificity": "high"}}]"""
 
 
+_EDGE_CLASSIFY_PROMPT = """Classify the RELATIONSHIP between these memory pairs.
+
+For each pair (A, B), respond with ONE type and your confidence (0.0 to 1.0):
+- "causes": A directly led to or caused B
+- "enables": A provided context or conditions that made B possible
+- "prevents": A contradicts or blocks B
+- "co_occurs": A and B are merely related by topic, no causal link
+
+MEMORIES:
+{memories}
+
+PAIRS TO CLASSIFY:
+{pairs}
+
+Respond ONLY with a JSON array of objects in order, e.g. [{{"type":"causes","confidence":0.85}},{{"type":"co_occurs","confidence":0.6}}]"""
+
+
+def _llm_classify_edges(ids: list, texts: list) -> tuple:
+    """Use LLM to classify edge types between memory pairs in a cluster.
+
+    Canon v2, CC-3, Sprint 1 item 1.6.
+    Sprint 5.3: Now returns (types_map, confidence_map) tuple.
+
+    Returns:
+        (types_map, confidence_map) where:
+        - types_map: {(from_id, to_id): edge_type_str}
+        - confidence_map: {(from_id, to_id): float}
+    Falls back to empty dicts on error.
+    """
+    import json as _json
+
+    if len(ids) < 2 or len(texts) < 2:
+        return {}, {}
+
+    # Build prompt with memory texts and pairs
+    n = min(len(ids), len(texts), 6)  # Cap to avoid huge prompts
+    memories_block = "\n".join(
+        f"[{i}] {texts[i][:200]}" for i in range(n)
+    )
+
+    # Generate pairs to classify (adjacent pairs, not all combinations)
+    pairs = []
+    pair_keys = []
+    for i in range(n):
+        for j in range(i + 1, min(i + 3, n)):  # Each node connects to next 2
+            pairs.append(f"({i}, {j}): [{i}] vs [{j}]")
+            pair_keys.append((ids[i], ids[j]))
+
+    if not pairs:
+        return {}, {}
+
+    prompt = _EDGE_CLASSIFY_PROMPT.format(
+        memories=memories_block,
+        pairs="\n".join(pairs),
+    )
+
+    # Default confidence by edge type (fallback when LLM returns strings)
+    _DEFAULT_CONF = {"causes": 0.8, "enables": 0.7, "prevents": 0.8, "co_occurs": 0.5}
+
+    try:
+        from modules.consolidation_common import _get_oai
+        response = _get_oai().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=300,
+        )
+
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+
+        items = _json.loads(raw)
+        if not isinstance(items, list):
+            return {}, {}
+
+        valid_types = {"causes", "enables", "prevents", "co_occurs"}
+        types_map = {}
+        conf_map = {}
+        for idx, pair_key in enumerate(pair_keys):
+            if idx >= len(items):
+                continue
+            item = items[idx]
+
+            # Handle both formats: string ("causes") or dict ({"type":"causes","confidence":0.85})
+            if isinstance(item, str):
+                etype = item
+                conf = _DEFAULT_CONF.get(etype, 0.5)
+            elif isinstance(item, dict):
+                etype = item.get("type", "co_occurs")
+                conf = float(item.get("confidence", _DEFAULT_CONF.get(etype, 0.5)))
+                conf = max(0.0, min(1.0, conf))
+            else:
+                continue
+
+            if etype in valid_types:
+                types_map[pair_key] = etype
+                types_map[(pair_key[1], pair_key[0])] = etype
+                conf_map[pair_key] = conf
+                conf_map[(pair_key[1], pair_key[0])] = conf
+
+        return types_map, conf_map
+    except Exception as e:
+        _logger.debug("LLM edge classify error: %s", e)
+        return {}, {}
+
+
+def _detect_confounds(conn, edge_types_map: dict) -> dict:
+    """Sprint 5.4: Detect confounded edges (Pearl 2009, Chapter 3).
+
+    For each A→B causal edge: find C where C→A and C→B both exist.
+    If found, reclassify A→B as 'confounded' — a common cause explains
+    the correlation, not direct causation.
+
+    Args:
+        conn: SQLite connection to spreading_edges
+        edge_types_map: {(from_id, to_id): edge_type} from LLM classification
+
+    Returns:
+        Updated edge_types_map with confounded reclassifications.
+    """
+    # Collect causal edges to check
+    causal_pairs = [
+        (a, b) for (a, b), etype in edge_types_map.items()
+        if etype in ('causes', 'enables')
+    ]
+    if not causal_pairs:
+        return edge_types_map
+
+    updated = dict(edge_types_map)
+
+    try:
+        for a_id, b_id in causal_pairs:
+            # Find C nodes that point to A
+            causes_a = {r[0] for r in conn.execute(
+                "SELECT from_id FROM spreading_edges WHERE to_id = ? "
+                "AND edge_type IN ('causes', 'enables')",
+                (a_id,)
+            ).fetchall()}
+
+            if not causes_a:
+                continue
+
+            # Find C nodes that also point to B
+            causes_b = {r[0] for r in conn.execute(
+                "SELECT from_id FROM spreading_edges WHERE to_id = ? "
+                "AND edge_type IN ('causes', 'enables')",
+                (b_id,)
+            ).fetchall()}
+
+            # Confounders = C that causes both A and B
+            confounders = causes_a & causes_b
+            if confounders:
+                updated[(a_id, b_id)] = 'confounded'
+                updated[(b_id, a_id)] = 'confounded'
+                _logger.debug(
+                    "Confound detected: %s→%s has %d common causes",
+                    a_id[:8], b_id[:8], len(confounders)
+                )
+    except Exception as e:
+        _logger.debug("Confound detection error: %s", e)
+
+    return updated
+
+
+def _compute_causal_strength(
+    from_id: str, to_id: str,
+    edge_type: str, llm_confidence: float,
+    conn,
+) -> float:
+    """Sprint 5.3: Compute graded causal edge strength.
+
+    Formula: strength = 0.3*temporal_prior + 0.3*co_access + 0.4*llm_confidence
+
+    Components:
+      - temporal_prior: Edge type encodes temporal ordering strength.
+        Causal types (causes/prevents) imply strong temporal structure;
+        co_occurs implies none. (Granger 1969: causation requires temporal precedence)
+      - co_access: Reinforcement from prior observations of this edge pair.
+        Edges seen in multiple consolidation rounds have higher co_access.
+        (Hebb 1949: neurons that fire together wire together)
+      - llm_confidence: LLM's classification confidence (0-1).
+    """
+    # Component 1: Temporal prior by edge type (0.3 weight)
+    _TYPE_TEMPORAL = {
+        "causes": 0.9, "prevents": 0.8, "enables": 0.7,
+        "confounded": 0.3, "co_occurs": 0.2,
+    }
+    temporal = _TYPE_TEMPORAL.get(edge_type, 0.2)
+
+    # Component 2: Co-access frequency / reinforcement (0.3 weight)
+    co_access = 0.0
+    if conn:
+        try:
+            row = conn.execute(
+                "SELECT strength FROM spreading_edges "
+                "WHERE from_id = ? AND to_id = ?",
+                (from_id, to_id),
+            ).fetchone()
+            if row and row[0] is not None:
+                # Prior edge exists — use its strength as reinforcement evidence
+                co_access = min(1.0, float(row[0]))
+        except Exception:
+            pass
+
+    # Component 3: LLM confidence (0.4 weight)
+    llm_conf = max(0.0, min(1.0, llm_confidence))
+
+    strength = 0.3 * temporal + 0.3 * co_access + 0.4 * llm_conf
+    return max(0.1, min(1.0, round(strength, 3)))
+
+
 def _phase_graph_edges(clusters: list) -> int:
     """Phase 2.5: Create consolidated_with edges within clusters.
 
-    Neuroscience basis: Consolidation creates and strengthens synaptic
-    connections between co-activated memories (Rasch & Born 2013).
-    Uses 'consolidated_with' field which spreading.py already reads.
+    S2-05: Edges typed as 'consolidated' (Rasch & Born 2013).
+    Stored both in Qdrant payload (consolidated_with) and SQLite
+    spreading_edges (for typed graph analysis).
+    Sprint 5.3: Uses graded causal strength instead of fixed defaults.
     """
-    from modules.config import GRAPH_AUTO_CONNECT_MAX
+    from modules.config import GRAPH_AUTO_CONNECT_MAX, FTS_DB_PATH
+    from modules.utils import now_iso
 
     total_edges = 0
+    # S2-05: Also record typed edges in SQLite
+    edge_conn = None
+    try:
+        from modules.config import connect_fts as _connect_fts
+        edge_conn = _connect_fts()
+        from modules.spreading import _init_edge_table, _record_edges
+        _init_edge_table(edge_conn)
+    except Exception:
+        edge_conn = None
+
+    ts = now_iso()
     for cluster in clusters:
         ids = cluster.get("episode_ids", [])
+        texts = cluster.get("texts", [])
         if len(ids) < 2:
             continue
+
+        # Sprint 1, item 1.6: LLM edge typing for clusters with texts
+        # Sprint 5.3: Now returns (types_map, confidence_map) tuple
+        edge_types_map = {}
+        confidence_map = {}
+        if texts and len(texts) >= 2:
+            edge_types_map, confidence_map = _llm_classify_edges(ids, texts)
+
+        # Sprint 5.4: Detect confounds in classified edges
+        if edge_types_map and edge_conn:
+            edge_types_map = _detect_confounds(edge_conn, edge_types_map)
 
         for i, mid in enumerate(ids):
             neighbors = [oid for j, oid in enumerate(ids) if j != i]
@@ -498,13 +861,216 @@ def _phase_graph_edges(clusters: list) -> int:
                     record_access(COLLECTION_NAME, mid, {
                         'consolidated_with': neighbors,
                     })
+                    # Sprint 5.3: Record edges with graded causal strength
+                    if edge_conn:
+                        for nb in neighbors:
+                            pair_key = (mid, nb)
+                            etype = edge_types_map.get(pair_key, "co_occurs")
+                            conf = confidence_map.get(pair_key, 0.5)
+                            strength = _compute_causal_strength(
+                                mid, nb, etype, conf, edge_conn,
+                            )
+                            _record_edges(edge_conn, mid, [nb], ts,
+                                          edge_type=etype, strength=strength)
                     total_edges += len(neighbors)
                 except Exception:
                     pass
 
+    if edge_conn:
+        try:
+            edge_conn.close()
+        except Exception:
+            pass
+
     if total_edges > 0:
-        _logger.info("Graph edges: %d edges created across %d clusters",
+        _logger.info("Graph edges: %d consolidated edges across %d clusters",
                      total_edges, len(clusters))
+    return total_edges
+
+
+def _extract_causal_chains(fts_db_path: str = None) -> int:
+    """Sprint 5.5: Phase 2.6 — Extract causal chains via BFS over causal edges.
+
+    Pearl 2009: causal reasoning requires explicit chain structure A→B→C.
+    BFS from root nodes (only outgoing causal edges, no incoming) following
+    causes/enables edges. Stores chains in causal_chains table.
+
+    Returns number of chains stored.
+    """
+    from modules.config import FTS_DB_PATH as _FTS_DB, connect_fts as _connect_fts
+
+    db = fts_db_path or _FTS_DB
+    try:
+        conn = _connect_fts(db)
+
+        # Check if causal_chains table exists (created by migration 019)
+        if not conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
+        ).fetchone():
+            conn.close()
+            return 0
+
+        # Find roots: nodes with outgoing causal edges but NO incoming causal edges
+        all_from = {r[0] for r in conn.execute(
+            "SELECT DISTINCT from_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
+        ).fetchall()}
+        all_to = {r[0] for r in conn.execute(
+            "SELECT DISTINCT to_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
+        ).fetchall()}
+        roots = all_from - all_to
+
+        if not roots:
+            conn.close()
+            return 0
+
+        chains_stored = 0
+        seen_chains = set()
+
+        for root in roots:
+            # BFS along causal edges
+            chain = [root]
+            frontier = [root]
+            visited = {root}
+
+            while frontier:
+                node = frontier.pop(0)
+                children = conn.execute(
+                    "SELECT to_id, COALESCE(strength, 0.5) FROM spreading_edges "
+                    "WHERE from_id = ? AND edge_type IN ('causes', 'enables') LIMIT 5",
+                    (node,)
+                ).fetchall()
+
+                best_child = None
+                best_strength = 0.0
+                for child_id, child_strength in children:
+                    if child_id not in visited and child_strength > best_strength:
+                        best_child = child_id
+                        best_strength = child_strength
+
+                if best_child:
+                    chain.append(best_child)
+                    visited.add(best_child)
+                    frontier.append(best_child)
+
+            if len(chain) < 2:
+                continue
+
+            chain_key = "->".join(sorted(chain[:3]))
+            if chain_key in seen_chains:
+                continue
+            seen_chains.add(chain_key)
+
+            # Compute average chain strength
+            strengths = []
+            for i in range(len(chain) - 1):
+                row = conn.execute(
+                    "SELECT COALESCE(strength, 0.5) FROM spreading_edges "
+                    "WHERE from_id = ? AND to_id = ?",
+                    (chain[i], chain[i + 1])
+                ).fetchone()
+                if row:
+                    strengths.append(row[0])
+            avg_strength = sum(strengths) / len(strengths) if strengths else 0.5
+
+            chain_id = str(uuid.uuid4())[:8]
+            conn.execute("""
+                INSERT OR REPLACE INTO causal_chains (chain_id, nodes, strength, mechanism, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (chain_id, json.dumps(chain), avg_strength, "", now_iso()))
+            chains_stored += 1
+
+        conn.commit()
+        conn.close()
+        _logger.info("Causal chains: %d chains extracted from %d roots", chains_stored, len(roots))
+        return chains_stored
+
+    except Exception as e:
+        _logger.error("Causal chain extraction error: %s", e)
+        return 0
+
+
+# S3-05: Cross-topic similarity threshold for bridge edges
+BRIDGE_SIMILARITY_THRESHOLD = 0.55
+
+
+def _phase_cross_topic_bridging(clusters: list) -> int:
+    """Phase 2.7: Cross-topic bridging — dream creativity (S3-05).
+
+    Find cluster pairs with DIFFERENT topics but high semantic similarity.
+    Create 'bridge' typed edges between representative members.
+
+    Walker & Stickgold 2010: sleep promotes creative insight by forming
+    remote associations across topic boundaries. This is the "creative
+    dreamer" that was missing (Cycle 5 finding: 0 cross-topic edges).
+
+    Returns:
+        Number of bridge edges created.
+    """
+    if len(clusters) < 2:
+        return 0
+
+    from modules.config import FTS_DB_PATH
+
+    # Compute centroid embedding for each cluster (using cached embedder)
+    centroids = []
+    for cluster in clusters:
+        texts = cluster.get("texts", [])
+        representative = " ".join(texts[:3])[:500]
+        try:
+            vec = _embed_text_cached(representative)
+            centroids.append(vec)
+        except Exception:
+            centroids.append(None)
+
+    # Find cross-topic pairs with high similarity
+    bridges = []
+    for i in range(len(clusters)):
+        for j in range(i + 1, len(clusters)):
+            if clusters[i]["topic"] == clusters[j]["topic"]:
+                continue  # Same topic, not a bridge
+            if centroids[i] is None or centroids[j] is None:
+                continue
+            sim = _cosine_similarity(centroids[i], centroids[j])
+            if sim >= BRIDGE_SIMILARITY_THRESHOLD:
+                bridges.append((i, j, sim))
+
+    if not bridges:
+        return 0
+
+    # Create bridge edges in SQLite
+    edge_conn = None
+    try:
+        from modules.config import connect_fts as _connect_fts
+        edge_conn = _connect_fts()
+        from modules.spreading import _init_edge_table, _record_edges
+        _init_edge_table(edge_conn)
+    except Exception:
+        return 0
+
+    total_edges = 0
+    ts = now_iso()
+    for i, j, sim in bridges:
+        # Connect top 2 representatives from each cluster (bidirectional)
+        ids_i = clusters[i]["episode_ids"][:2]
+        ids_j = clusters[j]["episode_ids"][:2]
+        for mid_i in ids_i:
+            _record_edges(edge_conn, mid_i, ids_j, ts, edge_type="co_occurs")
+            total_edges += len(ids_j)
+        for mid_j in ids_j:
+            _record_edges(edge_conn, mid_j, ids_i, ts, edge_type="co_occurs")
+            total_edges += len(ids_i)
+
+    if edge_conn:
+        try:
+            edge_conn.close()
+        except Exception:
+            pass
+
+    if total_edges > 0:
+        _logger.info("Cross-topic bridges: %d edges across %d pairs (topics: %s)",
+                     total_edges, len(bridges),
+                     ", ".join(f"{clusters[i]['topic']}<->{clusters[j]['topic']}" for i, j, _ in bridges))
+
     return total_edges
 
 
@@ -560,7 +1126,7 @@ def _phase_extraction(clusters: list) -> list:
                     skipped_low_quality += 1
                     continue
 
-                valid_categories = {"TECHNICAL", "PROCEDURAL", "RELATIONAL", "ARCHITECTURAL", "CONTEXTUAL"}
+                valid_categories = {"TECHNICAL", "PROCEDURAL", "RELATIONAL", "ARCHITECTURAL", "CONTEXTUAL", "SELF", "CAUSAL"}
                 if category not in valid_categories:
                     category = "CONTEXTUAL"
 
@@ -586,6 +1152,85 @@ def _phase_extraction(clusters: list) -> list:
     return all_facts
 
 
+def _phase_extract_self(clusters: list) -> list:
+    """Phase 3b: Extract SELF-knowledge from episodic memories.
+
+    Proposal #63 Fix 1 (Conway & Pleydell-Pearce 2000):
+    Self-knowledge is cross-cutting — not captured by topic-based clustering.
+    This pass looks for identity, capability, relationship, and growth facts
+    across ALL clusters, not within individual topic clusters.
+    """
+    # Gather recent episodes across all clusters (cross-topic)
+    all_texts = []
+    all_ids = []
+    for cluster in clusters:
+        for text, eid in zip(cluster.get("texts", [])[:10], cluster.get("episode_ids", [])[:10]):
+            all_texts.append(text)
+            all_ids.append(eid)
+    if len(all_texts) < 5:
+        return []
+
+    # Sample up to 30 episodes for self-extraction
+    episodes_block = "\n".join(f"- {t}" for t in all_texts[:30])
+
+    prompt = f"""From these episodic memories of Codi (an AI agent with persistent memory), extract SELF-KNOWLEDGE facts.
+
+Focus on:
+1. Identity: "Codi is/values/prefers..."
+2. Capabilities: "Codi can/learned to..."
+3. Relationships: "Codi's relationship with Hare involves..."
+4. Growth: "Codi has changed from... to..."
+5. Goals: "Codi is working toward..."
+
+Only extract facts that appear STABLE across multiple episodes (not one-time events).
+Return a JSON array of objects with keys: "fact", "subcategory" (identity/capability/relationship/growth/goal), "confidence" (0-1).
+If no self-knowledge found, return [].
+
+Episodes:
+{episodes_block}"""
+
+    try:
+        from modules.consolidation_common import _get_oai
+        response = _get_oai().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=1000,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        extracted = json.loads(raw)
+        if not isinstance(extracted, list):
+            return []
+
+        self_facts = []
+        for item in extracted:
+            fact_text = item.get("fact", "").strip()
+            if not fact_text or len(fact_text) < 15:
+                continue
+            confidence = float(item.get("confidence", 0.7))
+            if confidence < 0.5:
+                continue
+            subcategory = item.get("subcategory", "general").strip().lower()
+            self_facts.append({
+                "fact_text": fact_text,
+                "confidence": min(1.0, max(0.0, confidence)),
+                "evidence_count": min(len(all_texts), 30),
+                "source_episode_ids": all_ids[:10],
+                "topic": "self",
+                "category": "SELF",
+            })
+
+        _logger.info("Self-extraction: %d self-facts from %d episodes", len(self_facts), len(all_texts))
+        return self_facts[:5]  # Cap at 5 per consolidation run
+    except Exception as e:
+        _logger.error("Self-extraction error: %s", redact_secrets(str(e)))
+        return []
+
+
 def _phase_integration(facts: list) -> dict:
     """Phase 4: Integrate facts into semantic store (codi_semantic)."""
     if not facts:
@@ -608,9 +1253,12 @@ def _phase_integration(facts: list) -> dict:
                 with_payload=True,
             )
 
+            # Sprint 9: BMR-scored consolidation merge (replaces cosine threshold)
             duplicate = None
             for hit in existing.points:
-                if hit.score >= CONSOLIDATION_SEMANTIC_DEDUP_THRESHOLD:
+                hit_metadata = hit.payload or {}
+                fact_metadata = {"topic": fact.get("topic"), "category": fact.get("category")}
+                if bmr_should_consolidate(hit.score, hit_metadata, fact_metadata):
                     duplicate = hit
                     break
 
@@ -634,6 +1282,26 @@ def _phase_integration(facts: list) -> dict:
                 _logger.info("Updated existing fact: %s...", fact_text[:60])
             else:
                 point_id = str(uuid.uuid4())
+
+                # Canon v2, S2-12: Transfer causal_links from source episodes
+                inherited_causal = []
+                try:
+                    src_ids = fact["source_episode_ids"][:10]
+                    if src_ids:
+                        src_pts = qdrant.retrieve(
+                            collection_name=COLLECTION_NAME,
+                            ids=src_ids,
+                            with_payload=True,
+                        )
+                        for sp in (src_pts or []):
+                            cl = (sp.payload or {}).get("causal_links", [])
+                            if cl and isinstance(cl, list):
+                                inherited_causal.extend(cl)
+                        # Deduplicate, cap at 10
+                        inherited_causal = list(dict.fromkeys(inherited_causal))[:10]
+                except Exception:
+                    pass
+
                 payload = {
                     "fact_text": fact_text,
                     "data": fact_text,
@@ -650,8 +1318,10 @@ def _phase_integration(facts: list) -> dict:
                     "narrative_importance": "high" if fact["confidence"] > 0.8 else "medium",
                     "user_id": USER_ID,
                     "created_at": now,
-                    "_v": 4.1,
+                    "_v": 4.2,
                 }
+                if inherited_causal:
+                    payload["causal_links"] = inherited_causal
 
                 qdrant.upsert(
                     collection_name=SEMANTIC_COLLECTION,
@@ -673,29 +1343,75 @@ def _phase_integration(facts: list) -> dict:
 
 
 def _phase_pruning(consolidated_episode_ids: list) -> dict:
-    """Phase 5: Mark episodes as consolidated and apply differential decay."""
+    """Phase 5: Mark episodes as consolidated and apply differential decay.
+
+    Sprint 9: BMR-verified pruning — only mark as consolidated if
+    information is genuinely preserved in semantic layer.
+    """
     if not consolidated_episode_ids:
-        return {"marked_consolidated": 0, "decayed": 0}
+        return {"marked_consolidated": 0, "decayed": 0, "bmr_skipped": 0}
 
     marked = 0
     decayed = 0
+    bmr_skipped = 0
     now = now_iso()
 
-    batch_size = 50
     consolidation_payload = {
         "consolidation_status": "consolidated",
         "consolidated": True,
         "consolidated_at": now,
     }
+
     for eid in consolidated_episode_ids:
         try:
-            record_access(COLLECTION_NAME, eid, consolidation_payload)
-            marked += 1
+            # Sprint 9: BMR verification before pruning
+            # Check that episode's information exists in semantic layer
+            episode_pts = qdrant.retrieve(
+                collection_name=COLLECTION_NAME,
+                ids=[eid],
+                with_payload=True,
+            )
+            if not episode_pts:
+                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                marked += 1
+                continue
+
+            ep_payload = episode_pts[0].payload or {}
+            ep_text = ep_payload.get("data", ep_payload.get("memory", ""))
+            if not ep_text:
+                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                marked += 1
+                continue
+
+            # Check if semantic layer has this information
+            ep_embedding = _embed_text(ep_text[:500])
+            if ep_embedding:
+                sem_results = qdrant.query_points(
+                    collection_name=SEMANTIC_COLLECTION,
+                    query=ep_embedding,
+                    limit=1,
+                    with_payload=True,
+                )
+                if sem_results and sem_results.points:
+                    top_sem = sem_results.points[0]
+                    sem_payload = top_sem.payload or {}
+                    if bmr_should_prune(top_sem.score, ep_payload, sem_payload):
+                        record_access(COLLECTION_NAME, eid, consolidation_payload)
+                        marked += 1
+                    else:
+                        bmr_skipped += 1
+                        _logger.debug("BMR: episode %s not yet captured in semantic", eid)
+                else:
+                    bmr_skipped += 1
+            else:
+                # Fallback: mark as consolidated without BMR check
+                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                marked += 1
         except Exception:
             pass
 
-    _logger.info("Pruning: %d episodes marked as consolidated", marked)
-    return {"marked_consolidated": marked, "decayed": decayed}
+    _logger.info("Pruning: %d marked consolidated, %d BMR-skipped", marked, bmr_skipped)
+    return {"marked_consolidated": marked, "decayed": decayed, "bmr_skipped": bmr_skipped}
 
 
 # ============================================================
@@ -745,6 +1461,14 @@ def _phase_compression(scope: str = "full") -> dict:
         FieldCondition(key="consolidated_compressed", match=MatchValue(value=True)),
     ])
 
+    # Canon v2, S1-5: Load causal chain members to protect from compression
+    try:
+        from modules.spreading import get_chain_member_ids
+        chain_members = get_chain_member_ids()
+        _logger.info("Compression: %d causal chain members protected", len(chain_members))
+    except Exception:
+        chain_members = set()
+
     candidates = []
     offset = None
     max_scroll = COMPRESSION_MAX_PER_RUN * 5
@@ -787,6 +1511,10 @@ def _phase_compression(scope: str = "full") -> dict:
 
             text = payload.get("data", "")
             if not text or len(text) < 20:
+                continue
+
+            # Canon v2, S1-5: Never compress causal chain members
+            if str(p.id) in chain_members:
                 continue
 
             candidates.append({
@@ -890,13 +1618,114 @@ def _phase_compression(scope: str = "full") -> dict:
             _logger.error("Compression error for '%s': %s", topic, redact_secrets(str(e)))
             continue
 
+    # Sprint 5.6: Causal intermediary compression (minimal sufficiency)
+    # Woodward 2003, Pearl 2009: compress intermediary nodes B in A→B→C
+    # if B has zero activation and its info is captured by A and C
+    causal_compressed = _compress_causal_intermediaries(chain_members)
     result = {
         "compressed_groups": compressed_groups,
         "episodes_archived": episodes_archived,
         "summaries_created": summaries_created,
+        "causal_intermediaries_compressed": causal_compressed,
     }
     _logger.info("Compression complete: %s", result)
     return result
+
+
+def _compress_causal_intermediaries(chain_members: set) -> int:
+    """Sprint 5.6: Compress low-activation intermediary nodes in causal chains.
+
+    For each 3-node chain A→B→C: if B has zero access count (never retrieved),
+    create a direct edge A→C with mechanism from A→B→C, reducing redundancy.
+    B stays in Qdrant but gets a `causal_compressed=True` flag.
+
+    Woodward 2003: minimal sufficiency — simplest model that explains data.
+    Pearl 2009: chain structure preserved at edge level even when middle
+    node is compressed.
+
+    Returns number of intermediaries compressed.
+    """
+    from modules.config import connect_fts as _connect_fts
+
+    compressed = 0
+    try:
+        conn = _connect_fts()
+
+        # Check causal_chains table exists
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
+        ).fetchone()
+        if not exists:
+            conn.close()
+            return 0
+
+        chains = conn.execute(
+            "SELECT chain_id, nodes, strength FROM causal_chains"
+        ).fetchall()
+
+        if not chains:
+            conn.close()
+            return 0
+
+        from modules.spreading import _init_edge_table, _record_edges
+        _init_edge_table(conn)
+        ts = now_iso()
+
+        for chain_id, nodes_json, chain_strength in chains:
+            try:
+                nodes = json.loads(nodes_json)
+            except Exception:
+                continue
+
+            if len(nodes) < 3:
+                continue
+
+            # Check each B node (intermediary) in A→B→C
+            for i in range(1, len(nodes) - 1):
+                a_id, b_id, c_id = nodes[i - 1], nodes[i], nodes[i + 1]
+
+                # B must not be a protected chain member with strong connections
+                if b_id in chain_members:
+                    continue
+
+                # Check B's access count from Qdrant (zero = never retrieved)
+                try:
+                    pts = qdrant.retrieve(
+                        collection_name=COLLECTION_NAME,
+                        ids=[b_id],
+                        with_payload=True,
+                    )
+                    if not pts:
+                        continue
+                    b_payload = pts[0].payload or {}
+                    b_access = int(b_payload.get("attention_access_count", 0) or 0)
+                    if b_access > 0:
+                        continue  # B is still being accessed — don't compress
+                except Exception:
+                    continue
+
+                # Create summary edge A→C (bypass B)
+                _record_edges(conn, a_id, [c_id], ts,
+                               edge_type='enables',
+                               strength=chain_strength * 0.8)
+
+                # Mark B as causal_compressed in Qdrant
+                try:
+                    record_access(COLLECTION_NAME, b_id, {"causal_compressed": True})
+                except Exception:
+                    pass
+
+                compressed += 1
+                _logger.debug("Causal compress: %s→%s→%s → direct %s→%s",
+                              a_id[:8], b_id[:8], c_id[:8], a_id[:8], c_id[:8])
+
+        conn.close()
+    except Exception as e:
+        _logger.debug("Causal intermediary compression error: %s", e)
+
+    if compressed > 0:
+        _logger.info("Sprint 5.6: %d causal intermediaries compressed", compressed)
+    return compressed
 
 
 CHECKPOINT_COMPRESSION_PROMPT = """Eres un sistema de compresion de memoria. Estos son {n} checkpoints del dia {date}.

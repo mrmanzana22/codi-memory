@@ -182,7 +182,9 @@ class TestCC2BridgeRestorePADProvenance:
         """PAD restored from bridge must have 'restored_from_bridge' in trigger."""
         from modules.config import _emotional_state
         import modules.session_bridge as sb
+        import modules.config as _cfg
         monkeypatch.setattr(sb, 'FTS_DB_PATH', bridge_db)
+        monkeypatch.setattr(_cfg, 'FTS_DB_PATH', bridge_db)
 
         bridge = sb.load_session_bridge()
         assert bridge is not None, "Bridge should load from recent checkpoint"

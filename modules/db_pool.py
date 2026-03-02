@@ -34,7 +34,7 @@ _local = threading.local()
 _PRAGMAS = (
     "PRAGMA journal_mode=WAL",
     "PRAGMA synchronous=NORMAL",
-    "PRAGMA busy_timeout=5000",
+    "PRAGMA busy_timeout=10000",
     "PRAGMA foreign_keys=ON",
 )
 
@@ -52,7 +52,7 @@ def _create_conn(db_path: str) -> sqlite3.Connection:
     """Create a new SQLite connection with standard PRAGMAs."""
     conn = sqlite3.connect(
         db_path,
-        timeout=5,
+        timeout=10,
         detect_types=sqlite3.PARSE_DECLTYPES,
     )
     conn.row_factory = sqlite3.Row
