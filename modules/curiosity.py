@@ -21,14 +21,14 @@ import sqlite3
 from datetime import datetime
 
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME,
+    USER_ID, COLLECTION_NAME,
     now_iso, now_short, now_col,
     CURIOSIDAD_FILE, KNOWN_PROJECTS, CURIOSITY_STALE_DAYS, CURIOSITY_TEMPLATES,
     connect_fts,
 )
 from modules.secret_redact import redact_secrets
 from modules.qdrant_utils import scroll_all
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 
 # Sprint 10: IG constants (AXIOM, Friston 2017)
 IG_MIN_OBSERVATIONS = 5     # Min observations before computing IG for a domain
@@ -71,16 +71,11 @@ def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> s
         pleasure = 0.5 if es_positivo else (-0.5 if es_negativo else 0)
         arousal = {"low": 0.2, "medium": 0.5, "high": 0.8}.get(intensidad, 0.5)
 
-        memory.add(
-            contenido,
-            user_id=USER_ID,
-            metadata={
-                "category": "aprendizaje", "source": "experienced",
-                "importance": "high" if intensidad == "high" else "medium",
-                "themes": ["sorpresa", "prediction_error", "aprendizaje"],
-                "timestamp": now_iso(),
-                "emotional_state": {"pleasure": pleasure, "arousal": arousal, "dominance": 0.3}
-            }
+        pg.add(
+            content=contenido,
+            category="aprendizaje",
+            source="experienced",
+            importance="high" if intensidad == "high" else "medium",
         )
         # P1: backup removed from hot path
 
@@ -140,7 +135,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
 
             if analyzed_count < 500:
                 acc = int((payload.get('attention_access_count', 0)) or 0)
-                record_access(COLLECTION_NAME, point.id, {
+                pg.update_payload(point.id, {
                     'attention_access_count': acc + 1,
                     'attention_last_accessed': ts,
                 })
@@ -212,7 +207,7 @@ def generar_curiosidad() -> str:
                         ultima_mencion[proyecto] = fecha
                         if tracked_count < 500:
                             acc = int((payload.get('attention_access_count', 0)) or 0)
-                            record_access(COLLECTION_NAME, point.id, {
+                            pg.update_payload(point.id, {
                                 'attention_access_count': acc + 1,
                                 'attention_last_accessed': ts,
                             })

@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
+from modules.config import USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
 from modules.secret_redact import redact_secrets
 from modules.memory_smart import search_with_fts_content
 

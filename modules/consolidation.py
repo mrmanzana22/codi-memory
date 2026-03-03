@@ -27,29 +27,25 @@ import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
 
-from qdrant_client.models import (
-    Filter, FieldCondition, MatchValue, PointStruct
-)
-
 from modules.config import (
     SEMANTIC_COLLECTION,
     COLLECTION_NAME,
-    qdrant,
     USER_ID,
     CONSOLIDATION_CLUSTER_MIN_SIZE,
     CONSOLIDATION_SIMILARITY_THRESHOLD,
     CONSOLIDATION_SEMANTIC_DEDUP_THRESHOLD,
     CONSOLIDATION_MAX_EPISODES_PER_RUN,
 )
+from modules.pg_store import pg
+from modules.config_pg import get_conn as get_pg_conn
 from modules.consolidation_common import (
-    _embed_text, _cosine_similarity, _consolidation_conn,
+    _embed_text, _cosine_similarity,
     init_consolidation_db, get_embed_cache_info, _get_oai,
     _embed_text_cached,
 )
 from modules.utils import now_iso
 from modules.bmr import bmr_should_consolidate, bmr_should_prune
 from modules.temporal_renorm import run_temporal_renormalization
-from modules.access_tracking import record_access
 from modules.secret_redact import redact_secrets
 
 # ============================================================
@@ -314,22 +310,16 @@ def _phase_selection(lookback_hours: int) -> list:
     cutoff = datetime.now() - timedelta(hours=lookback_hours)
     from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
-    # Exclude already-consolidated episodes
-    scroll_filter = Filter(must_not=[
-        FieldCondition(key="consolidation_status", match=MatchValue(value="consolidated"))
-    ])
-
     candidates = []
     offset = None
     max_scroll = CONSOLIDATION_MAX_EPISODES_PER_RUN * 5  # safety cap for scrolling
     scrolled = 0
 
     while scrolled < max_scroll:
-        pts, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=scroll_filter,
+        pts, next_offset = pg.scroll(
+            filters={"consolidation_status_not": "consolidated"},
             limit=100,
-            with_payload=True,
+            is_semantic=False,
             offset=offset,
         )
         if not pts:
@@ -465,12 +455,7 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
     """
     member_ids = [m["id"] for m in members]
     try:
-        pts = qdrant.retrieve(
-            collection_name=COLLECTION_NAME,
-            ids=member_ids,
-            with_vectors=True,
-            with_payload=False,
-        )
+        pts = pg.get_by_ids(member_ids, with_vectors=True)
         vec_map = {str(p.id): p.vector for p in pts if p.vector}
     except Exception as e:
         _logger.error("Subcluster vector fetch failed for '%s': %s", topic, redact_secrets(str(e)))
@@ -858,7 +843,7 @@ def _phase_graph_edges(clusters: list) -> int:
 
             if neighbors:
                 try:
-                    record_access(COLLECTION_NAME, mid, {
+                    pg.update_payload(mid, {
                         'consolidated_with': neighbors,
                     })
                     # Sprint 5.3: Record edges with graded causal strength
@@ -1246,16 +1231,11 @@ def _phase_integration(facts: list) -> dict:
             fact_text = fact["fact_text"]
             embedding = _embed_text(fact_text)
 
-            existing = qdrant.query_points(
-                collection_name=SEMANTIC_COLLECTION,
-                query=embedding,
-                limit=3,
-                with_payload=True,
-            )
+            existing_pts = pg.query_vector(embedding, limit=3, is_semantic=True)
 
             # Sprint 9: BMR-scored consolidation merge (replaces cosine threshold)
             duplicate = None
-            for hit in existing.points:
+            for hit in existing_pts:
                 hit_metadata = hit.payload or {}
                 fact_metadata = {"topic": fact.get("topic"), "category": fact.get("category")}
                 if bmr_should_consolidate(hit.score, hit_metadata, fact_metadata):
@@ -1272,7 +1252,7 @@ def _phase_integration(facts: list) -> dict:
                 import math
                 new_evidence = old_evidence + fact["evidence_count"]
                 evidence_confidence = min(0.95, 0.70 + 0.05 * math.log2(max(1, new_evidence)))
-                record_access(SEMANTIC_COLLECTION, duplicate.id, {
+                pg.update_payload(duplicate.id, {
                     "evidence_count": new_evidence,
                     "source_episode_ids": new_sources,
                     "last_observed": now,
@@ -1288,11 +1268,7 @@ def _phase_integration(facts: list) -> dict:
                 try:
                     src_ids = fact["source_episode_ids"][:10]
                     if src_ids:
-                        src_pts = qdrant.retrieve(
-                            collection_name=COLLECTION_NAME,
-                            ids=src_ids,
-                            with_payload=True,
-                        )
+                        src_pts = pg.get_by_ids(src_ids)
                         for sp in (src_pts or []):
                             cl = (sp.payload or {}).get("causal_links", [])
                             if cl and isinstance(cl, list):
@@ -1302,34 +1278,30 @@ def _phase_integration(facts: list) -> dict:
                 except Exception:
                     pass
 
-                payload = {
+                meta = {
                     "fact_text": fact_text,
-                    "data": fact_text,
                     "topic": fact["topic"],
                     "topics": [fact["topic"]],
-                    "category": fact.get("category", "CONTEXTUAL"),
                     "source_episode_ids": fact["source_episode_ids"],
-                    "evidence_count": fact["evidence_count"],
                     "first_observed": now,
                     "last_observed": now,
-                    "confidence": fact["confidence"],
                     "contradiction_count": 0,
                     "memory_type": "semantic",
-                    "narrative_importance": "high" if fact["confidence"] > 0.8 else "medium",
                     "user_id": USER_ID,
-                    "created_at": now,
                     "_v": 4.2,
                 }
                 if inherited_causal:
-                    payload["causal_links"] = inherited_causal
+                    meta["causal_links"] = inherited_causal
 
-                qdrant.upsert(
-                    collection_name=SEMANTIC_COLLECTION,
-                    points=[PointStruct(
-                        id=point_id,
-                        vector=embedding,
-                        payload=payload,
-                    )],
+                pg.add(
+                    content=fact_text,
+                    category=fact.get("category", "CONTEXTUAL"),
+                    importance="high" if fact["confidence"] > 0.8 else "medium",
+                    embedding=embedding,
+                    is_semantic=True,
+                    confidence=fact["confidence"],
+                    evidence_count=fact["evidence_count"],
+                    metadata=meta,
                 )
                 created += 1
                 _logger.info("New semantic fact: %s...", fact_text[:60])
@@ -1366,37 +1338,28 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
         try:
             # Sprint 9: BMR verification before pruning
             # Check that episode's information exists in semantic layer
-            episode_pts = qdrant.retrieve(
-                collection_name=COLLECTION_NAME,
-                ids=[eid],
-                with_payload=True,
-            )
+            episode_pts = pg.get_by_ids([eid])
             if not episode_pts:
-                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                pg.update_payload(eid, consolidation_payload)
                 marked += 1
                 continue
 
             ep_payload = episode_pts[0].payload or {}
             ep_text = ep_payload.get("data", ep_payload.get("memory", ""))
             if not ep_text:
-                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                pg.update_payload(eid, consolidation_payload)
                 marked += 1
                 continue
 
             # Check if semantic layer has this information
             ep_embedding = _embed_text(ep_text[:500])
             if ep_embedding:
-                sem_results = qdrant.query_points(
-                    collection_name=SEMANTIC_COLLECTION,
-                    query=ep_embedding,
-                    limit=1,
-                    with_payload=True,
-                )
-                if sem_results and sem_results.points:
-                    top_sem = sem_results.points[0]
+                sem_pts = pg.query_vector(ep_embedding, limit=1, is_semantic=True)
+                if sem_pts:
+                    top_sem = sem_pts[0]
                     sem_payload = top_sem.payload or {}
                     if bmr_should_prune(top_sem.score, ep_payload, sem_payload):
-                        record_access(COLLECTION_NAME, eid, consolidation_payload)
+                        pg.update_payload(eid, consolidation_payload)
                         marked += 1
                     else:
                         bmr_skipped += 1
@@ -1405,7 +1368,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
                     bmr_skipped += 1
             else:
                 # Fallback: mark as consolidated without BMR check
-                record_access(COLLECTION_NAME, eid, consolidation_payload)
+                pg.update_payload(eid, consolidation_payload)
                 marked += 1
         except Exception:
             pass
@@ -1454,13 +1417,6 @@ def _phase_compression(scope: str = "full") -> dict:
     cutoff = datetime.now() - timedelta(days=COMPRESSION_MIN_AGE_DAYS)
     now = now_iso()
 
-    # Step 1: Select candidates
-    scroll_filter = Filter(must=[
-        FieldCondition(key="consolidation_status", match=MatchValue(value="consolidated")),
-    ], must_not=[
-        FieldCondition(key="consolidated_compressed", match=MatchValue(value=True)),
-    ])
-
     # Canon v2, S1-5: Load causal chain members to protect from compression
     try:
         from modules.spreading import get_chain_member_ids
@@ -1474,11 +1430,10 @@ def _phase_compression(scope: str = "full") -> dict:
     max_scroll = COMPRESSION_MAX_PER_RUN * 5
 
     while len(candidates) < max_scroll:
-        pts, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=scroll_filter,
+        pts, next_offset = pg.scroll(
+            filters={"consolidation_status": "consolidated"},
             limit=100,
-            with_payload=True,
+            is_semantic=False,
             offset=offset,
         )
         if not pts:
@@ -1486,6 +1441,10 @@ def _phase_compression(scope: str = "full") -> dict:
 
         for p in pts:
             payload = p.payload or {}
+
+            # Skip already-compressed
+            if payload.get("consolidated_compressed"):
+                continue
 
             # Skip high-importance
             imp = payload.get("narrative_importance", "medium")
@@ -1590,19 +1549,27 @@ def _phase_compression(scope: str = "full") -> dict:
                 "_v": 4.1,
             }
 
-            qdrant.upsert(
-                collection_name=COLLECTION_NAME,
-                points=[PointStruct(
-                    id=new_id,
-                    vector=embedding,
-                    payload=payload,
-                )],
+            meta = {
+                "narrative_themes": [topic],
+                "memory_type": "compressed_episodic",
+                "compressed_from": original_ids,
+                "compression_ratio": f"{len(original_ids)}:1",
+                "consolidation_status": "consolidated",
+                "_v": 4.1,
+            }
+            pg.add(
+                content=summary,
+                category="episodio",
+                importance="medium",
+                embedding=embedding,
+                is_semantic=False,
+                metadata=meta,
             )
             summaries_created += 1
 
             # Mark originals as compressed
             for oid in original_ids:
-                record_access(COLLECTION_NAME, oid, {
+                pg.update_payload(oid, {
                     "consolidated_compressed": True,
                     "compressed_into": new_id,
                 })
@@ -1688,16 +1655,12 @@ def _compress_causal_intermediaries(chain_members: set) -> int:
                 if b_id in chain_members:
                     continue
 
-                # Check B's access count from Qdrant (zero = never retrieved)
+                # Check B's access count from PG (zero = never retrieved)
                 try:
-                    pts = qdrant.retrieve(
-                        collection_name=COLLECTION_NAME,
-                        ids=[b_id],
-                        with_payload=True,
-                    )
-                    if not pts:
+                    b_pts = pg.get_by_ids([b_id])
+                    if not b_pts:
                         continue
-                    b_payload = pts[0].payload or {}
+                    b_payload = b_pts[0].payload or {}
                     b_access = int(b_payload.get("attention_access_count", 0) or 0)
                     if b_access > 0:
                         continue  # B is still being accessed — don't compress
@@ -1709,9 +1672,9 @@ def _compress_causal_intermediaries(chain_members: set) -> int:
                                edge_type='enables',
                                strength=chain_strength * 0.8)
 
-                # Mark B as causal_compressed in Qdrant
+                # Mark B as causal_compressed in PG
                 try:
-                    record_access(COLLECTION_NAME, b_id, {"causal_compressed": True})
+                    pg.update_payload(b_id, {"causal_compressed": True})
                 except Exception:
                     pass
 
@@ -1764,23 +1727,23 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
     now = now_iso()
 
     # Step 1: Scroll ALL uncompressed checkpoints
-    scroll_filter = Filter(
-        must=[
-            FieldCondition(key="category", match=MatchValue(value="checkpoint")),
-        ],
-        must_not=[
-            FieldCondition(key="consolidated_compressed", match=MatchValue(value=True)),
-        ]
-    )
-
-    from modules.qdrant_utils import scroll_all
-    points = scroll_all(
-        scroll_filter=scroll_filter,
-        max_results=2000,
-        with_payload=True,
-        with_vectors=False,
-        batch_size=200,
-    )
+    all_points = []
+    _offset = None
+    while True:
+        batch, _next = pg.scroll(
+            filters={"category": "checkpoint"},
+            limit=200,
+            is_semantic=False,
+            offset=_offset,
+        )
+        if not batch:
+            break
+        # Filter out already-compressed in Python
+        all_points.extend([p for p in batch if not (p.payload or {}).get("consolidated_compressed")])
+        if not _next or len(all_points) >= 2000:
+            break
+        _offset = _next
+    points = all_points
 
     if not points:
         return empty
@@ -1817,17 +1780,12 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
 
     # Step 3: Delete trivial (batch)
     trivial_deleted = 0
-    batch_sz = 100
-    for i in range(0, len(trivial_ids), batch_sz):
-        batch = trivial_ids[i:i + batch_sz]
+    for tid in trivial_ids:
         try:
-            qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=batch,
-            )
-            trivial_deleted += len(batch)
+            pg.delete(tid)
+            trivial_deleted += 1
         except Exception as e:
-            _logger.error("Checkpoint compression: delete batch failed: %s", e)
+            _logger.error("Checkpoint compression: delete failed: %s", e)
 
     # Step 4: Compress progress by day
     summaries_created = 0
@@ -1864,41 +1822,33 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
         if not summary_vec:
             continue
 
-        summary_point = PointStruct(
-            id=summary_id,
-            vector=summary_vec,
-            payload={
-                "data": summary_text,
-                "user_id": USER_ID,
-                "memory_type": "checkpoint_summary",
-                "category": "checkpoint",
-                "topic": "checkpoint",
-                "narrative_importance": "medium",
-                "compressed_from": original_ids,
-                "compression_ratio": f"{len(original_ids)}:1",
-                "summary_date": date,
-                "created_at": now,
-                "consolidation_status": "consolidated",
-                "consolidated_compressed": False,
-                "attention_access_count": 0,
-                "_v": 4.1,
-            }
-        )
-
-        qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=[summary_point],
+        meta = {
+            "memory_type": "checkpoint_summary",
+            "topic": "checkpoint",
+            "compressed_from": original_ids,
+            "compression_ratio": f"{len(original_ids)}:1",
+            "summary_date": date,
+            "consolidation_status": "consolidated",
+            "consolidated_compressed": False,
+            "_v": 4.1,
+        }
+        pg.add(
+            content=summary_text,
+            category="checkpoint",
+            importance="medium",
+            embedding=summary_vec,
+            is_semantic=False,
+            metadata=meta,
         )
         summaries_created += 1
 
         # Mark originals as compressed
         for oid in original_ids:
             try:
-                qdrant.set_payload(
-                    collection_name=COLLECTION_NAME,
-                    payload={"consolidated_compressed": True, "compressed_into": summary_id},
-                    points=[oid],
-                )
+                pg.update_payload(oid, {
+                    "consolidated_compressed": True,
+                    "compressed_into": summary_id,
+                })
             except Exception:
                 pass
 
@@ -1918,24 +1868,22 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
 
 
 def _log_consolidation_run(result: dict):
-    """Log a consolidation run to SQLite."""
+    """Log a consolidation run to PostgreSQL."""
     try:
-        conn = _consolidation_conn()
-        conn.execute("""
-            INSERT INTO consolidation_log
-            (batch_id, scope, lookback_hours, episodes_scanned, clusters_found,
-             facts_extracted, facts_created, facts_updated, contradictions_found,
-             episodes_pruned, duration_ms, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            result["batch_id"], result["scope"], result.get("lookback_hours", 24),
-            result["episodes_scanned"], result["clusters_found"],
-            result["facts_extracted"], result["facts_created"],
-            result["facts_updated"], result["contradictions_found"],
-            result["episodes_pruned"], result["duration_ms"], now_iso()
-        ))
-        conn.commit()
-        conn.close()
+        with get_pg_conn() as conn:
+            conn.execute("""
+                INSERT INTO consolidation_log
+                (batch_id, scope, lookback_hours, episodes_scanned, clusters_found,
+                 facts_extracted, facts_created, facts_updated, contradictions_found,
+                 episodes_pruned, duration_ms, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                result["batch_id"], result["scope"], result.get("lookback_hours", 24),
+                result["episodes_scanned"], result["clusters_found"],
+                result["facts_extracted"], result["facts_created"],
+                result["facts_updated"], result["contradictions_found"],
+                result["episodes_pruned"], result["duration_ms"], now_iso()
+            ))
     except Exception as e:
         _logger.warning("Could not log run: %s", redact_secrets(str(e)))
 

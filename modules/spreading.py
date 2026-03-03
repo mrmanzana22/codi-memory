@@ -15,12 +15,13 @@ import math
 import os
 import sqlite3
 from modules.config import (
-    qdrant, memory, COLLECTION_NAME, USER_ID,
+    COLLECTION_NAME, USER_ID,
     now_iso, connect_fts,
     SPREAD_DEFAULT_FACTOR, SPREAD_DEFAULT_DEPTH,
     SPREAD_MIN_ACTIVATION, SPREAD_MAX_NEIGHBORS,
     SPREAD_SALIENCE_CAP, SPREAD_SALIENCE_FLOOR,
 )
+from modules.pg_store import pg
 from modules.utils import resolve_memory_id
 from modules.secret_redact import redact_secrets
 
@@ -285,7 +286,7 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
     # 1. Batch retrieve seed payloads
     valid_seeds = []
     try:
-        pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=seed_ids, with_payload=True)
+        pts = pg.get_by_ids(seed_ids)
         if pts:
             for p in pts:
                 pid = str(p.id)
@@ -396,7 +397,7 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
         unfetched = [nid for nid in frontier_next if nid not in payload_cache]
         if unfetched:
             try:
-                pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=unfetched, with_payload=True)
+                pts = pg.get_by_ids(unfetched)
                 if pts:
                     for p in pts:
                         payload_cache[str(p.id)] = p.payload or {}
@@ -539,10 +540,10 @@ def register_tools(mcp):
             seed_ids = []
             if ' ' in memory_id_or_query or len(memory_id_or_query) > 40:
                 # Query mode: search for seeds
-                results = memory.search(query=memory_id_or_query, user_id=USER_ID, limit=3)
-                if results and results.get('results'):
-                    for r in results['results']:
-                        rid = r.get('id')
+                results = pg.search(memory_id_or_query, limit=3, is_semantic=False)
+                if results:
+                    for r in results:
+                        rid = r.get('id') if isinstance(r, dict) else getattr(r, 'id', None)
                         if rid:
                             seed_ids.append(rid)
             else:
@@ -588,10 +589,10 @@ def register_tools(mcp):
             # Resolve seeds
             seed_ids = []
             if ' ' in topic_or_id or len(topic_or_id) > 40:
-                results = memory.search(query=topic_or_id, user_id=USER_ID, limit=3)
-                if results and results.get('results'):
-                    for r in results['results']:
-                        rid = r.get('id')
+                results = pg.search(topic_or_id, limit=3, is_semantic=False)
+                if results:
+                    for r in results:
+                        rid = r.get('id') if isinstance(r, dict) else getattr(r, 'id', None)
                         if rid:
                             seed_ids.append(rid)
             else:
@@ -608,9 +609,9 @@ def register_tools(mcp):
             lines.append(f"**Limitacion:** Incoming edges no incluidos (Fase 4)\n")
 
             try:
-                pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=seed_ids, with_payload=True)
+                pts = pg.get_by_ids(seed_ids)
             except Exception:
-                return "Error conectando a Qdrant"
+                return "Error conectando a pg_store"
 
             if not pts:
                 return "No se encontraron las memorias seed"
@@ -633,7 +634,7 @@ def register_tools(mcp):
                 # Fetch neighbor payloads
                 lines.append(f"**Vecinos (OUT):** {len(neighbors)}")
                 try:
-                    nb_pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=neighbors, with_payload=True)
+                    nb_pts = pg.get_by_ids(neighbors)
                     nb_map = {str(np.id): np.payload or {} for np in (nb_pts or [])}
                 except Exception:
                     nb_map = {}

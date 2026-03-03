@@ -19,7 +19,7 @@ import json
 import sqlite3
 import math
 
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 import random
 import threading
 import time
@@ -29,7 +29,6 @@ _logger = logging.getLogger(__name__)
 
 from modules.config import (
     memory,
-    qdrant,
     USER_ID,
     COLLECTION_NAME,
     BACKUP_FILE,
@@ -123,12 +122,8 @@ def resolve_memory_id(partial_id: str) -> str:
         if len(partial_id) >= 32:
             return partial_id
 
-        # Buscar en Qdrant memorias cuyo ID empiece con el prefijo
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            limit=500,
-            with_payload=False
-        )
+        # Buscar en pg_store memorias cuyo ID empiece con el prefijo
+        points, _ = pg.scroll(filters={}, limit=500, is_semantic=False)
 
         for point in points:
             point_id = str(point.id)
@@ -340,7 +335,7 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
         if causal_links:
             ownership_metadata['causal_links'] = causal_links
 
-        record_access(COLLECTION_NAME, memory_id, ownership_metadata)
+        pg.update_payload(memory_id, ownership_metadata)
     except Exception as e:
         _logger.error("Error enriching memory: %s", redact_secrets(str(e)))
 

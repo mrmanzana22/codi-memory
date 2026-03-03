@@ -9,16 +9,14 @@ Uses LAZY imports throughout to avoid circular dependencies.
 import os
 from datetime import datetime
 
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE,
+    USER_ID, COLLECTION_NAME, BACKUP_FILE,
     _emotional_state, _current_session,
     now_iso, now_short, now_col,
     KNOWN_PROJECTS, RELATIONSHIP_QUERY,
 )
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 from modules.memory_smart import search_with_fts_content
 from modules.utils import (
     get_session_id, resolve_memory_id, maybe_backup,
@@ -40,14 +38,14 @@ __all__ = [
 
 def _verificar_salud_memoria_interna() -> dict:
     try:
-        collection_info = qdrant.get_collection(COLLECTION_NAME)
+        collection_info = pg.count(is_semantic=False)
         if not collection_info:
-            return {"ok": False, "message": "Qdrant no responde. Verificar servidor remoto."}
-        search_result = memory.search(query="test conexion memoria", user_id=USER_ID, limit=1)
+            return {"ok": False, "message": "pg_store no responde. Verificar servidor PostgreSQL."}
+        search_result = pg.search("test conexion memoria", limit=1, is_semantic=False)
         if search_result is None:
-            return {"ok": False, "message": "mem0 no responde a busquedas. Reiniciar MCP desde /mcp"}
+            return {"ok": False, "message": "pg_store no responde a busquedas. Reiniciar MCP desde /mcp"}
         total_points = collection_info.points_count
-        return {"ok": True, "message": f"Memoria funcionando. {total_points} memorias en Qdrant."}
+        return {"ok": True, "message": f"Memoria funcionando. {total_points} memorias en PostgreSQL."}
     except Exception as e:
         return {"ok": False, "message": f"Error en memoria: {redact_secrets(str(e))}. Reiniciar MCP desde /mcp"}
 
@@ -70,12 +68,9 @@ def consolidate_recent(hours: int = 24) -> str:
     """
     try:
         session_id = get_session_id()
-        recent_points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='temporal_session_id', match=MatchValue(value=session_id))
-            ]),
-            limit=50, with_payload=True
+        recent_points, _ = pg.scroll(
+            filters={"metadata_key": {"key": "temporal_session_id", "value": session_id}},
+            limit=50, is_semantic=False
         )
         if not recent_points:
             return "No hay memorias recientes para consolidar en esta sesion."
@@ -90,7 +85,7 @@ def consolidate_recent(hours: int = 24) -> str:
             if point.payload.get('consolidated', False):
                 continue
 
-            similar = memory.search(query=mem_data, user_id=USER_ID, limit=5)
+            similar = pg.search(mem_data, limit=5, is_semantic=False)
             if similar and similar.get('results'):
                 related_ids = []
                 for s in similar['results']:
@@ -99,7 +94,7 @@ def consolidate_recent(hours: int = 24) -> str:
                     if s_id != mem_id and score >= 0.7:
                         related_ids.append(s_id)
                         try:
-                            record_access(COLLECTION_NAME, s_id, {
+                            pg.update_payload(s_id, {
                                 'consolidated_with': [mem_id],
                                 'attention_salience': min(point.payload.get('attention_salience', 0.5) + 0.1, 1.0),
                             })
@@ -107,7 +102,7 @@ def consolidate_recent(hours: int = 24) -> str:
                             pass
                         connections_found += 1
 
-                record_access(COLLECTION_NAME, mem_id, {
+                pg.update_payload(mem_id, {
                     'consolidated': True,
                     'consolidated_with': related_ids,
                     'consolidated_at': now_iso(),
@@ -144,7 +139,7 @@ def find_connections(memory_id: str = None, query: str = None, threshold: float 
             full_id = resolve_memory_id(memory_id)
             if not full_id:
                 return f"No encontre memoria con ID que empiece con '{memory_id}'"
-            points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+            points = pg.get_by_ids([full_id])
             if not points:
                 return f"No encontre memoria con ID {full_id}"
             query = points[0].payload.get('data', '')
@@ -152,7 +147,7 @@ def find_connections(memory_id: str = None, query: str = None, threshold: float 
         else:
             source_info = f"Tema: {query}"
 
-        results = memory.search(query=query, user_id=USER_ID, limit=15)
+        results = pg.search(query, limit=15, is_semantic=False)
         if not results or not results.get('results'):
             return f"No encontre conexiones para: {source_info}"
 
@@ -162,7 +157,7 @@ def find_connections(memory_id: str = None, query: str = None, threshold: float 
             score = r.get('score', 0)
             if score >= threshold and r_id != full_id:
                 try:
-                    r_points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[r_id], with_payload=True)
+                    r_points = pg.get_by_ids([r_id])
                     if r_points:
                         payload = r_points[0].payload
                         connections.append({
@@ -209,19 +204,17 @@ def dream_consolidation() -> str:
 
         lines.append("## Fase 1: Consolidacion de memorias recientes")
         session_id = get_session_id()
-        recent, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[FieldCondition(key='temporal_session_id', match=MatchValue(value=session_id))]),
-            limit=100, with_payload=True
+        recent, _ = pg.scroll(
+            filters={"metadata_key": {"key": "temporal_session_id", "value": session_id}},
+            limit=100, is_semantic=False
         )
         recent_count = len(recent) if recent else 0
         lines.append(f"- Memorias de esta sesion: {recent_count}")
 
         lines.append("\n## Fase 2: Priorizacion por importancia")
-        high_importance, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))]),
-            limit=20, with_payload=True
+        high_importance, _ = pg.scroll(
+            filters={"importance": "critical"},
+            limit=20, is_semantic=False
         )
         critical_unconsolidated = [p for p in (high_importance or []) if not p.payload.get('consolidated', False)]
         lines.append(f"- Memorias criticas sin consolidar: {len(critical_unconsolidated)}")
@@ -230,11 +223,11 @@ def dream_consolidation() -> str:
         connections_made = 0
         for point in critical_unconsolidated[:10]:
             mem_data = point.payload.get('data', '')
-            similar = memory.search(query=mem_data, user_id=USER_ID, limit=5)
+            similar = pg.search(mem_data, limit=5, is_semantic=False)
             if similar and similar.get('results'):
                 related_ids = [s.get('id') for s in similar['results'] if s.get('id') != point.id and s.get('score', 0) >= 0.6]
                 if related_ids:
-                    record_access(COLLECTION_NAME, point.id, {
+                    pg.update_payload(point.id, {
                         'consolidated': True,
                         'consolidated_with': related_ids,
                         'consolidated_at': now_iso(),
@@ -272,7 +265,7 @@ def get_memory_connections(memory_id: str) -> str:
         full_id = resolve_memory_id(memory_id)
         if not full_id:
             return f"No encontre memoria con ID que empiece con '{memory_id}'"
-        points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+        points = pg.get_by_ids([full_id])
         if not points:
             return f"No encontre memoria con ID {full_id}"
 
@@ -290,7 +283,7 @@ def get_memory_connections(memory_id: str) -> str:
             lines.append("\n## Memorias conectadas")
             for conn_id in connections[:10]:
                 try:
-                    conn_points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[conn_id], with_payload=True)
+                    conn_points = pg.get_by_ids([conn_id])
                     if conn_points:
                         lines.append(f"- [{conn_id[:8]}] {conn_points[0].payload.get('data', 'N/A')[:60]}...")
                 except Exception:
@@ -435,10 +428,9 @@ def despertar_codi() -> str:
         emotion_text = _get_emotion_text(emotion_label)
 
         # 1. Memorias CRITICAS (identidad)
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))]),
-            limit=5, with_payload=True
+        points, _ = pg.scroll(
+            filters={"importance": "critical"},
+            limit=5, is_semantic=False
         )
         if points:
             contexto.append("## IDENTIDAD")
@@ -464,14 +456,11 @@ def despertar_codi() -> str:
                 contexto.append(f"- {m.get('memory', '')}")
 
         # 3. Lecciones aprendidas
-        points2, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='category', match=MatchValue(value='aprendizaje')),
-                FieldCondition(key='ownership_confidence', range=Range(gte=0.8))
-            ]),
-            limit=3, with_payload=True
+        _all_aprendizaje, _ = pg.scroll(
+            filters={"category": "aprendizaje"},
+            limit=20, is_semantic=False
         )
+        points2 = [p for p in (_all_aprendizaje or []) if p.payload.get('ownership_confidence', 0) >= 0.8][:3]
         if points2:
             contexto.append("\n## LECCIONES")
             for p in points2:
@@ -545,10 +534,9 @@ def despertar_codi() -> str:
                 actividades_predichas = ["experimentar", "investigar", "ideas nuevas"]
 
             try:
-                high_salience_points, _ = qdrant.scroll(
-                    collection_name=COLLECTION_NAME,
-                    scroll_filter=Filter(must=[FieldCondition(key='attention_salience', range=Range(gte=0.6))]),
-                    limit=5, with_payload=True, order_by="attention_salience"
+                high_salience_points, _ = pg.scroll(
+                    filters={"activation_score_gt": 0.6},
+                    limit=5, is_semantic=False
                 )
                 temas_activos = [p.payload.get('data', '')[:50] for p in high_salience_points if p.payload.get('data', '')]
             except Exception:
@@ -728,7 +716,7 @@ def ciclo_vida() -> str:
                 acciones_realizadas.append(f"Memoria OK: {salud['message']}")
             else:
                 acciones_realizadas.append(f"ALERTA: {salud['message']}")
-                sugerencias.append("Revisar conexion a Qdrant - la memoria no esta bien")
+                sugerencias.append("Revisar conexion a PostgreSQL - la memoria no esta bien")
 
             # 2. Mantenimiento pendiente
             try:

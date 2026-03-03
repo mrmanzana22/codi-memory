@@ -12,7 +12,8 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from modules.config import qdrant, COLLECTION_NAME, now_iso
+from modules.config import now_iso
+from modules.pg_store import pg
 
 _logger = logging.getLogger(__name__)
 _TZ = pytz.timezone("America/Bogota")
@@ -97,32 +98,21 @@ def _retrieve_by_period(days: int, focus: str = None) -> list:
     Proposal #63 Fix 3: Use Qdrant Range filter on created_at instead of
     scanning ALL memories. ~85% reduction in data transferred.
     """
-    from qdrant_client.models import Filter, FieldCondition, Range, MatchValue
-
     now = datetime.now(_TZ)
     cutoff = (now - timedelta(days=days)).isoformat()
 
-    must_conditions = [
-        FieldCondition(key="created_at", range=Range(gte=cutoff))
-    ]
+    filters = {}
     if focus:
-        must_conditions.append(
-            FieldCondition(key="narrative_themes", match=MatchValue(value=focus.lower()))
-        )
+        filters["narrative_themes"] = {"key": "narrative_themes", "value": focus.lower()}
 
     memories = []
     offset = None
     while True:
-        pts, nxt = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=must_conditions),
-            limit=100,
-            offset=offset,
-            with_payload=True,
-            with_vectors=False,
-        )
+        pts, nxt = pg.scroll(filters=filters, limit=100, is_semantic=False)
         if not pts:
             break
+        # Post-filter by created_at >= cutoff (Range condition)
+        pts = [p for p in pts if (p.payload or {}).get("created_at", "") >= cutoff]
         memories.extend(pts)
         offset = nxt
         if offset is None:

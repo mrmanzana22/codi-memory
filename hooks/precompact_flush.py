@@ -21,9 +21,9 @@ FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 
 
 def get_db_connection():
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
+    conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=3000")
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 

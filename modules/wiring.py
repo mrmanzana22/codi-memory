@@ -34,7 +34,7 @@ import threading
 from modules.events import event_bus, Events
 from modules.config import now_iso
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
+from modules.pg_store import pg as _pg
 
 _logger = logging.getLogger(__name__)
 
@@ -634,16 +634,13 @@ def _on_competition_complete(event_name: str, data: dict):
         # Salience penalty for losers (inhibition of return) - batched
         if loser_ids:
             try:
-                from modules.config import qdrant, COLLECTION_NAME
+                from modules.config import COLLECTION_NAME
                 batch_ids = loser_ids[:20]
-                points = qdrant.retrieve(
-                    collection_name=COLLECTION_NAME,
-                    ids=batch_ids, with_payload=True
-                )
+                points = _pg.get_by_ids(batch_ids)
                 for p in points:
                     old_sal = p.payload.get('attention_salience', 0.5)
                     new_sal = max(0.1, old_sal - 0.05)
-                    record_access(COLLECTION_NAME, p.id, {
+                    _pg.update_payload(p.id, {
                         'attention_salience': new_sal,
                     })
             except Exception:

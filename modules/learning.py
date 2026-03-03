@@ -5,9 +5,10 @@ PE is COMPUTED in prediction, APPLIED here (Schultz/Dayan/Montague 1997).
 """
 
 from modules.config import (
-    memory, USER_ID,
+    USER_ID,
     now_iso,
 )
+from modules.pg_store import pg
 from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
@@ -76,11 +77,7 @@ def _update_topic_confidence(topic: str, new_confidence: float):
     _topic_confidence[topic] = new_confidence
     content = f"[CONFIANZA] Mi nivel de confianza en '{topic}' es {new_confidence:.2f}"
     try:
-        memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": "aprendizaje", "tipo": "confidence_level", "topic": topic, "confidence": new_confidence}
-        )
+        pg.add(content=content, category="aprendizaje", source="experienced", importance="medium")
     except Exception:
         pass
 
@@ -176,27 +173,18 @@ def auto_learn_from_session() -> str:
             session_summary += f"Reglas: {len(actions_generated)}."
 
         try:
-            result = memory.add(
-                messages=[{"role": "user", "content": session_summary}],
-                user_id=USER_ID,
-                metadata={"category": "aprendizaje", "tipo": "session_learning", "error_rate": error_rate, "importance": "high"}
-            )
-            if result and result.get("results"):
-                for r in result["results"]:
-                    mem_id = r.get("id")
-                    if mem_id:
-                        enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=session_summary, source="experienced", importance="high")
+            result = pg.add(content=session_summary, category="aprendizaje", source="experienced", importance="high")
+            if result:
+                mem_id = result.get("id") if isinstance(result, dict) else None
+                if mem_id:
+                    enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=session_summary, source="experienced", importance="high")
             lines.append(f"- Resumen de sesion guardado")
         except Exception as e:
             lines.append(f"- Error guardando resumen: {redact_secrets(str(e))}")
 
         for rule in actions_generated[:5]:
             try:
-                memory.add(
-                    messages=[{"role": "user", "content": f"[REGLA DE ACCION] {rule}"}],
-                    user_id=USER_ID,
-                    metadata={"category": "aprendizaje", "tipo": "action_rule", "importance": "high"}
-                )
+                pg.add(content=f"[REGLA DE ACCION] {rule}", category="aprendizaje", source="experienced", importance="high")
                 lines.append(f"- Regla: {rule[:40]}...")
             except Exception:
                 pass

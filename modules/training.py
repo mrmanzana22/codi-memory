@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import datetime
-from modules.config import supabase, memory, USER_ID, now_iso
+from modules.config import supabase, USER_ID, now_iso
 
 _logger = logging.getLogger(__name__)
 

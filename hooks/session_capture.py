@@ -55,10 +55,10 @@ MAX_MEMORIES_PER_SESSION = 10
 
 
 def get_db_connection():
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=5)
+    conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=3000")
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
@@ -450,8 +450,8 @@ def _session_bridge_checkpoint(session_id: str):
     pending_intentions = []
     if os.path.exists(PROSPECTIVE_DB_PATH):
         try:
-            pm_conn = sqlite3.connect(PROSPECTIVE_DB_PATH, timeout=3)
-            pm_conn.execute("PRAGMA busy_timeout=2000")
+            pm_conn = sqlite3.connect(PROSPECTIVE_DB_PATH, timeout=10)
+            pm_conn.execute("PRAGMA busy_timeout=10000")
             int_rows = pm_conn.execute(
                 "SELECT id, action, priority, activation, expiry FROM intentions "
                 "WHERE status = 'pending' ORDER BY activation DESC LIMIT 10"

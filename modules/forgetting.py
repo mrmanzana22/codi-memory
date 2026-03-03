@@ -24,6 +24,8 @@ import threading
 from datetime import datetime
 from typing import Optional
 
+from modules.pg_store import pg
+
 _logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -330,29 +332,20 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
         return {"applied": False, "reason": "too_few_results"}
 
     try:
-        from modules.config import qdrant, COLLECTION_NAME
-        from modules.access_tracking import record_access
-
         # Get search vector (from top result or provided embedding)
         search_vector = query_embedding
         if search_vector is None:
             top_id = retrieved_ids[0]
-            points = qdrant.retrieve(
-                collection_name=COLLECTION_NAME,
-                ids=[top_id],
-                with_vectors=True,
-            )
-            if not points or not points[0].vector:
+            points = pg.get_by_ids([top_id])
+            if not points or not getattr(points[0], "vector", None):
                 return {"applied": False, "reason": "no_vector"}
             search_vector = points[0].vector
 
         # Search for neighbors (potential competitors)
-        neighbors = qdrant.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=search_vector,
+        neighbors = pg.query_vector(
+            search_vector,
             limit=len(retrieved_ids) + RIF_MAX_COMPETITORS + 5,
-            score_threshold=RIF_SIMILARITY_THRESHOLD,
-            with_payload=True,
+            is_semantic=False,
         )
 
         # Identify competitors: similar but NOT retrieved, not critical, not chain members
@@ -368,6 +361,7 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
             if str(n.id) not in retrieved_set
             and n.payload.get('narrative_importance') != 'critical'
             and str(n.id) not in _chain_ids
+            and getattr(n, "score", 1.0) >= RIF_SIMILARITY_THRESHOLD
         ]
 
         if not competitors:
@@ -386,7 +380,7 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
             new_salience = max(FADEM_FLOOR, current_salience - suppression)
 
             if new_salience < current_salience:
-                record_access(COLLECTION_NAME, comp.id, {
+                pg.update_payload(comp.id, {
                     'attention_salience': new_salience,
                 })
                 suppressed += 1

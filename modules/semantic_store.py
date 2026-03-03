@@ -1,26 +1,21 @@
 """
 SEMANTIC STORE MODULE
 
-Operations on the codi_semantic Qdrant collection:
+Operations on semantic facts stored in PostgreSQL (pgvector):
 - Vector search for semantic facts
 - Browsing/filtering facts by topic
 - Consolidation statistics
 - Counting unconsolidated episodic memories
 
-Split from consolidation.py (Phase 1, Sub-phase 1.1)
+Backend: pg_store (PostgreSQL + pgvector)
+Migrated from Qdrant in Fase 2, Sprint 2.2.
 """
 
 import logging
 from datetime import datetime, timedelta
 
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-from modules.config import (
-    SEMANTIC_COLLECTION,
-    COLLECTION_NAME,
-    qdrant,
-)
-from modules.consolidation_common import _embed_text, _consolidation_conn
+from modules.pg_store import pg
+from modules.config_pg import get_conn
 from modules.secret_redact import redact_secrets
 
 _logger = logging.getLogger(__name__)
@@ -31,33 +26,26 @@ _logger = logging.getLogger(__name__)
 # ============================================================
 
 def search_semantic(query: str, limit: int = 5) -> list:
-    """Search the semantic store (codi_semantic) via vector similarity.
+    """Search the semantic store via vector similarity.
 
     Returns:
         List of semantic facts with scores
     """
     try:
-        info = qdrant.get_collection(SEMANTIC_COLLECTION)
+        info = pg.count(is_semantic=True)
         if info.points_count == 0:
             return []
 
-        query_vector = _embed_text(query)
-        results = qdrant.query_points(
-            collection_name=SEMANTIC_COLLECTION,
-            query=query_vector,
-            limit=limit,
-            with_payload=True,
-        )
+        results = pg.search(query, limit=limit, is_semantic=True)
         facts = []
-        for hit in results.points:
-            payload = hit.payload or {}
+        for hit in results["results"]:
             facts.append({
-                "id": str(hit.id),
-                "fact": payload.get("fact_text", payload.get("data", "")),
-                "topic": payload.get("topic", ""),
-                "confidence": payload.get("confidence", 0),
-                "evidence_count": payload.get("evidence_count", 0),
-                "score": hit.score,
+                "id": hit["id"],
+                "fact": hit.get("memory", ""),
+                "topic": hit.get("category", ""),
+                "confidence": hit.get("confidence", 0),
+                "evidence_count": hit.get("evidence_count", 0),
+                "score": hit.get("score", 0),
             })
         return facts
     except Exception as e:
@@ -79,23 +67,17 @@ def get_semantic_facts(topic: str = "", limit: int = 10) -> str:
         limit: Max facts to return (default 10)
     """
     try:
-        info = qdrant.get_collection(SEMANTIC_COLLECTION)
+        info = pg.count(is_semantic=True)
         count = info.points_count
 
         if count == 0:
             return "[semantic] Store is empty (0 facts). Run consolidation first."
 
-        scroll_filter = None
-        if topic:
-            scroll_filter = Filter(must=[
-                FieldCondition(key="topic", match=MatchValue(value=topic))
-            ])
-
-        pts, _ = qdrant.scroll(
-            collection_name=SEMANTIC_COLLECTION,
-            scroll_filter=scroll_filter,
+        filters = {"category": topic} if topic else None
+        pts, _ = pg.scroll(
+            filters=filters,
             limit=limit,
-            with_payload=True,
+            is_semantic=True,
         )
 
         if not pts:
@@ -103,9 +85,9 @@ def get_semantic_facts(topic: str = "", limit: int = 10) -> str:
 
         lines = [f"=== Semantic Facts ({len(pts)}/{count} total) ==="]
         for p in pts:
-            pl = p.payload or {}
+            pl = p.payload
             fact = pl.get("fact_text", pl.get("data", "?"))
-            topic_val = pl.get("topic", "?")
+            topic_val = pl.get("category", "?")
             conf = pl.get("confidence", 0)
             evidence = pl.get("evidence_count", 0)
             lines.append(f"- [{topic_val}] (conf={conf:.2f}, evidence={evidence}) {fact}")
@@ -125,24 +107,23 @@ def get_consolidation_stats() -> str:
     MCP tool for monitoring.
     """
     try:
-        conn = _consolidation_conn()
-        total_runs = conn.execute(
-            "SELECT COUNT(*) FROM consolidation_log"
-        ).fetchone()[0]
-        total_facts_created = conn.execute(
-            "SELECT COALESCE(SUM(facts_created), 0) FROM consolidation_log"
-        ).fetchone()[0]
-        total_recon = conn.execute(
-            "SELECT COUNT(*) FROM reconsolidation_log"
-        ).fetchone()[0]
-        labile_count = conn.execute(
-            "SELECT COUNT(*) FROM labile_memories"
-        ).fetchone()[0]
-        conn.close()
+        with get_conn() as conn:
+            total_runs = conn.execute(
+                "SELECT COUNT(*) FROM consolidation_log"
+            ).fetchone()[0]
+            total_facts_created = conn.execute(
+                "SELECT COALESCE(SUM(facts_created), 0) FROM consolidation_log"
+            ).fetchone()[0]
+            total_recon = conn.execute(
+                "SELECT COUNT(*) FROM reconsolidation_log"
+            ).fetchone()[0]
+            labile_count = conn.execute(
+                "SELECT COUNT(*) FROM labile_memories"
+            ).fetchone()[0]
 
         semantic_count = 0
         try:
-            info = qdrant.get_collection(SEMANTIC_COLLECTION)
+            info = pg.count(is_semantic=True)
             semantic_count = info.points_count
         except Exception:
             pass
@@ -166,34 +147,12 @@ def get_consolidation_stats() -> str:
 def count_unconsolidated_episodic(lookback_hours: int = 24) -> int:
     """Count unconsolidated episodic memories in the last N hours."""
     cutoff = datetime.now() - timedelta(hours=lookback_hours)
-    scroll_filter = Filter(must_not=[
-        FieldCondition(key="consolidation_status", match=MatchValue(value="consolidated"))
-    ])
-
-    count = 0
-    offset = None
-    while True:
-        pts, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=scroll_filter,
-            limit=100,
-            with_payload=True,
-            offset=offset,
-        )
-        if not pts:
-            break
-        for p in pts:
-            created_str = (p.payload or {}).get("created_at", "")
-            try:
-                created = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
-                if created.tzinfo:
-                    created = created.replace(tzinfo=None)
-                if created >= cutoff:
-                    count += 1
-            except Exception:
-                pass
-        if not next_offset:
-            break
-        offset = next_offset
-
-    return count
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) FROM memories
+               WHERE is_semantic = FALSE
+                 AND COALESCE(metadata->>'consolidation_status', 'new') != 'consolidated'
+                 AND created_at >= %s""",
+            (cutoff,),
+        ).fetchone()
+    return row[0] if row else 0

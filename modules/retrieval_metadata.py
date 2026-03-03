@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
+from modules.pg_store import pg
+
 
 # ============================================================
 # DATACLASSES
@@ -595,19 +597,13 @@ def estimate_accessibility(query: str, fts_db_path: str = None) -> float:
         Accessibility score 0-1.
     """
     try:
-        from modules.config import qdrant, COLLECTION_NAME, USER_ID
         from modules.consolidation_common import _embed_text_cached
 
         vec = _embed_text_cached(query[:200])
         if not vec:
             return 0.5
 
-        results = qdrant.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=vec,
-            limit=1,
-            with_payload=False,
-        )
+        results = pg.query_vector(vec, limit=1, is_semantic=False)
         if not results:
             return 0.1
         top_score = float(results[0].score)

@@ -12,7 +12,6 @@ AJUSTE: lifecycle se importa LAZY via __getattr__ para evitar import hell
 """
 
 # --- Back-compat re-exports (tests monkeypatch these names) ---
-from modules.config import qdrant, memory  # noqa: F401
 from modules.utils import _classify_emotion, _get_emotion_text  # noqa: F401
 
 # --- Eager imports (leaf modules, no risk) ---

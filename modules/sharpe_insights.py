@@ -31,7 +31,7 @@ import hashlib
 from collections import defaultdict
 from datetime import datetime
 
-from modules.config import COLLECTION_NAME, qdrant
+from modules.pg_store import pg
 from modules.consolidation_common import _cosine_similarity
 from modules.sharpe import compute_sharpe_for_payload
 
@@ -144,11 +144,10 @@ def _collect_domain_anchors(max_scroll: int = 500) -> dict:
     scrolled = 0
 
     while scrolled < max_scroll:
-        pts, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
+        pts, next_offset = pg.scroll(
+            filters={},
             limit=100,
-            with_payload=True,
-            with_vectors=True,
+            is_semantic=False,
             offset=offset,
         )
         if not pts:

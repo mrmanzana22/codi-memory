@@ -1,13 +1,13 @@
 """
 Access Tracking Batch Aggregator
 ================================
-Collects Qdrant set_payload calls and flushes them in batches.
-Reduces N individual HTTP round-trips to ~1-2 batch_update_points calls.
+Collects pg_store update_payload calls and flushes them in batches.
+Reduces N individual DB round-trips to chunked pg.update_payload calls.
 
 Hot-path functions (search_memory, spreading) call record_access() /
 record_spreading() which enqueue updates.  A background daemon thread
-flushes the pending dict every FLUSH_INTERVAL seconds using Qdrant's
-batch_update_points API (1 HTTP request with N SetPayloadOperation ops).
+flushes the pending dict every FLUSH_INTERVAL seconds using pg_store's
+update_payload (one call per point, grouped in MAX_OPS_PER_BATCH chunks).
 
 Failure policy: best-effort, drop-on-overload.  Access tracking is
 observability/heuristic data, not integrity data.
@@ -17,7 +17,8 @@ import logging
 import os
 import threading
 import time
-from collections import defaultdict
+
+from modules.pg_store import pg
 
 _logger = logging.getLogger(__name__)
 
@@ -57,8 +58,8 @@ _logger.info("access_tracking_mode=%s", ACCESS_TRACKING_MODE)
 # ============================================================
 
 _lock = threading.Lock()
-# Key: (collection_name, point_id_str) -> payload dict to set
-_pending: dict[tuple[str, str], dict] = {}
+# Key: point_id_str -> payload dict to merge
+_pending: dict[str, dict] = {}
 
 _stats: dict = {
     "enqueued": 0,
@@ -79,19 +80,19 @@ _stop_event = threading.Event()
 # ============================================================
 
 def record_access(collection: str, point_id: str, payload: dict) -> None:
-    """Enqueue a set_payload update for batched flushing.
+    """Enqueue an update_payload update for batched flushing.
 
     Args:
-        collection: Qdrant collection name
+        collection: Ignored (pg_store is collection-agnostic, kept for backward compat)
         point_id: Point UUID string
-        payload: Full payload dict to set (caller computes final values)
+        payload: Payload dict to merge (caller computes final values)
     """
     if ACCESS_TRACKING_MODE == "legacy":
         _direct_set_payload(collection, point_id, payload)
         return
 
     with _lock:
-        key = (collection, str(point_id))
+        key = str(point_id)
         existing = _pending.get(key)
         if existing:
             existing.update(payload)
@@ -116,7 +117,7 @@ def record_spreading(
     """Enqueue spreading activation updates.
 
     Args:
-        collection: Qdrant collection name
+        collection: Ignored (pg_store is collection-agnostic, kept for backward compat)
         updates: {point_id: new_salience_value, ...}
         last_accessed: ISO timestamp (defaults to now_iso())
     """
@@ -132,7 +133,7 @@ def record_spreading(
 
     with _lock:
         for pid, sal in updates.items():
-            key = (collection, str(pid))
+            key = str(pid)
             payload = {
                 "attention_salience": sal,
                 "attention_last_accessed": ts,
@@ -217,18 +218,13 @@ def _reset_for_testing() -> None:
 
 
 # ============================================================
-# LEGACY FALLBACK (direct set_payload, no batching)
+# LEGACY FALLBACK (direct update_payload, no batching)
 # ============================================================
 
 def _direct_set_payload(collection: str, point_id: str, payload: dict) -> None:
-    """Legacy mode: call qdrant.set_payload directly."""
+    """Legacy mode: call pg.update_payload directly."""
     try:
-        from modules.config import qdrant
-        qdrant.set_payload(
-            collection_name=collection,
-            payload=payload,
-            points=[point_id],
-        )
+        pg.update_payload(point_id, payload)
     except Exception:
         pass
 
@@ -236,18 +232,17 @@ def _direct_set_payload(collection: str, point_id: str, payload: dict) -> None:
 def _direct_spreading(
     collection: str, updates: dict, last_accessed: str | None
 ) -> None:
-    """Legacy mode: call qdrant.set_payload per point (old behavior)."""
-    from modules.config import qdrant, now_iso
+    """Legacy mode: call pg.update_payload per point (old behavior)."""
+    from modules.config import now_iso
     ts = last_accessed or now_iso()
     for pid, sal in updates.items():
         try:
-            qdrant.set_payload(
-                collection_name=collection,
-                payload={
+            pg.update_payload(
+                pid,
+                {
                     "attention_salience": sal,
                     "attention_last_accessed": ts,
                 },
-                points=[pid],
             )
         except Exception:
             pass
@@ -278,7 +273,7 @@ def _flusher_loop() -> None:
 
 
 def _flush_cycle(reason: str) -> None:
-    """Acquire semaphore, drain pending, send batch to Qdrant."""
+    """Acquire semaphore, drain pending, send batch to pg_store."""
     if not _flush_semaphore.acquire(blocking=False):
         return  # another flush in progress
 
@@ -291,12 +286,8 @@ def _flush_cycle(reason: str) -> None:
 
         t0 = time.monotonic()
 
-        by_collection: dict[str, list[tuple[str, dict]]] = defaultdict(list)
-        for (coll, pid), payload in batch.items():
-            by_collection[coll].append((pid, payload))
-
-        for coll, items in by_collection.items():
-            _send_batch(coll, items)
+        items = list(batch.items())  # [(point_id, payload), ...]
+        _send_batch(items)
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         with _lock:
@@ -312,32 +303,19 @@ def _flush_cycle(reason: str) -> None:
         _flush_semaphore.release()
 
 
-def _send_batch(collection: str, items: list[tuple[str, dict]]) -> None:
-    """Send batched set_payload ops to Qdrant in chunks."""
-    from modules.config import qdrant
-    from qdrant_client.models import SetPayloadOperation, SetPayload
-
+def _send_batch(items: list[tuple[str, dict]]) -> None:
+    """Send batched update_payload ops to pg_store in chunks."""
     for i in range(0, len(items), MAX_OPS_PER_BATCH):
         chunk = items[i : i + MAX_OPS_PER_BATCH]
-        ops = [
-            SetPayloadOperation(
-                set_payload=SetPayload(payload=payload, points=[pid])
-            )
-            for pid, payload in chunk
-        ]
-        try:
-            qdrant.batch_update_points(
-                collection_name=collection,
-                update_operations=ops,
-                wait=False,
-            )
-        except Exception as e:
-            with _lock:
-                _stats["dropped"] += len(chunk)
-                _stats["errors"] += 1
-            _logger.warning(
-                "batch_update_points error (%s, %d ops): %s",
-                collection,
-                len(chunk),
-                type(e).__name__,
-            )
+        for pid, payload in chunk:
+            try:
+                pg.update_payload(pid, payload)
+            except Exception as e:
+                with _lock:
+                    _stats["dropped"] += 1
+                    _stats["errors"] += 1
+                _logger.warning(
+                    "update_payload error (id=%s): %s",
+                    pid,
+                    type(e).__name__,
+                )

@@ -109,6 +109,11 @@ load_dotenv(ENV_PATH)
 
 USER_ID = os.getenv("USER_ID", "hare")
 
+# ---------------------------------------------------------------------------
+# Storage backend: "legacy" (Qdrant+mem0+SQLite) or "pg" (PostgreSQL+pgvector)
+# ---------------------------------------------------------------------------
+STORAGE_BACKEND = os.getenv("CODI_STORAGE_BACKEND", "legacy")
+
 # Backup policy (P1) - must be after load_dotenv
 BACKUP_POLICY = os.getenv("BACKUP_POLICY", "on_demand").strip()  # "on_demand" | "always"
 BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))  # 10 min debounce

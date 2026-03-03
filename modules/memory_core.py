@@ -10,9 +10,10 @@ from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
+from modules.config import USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
+from modules.pg_store import pg
+from modules.config_pg import get_conn as get_pg_conn
 from modules.secret_redact import redact_secrets
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
 from modules.utils import (
     enrich_with_ownership, resolve_memory_id, calculate_confidence_score,
     compute_pad_retrieval_bias, _get_emotional_state,
@@ -53,10 +54,12 @@ def restore_memories() -> str:
             full_metadata = mem.get("metadata", {"category": "general"})
             if text:
                 try:
-                    memory.add(
-                        messages=[{"role": "user", "content": text}],
-                        user_id=USER_ID,
-                        metadata=full_metadata
+                    pg.add(
+                        content=text,
+                        category=full_metadata.get("category", "general"),
+                        source=full_metadata.get("source", "experienced"),
+                        importance=full_metadata.get("importance", "medium"),
+                        metadata=full_metadata,
                     )
                     restored += 1
                 except Exception:
@@ -68,46 +71,87 @@ def restore_memories() -> str:
 
 
 def _add_memory_sync(content: str, category: str, source: str, importance: str) -> str:
-    """Synchronous add_memory implementation (original pipeline)."""
-    result = memory.add(
-        messages=[{"role": "user", "content": content}],
-        user_id=USER_ID,
-        metadata={"category": category}
+    """Synchronous add_memory implementation (pgvector pipeline)."""
+    result = pg.add(
+        content=content,
+        category=category,
+        source=source,
+        importance=importance,
     )
 
+    mem_id = None
     if result and result.get("results"):
-        for r in result["results"]:
-            mem_id = r.get("id")
-            if mem_id:
-                enrich_with_ownership(
-                    memory_id=mem_id,
-                    category=category,
-                    content=content,
-                    source=source,
-                    importance=importance
-                )
+        mem_id = result["results"][0].get("id")
 
-    mem_id_fts = None
+    # Enrich with ownership metadata (themes, PAD, temporal context)
+    if mem_id:
+        try:
+            from modules.utils import (
+                infer_themes, is_self_referential, get_session_id,
+                compute_pad_encoding_boost, _get_emotional_state,
+            )
+            themes = infer_themes(content) or [category]
+            self_ref = is_self_referential(content)
+            if self_ref and 'identidad' not in themes:
+                themes.append('identidad')
+
+            base_salience = 0.7 if importance in ['critical', 'high'] else 0.5
+            pleasure, arousal = 0.0, 0.0
+            emotional_valence = 'neutral'
+            try:
+                emotional_state = _get_emotional_state()
+                current = emotional_state.get('current', {})
+                arousal = current.get('arousal', 0.0)
+                pleasure = current.get('pleasure', 0.0)
+                pad_boost = compute_pad_encoding_boost(arousal, pleasure)
+                base_salience = min(1.0, base_salience + pad_boost)
+                if pleasure > 0.3:
+                    emotional_valence = 'positive'
+                elif pleasure < -0.3:
+                    emotional_valence = 'negative'
+            except Exception:
+                pass
+
+            created_now = now_iso()
+            ownership_metadata = {
+                'ownership_is_mine': True,
+                'ownership_source': source,
+                'ownership_confidence': 0.9 if source == 'experienced' else 0.7,
+                'experiential_emotional_weight': 0.5,
+                'experiential_emotional_valence': emotional_valence,
+                'narrative_themes': themes,
+                'attention_salience': base_salience,
+                'access_timestamps': [created_now],
+                'temporal_session_id': get_session_id(),
+                'self_reference': self_ref,
+                'pad_at_encoding': {
+                    "P": round(pleasure, 3),
+                    "A": round(arousal, 3),
+                    "D": 0.0,
+                },
+            }
+            pg.update_payload(mem_id, ownership_metadata)
+        except Exception as enrich_err:
+            _logger.warning("Enrichment error in add_memory: %s", enrich_err)
+
+    # FTS index (legacy SQLite — harmless during transition)
     try:
-        if result and result.get("results"):
-            for r in result["results"]:
-                mem_id_fts = r.get("id")
-                if mem_id_fts:
-                    index_memory_fts(mem_id_fts, content, category, source, importance)
+        if mem_id:
+            index_memory_fts(mem_id, content, category, source, importance)
     except Exception as fts_err:
         _logger.warning("FTS index error in add_memory: %s", fts_err)
 
-    # Proposal #55: Auto-connect to graph neighbors (was missing here)
-    if mem_id_fts:
+    # Auto-connect to graph neighbors
+    if mem_id:
         try:
             from modules.memory_smart import _auto_connect_neighbors
-            _auto_connect_neighbors(mem_id_fts, content)
+            _auto_connect_neighbors(mem_id, content)
         except Exception:
             pass
 
     try:
         event_bus.emit(Events.MEMORY_STORED, {
-            'memory_id': mem_id_fts,
+            'memory_id': mem_id,
             'content': content[:200],
             'category': category,
             'source': source,
@@ -284,7 +328,7 @@ _MIN_OBS_FOR_ADAPTATION = 10  # Require at least 10 observations per topic
 
 
 def _get_retrieval_weights(topic: str) -> tuple:
-    """Sprint 10.4: Read per-topic retrieval weights from DB.
+    """Sprint 10.4: Read per-topic retrieval weights from PG.
 
     Returns (w_vector, w_bm25, w_activation). Falls back to defaults
     if topic has fewer than MIN_OBS_FOR_ADAPTATION observations.
@@ -292,15 +336,11 @@ def _get_retrieval_weights(topic: str) -> tuple:
     Gershman & Daw 2017: multi-armed bandit for retrieval channel selection.
     """
     try:
-        from modules.config import FTS_DB_PATH
-        from modules.db_pool import get_conn
-        import os
-        db = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
-        conn = get_conn(db)
-        row = conn.execute(
-            "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = ?",
-            (topic,)
-        ).fetchone()
+        with get_pg_conn() as conn:
+            row = conn.execute(
+                "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = %s",
+                (topic,)
+            ).fetchone()
         if row and int(row[3]) >= _MIN_OBS_FOR_ADAPTATION:
             return float(row[0]), float(row[1]), float(row[2])
     except Exception:
@@ -318,42 +358,40 @@ def _update_retrieval_weights(topic: str, winner_channel: str) -> None:
     """
     _LEARNING_RATE = 0.05
     try:
-        from modules.config import FTS_DB_PATH
-        from modules.db_pool import get_conn
-        from modules.utils import now_iso
-        import os
-        db = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
-        conn = get_conn(db)
+        with get_pg_conn() as conn:
+            row = conn.execute(
+                "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = %s",
+                (topic,)
+            ).fetchone()
 
-        # Read current weights
-        row = conn.execute(
-            "SELECT w_vector, w_bm25, w_activation, n_updates FROM retrieval_weights WHERE topic = ?",
-            (topic,)
-        ).fetchone()
+            if row:
+                wv, wb, wa, n = float(row[0]), float(row[1]), float(row[2]), int(row[3])
+            else:
+                wv, wb, wa, n = _DEFAULT_W_VECTOR, _DEFAULT_W_BM25, _DEFAULT_W_ACTIVATION, 0
 
-        if row:
-            wv, wb, wa, n = float(row[0]), float(row[1]), float(row[2]), int(row[3])
-        else:
-            wv, wb, wa, n = _DEFAULT_W_VECTOR, _DEFAULT_W_BM25, _DEFAULT_W_ACTIVATION, 0
+            # Multiplicative reward update
+            if winner_channel == 'vector':
+                wv *= (1 + _LEARNING_RATE)
+            elif winner_channel == 'bm25':
+                wb *= (1 + _LEARNING_RATE)
+            elif winner_channel == 'activation':
+                wa *= (1 + _LEARNING_RATE)
 
-        # Multiplicative reward update
-        if winner_channel == 'vector':
-            wv *= (1 + _LEARNING_RATE)
-        elif winner_channel == 'bm25':
-            wb *= (1 + _LEARNING_RATE)
-        elif winner_channel == 'activation':
-            wa *= (1 + _LEARNING_RATE)
+            # Renormalize to sum = 1
+            total = wv + wb + wa
+            if total > 0:
+                wv, wb, wa = wv / total, wb / total, wa / total
 
-        # Renormalize to sum = 1
-        total = wv + wb + wa
-        if total > 0:
-            wv, wb, wa = wv / total, wb / total, wa / total
-
-        conn.execute("""
-            INSERT OR REPLACE INTO retrieval_weights (topic, w_vector, w_bm25, w_activation, n_updates, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (topic, round(wv, 4), round(wb, 4), round(wa, 4), n + 1, now_iso()))
-        conn.commit()
+            conn.execute("""
+                INSERT INTO retrieval_weights (topic, w_vector, w_bm25, w_activation, n_updates, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (topic) DO UPDATE SET
+                    w_vector = EXCLUDED.w_vector,
+                    w_bm25 = EXCLUDED.w_bm25,
+                    w_activation = EXCLUDED.w_activation,
+                    n_updates = EXCLUDED.n_updates,
+                    updated_at = EXCLUDED.updated_at
+            """, (topic, round(wv, 4), round(wb, 4), round(wa, 4), n + 1, now_iso()))
     except Exception:
         pass
 
@@ -427,9 +465,15 @@ def search_memory(query: str, limit: int = 5) -> str:
         # CHANNEL 1: EPISODIC (vector + BM25 + ACT-R)
         # ============================================================
 
-        # 1a. Busqueda vectorial (semantica) via mem0
+        # 1a. Busqueda vectorial (pgvector HNSW)
         # S1-04: K allocated by Thompson Sampling (was hardcoded S0-01).
-        vector_results = memory.search(query=query, user_id=USER_ID, limit=_k_vector)
+        from modules.consolidation_common import _embed_text
+        _query_embedding = _embed_text(query)
+        _vector_points = pg.query_vector(_query_embedding, limit=_k_vector, is_semantic=False)
+        vector_results = {"results": [
+            {"id": str(p.id), "memory": p.payload.get("data", ""), "score": p.score}
+            for p in _vector_points
+        ]}
 
         # 1b. Busqueda BM25 (keywords) via FTS5
         # S1-04: K allocated by Thompson Sampling.
@@ -470,12 +514,12 @@ def search_memory(query: str, limit: int = 5) -> str:
         # 3. Episodic fusion
         episodic_ids = set(list(vector_map.keys()) + list(bm25_map.keys()))
 
-        # Prefetch episodic payloads en batch
+        # Prefetch episodic payloads en batch (pgvector)
         payload_map = {}
         try:
             id_list = [mid for mid in episodic_ids if mid]
             if id_list:
-                pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=id_list, with_payload=True)
+                pts = pg.get_by_ids(id_list)
                 if pts:
                     payload_map = {str(p.id): (p.payload or {}) for p in pts}
         except Exception:
@@ -560,11 +604,7 @@ def search_memory(query: str, limit: int = 5) -> str:
         sem_ids_to_fetch = [f.get("id", "") for f in semantic_results if f.get("id")]
         if sem_ids_to_fetch:
             try:
-                sem_pts = qdrant.retrieve(
-                    collection_name=SEMANTIC_COLLECTION,
-                    ids=sem_ids_to_fetch,
-                    with_payload=True,
-                )
+                sem_pts = pg.get_by_ids(sem_ids_to_fetch)
                 if sem_pts:
                     semantic_payload_map = {str(p.id): (p.payload or {}) for p in sem_pts}
             except Exception:
@@ -689,10 +729,10 @@ def search_memory(query: str, limit: int = 5) -> str:
                     if mem_conf is not None:
                         update_fields['memory_confidence'] = mem_conf
 
-                    record_access(COLLECTION_NAME, mid, update_fields)
+                    pg.update_payload(mid, update_fields)
                 else:
-                    # Semantic: update last_observed in codi_semantic
-                    record_access(SEMANTIC_COLLECTION, mid, {
+                    # Semantic: update last_observed
+                    pg.update_payload(mid, {
                         'last_observed': ts,
                     })
             except Exception:
@@ -778,12 +818,10 @@ def search_memory(query: str, limit: int = 5) -> str:
         # Log failed/weak searches for FOK estimation (WIRING-7.2)
         if retrieval_meta.result_count < 2 or retrieval_meta.top_activation < 0.3:
             try:
-                from modules.config import connect_fts
-                fts_conn = connect_fts()
-                init_failed_searches_table(fts_conn)
-                topic = query.split()[0] if query.split() else ""
-                log_failed_search(fts_conn, query, retrieval_meta.result_count, retrieval_meta.top_activation, topic)
-                fts_conn.close()
+                with get_pg_conn() as _pg_conn:
+                    init_failed_searches_table(_pg_conn)
+                    topic = query.split()[0] if query.split() else ""
+                    log_failed_search(_pg_conn, query, retrieval_meta.result_count, retrieval_meta.top_activation, topic)
             except Exception:
                 pass
 
@@ -952,27 +990,24 @@ def get_project_timeline(project: str, limit: int = 20) -> str:
         Timeline de memorias ordenadas por fecha
     """
     try:
-        # Buscar memorias relacionadas al proyecto
-        results = memory.search(query=project, user_id=USER_ID, limit=limit * 2)
+        # Buscar memorias relacionadas al proyecto (pgvector hybrid)
+        results = pg.search(query=project, limit=limit * 2, is_semantic=False)
         if not results or not results.get("results"):
             return f"No encontre memorias del proyecto '{project}'."
 
-        # Obtener memorias con timestamps
+        # Fetch full payloads for timeline
+        _result_ids = [r.get("id") for r in results["results"] if r.get("id")]
+        _timeline_points = pg.get_by_ids(_result_ids) if _result_ids else []
+        _payload_by_id = {str(p.id): (p.payload or {}) for p in _timeline_points}
+
         memories_with_dates = []
-        _timeline_points = []  # Proposal #54: collect for access tracking
         for mem in results["results"]:
             mem_id = mem.get("id", "unknown")
             text = mem.get("memory", "")
 
             try:
-                points = qdrant.retrieve(
-                    collection_name=COLLECTION_NAME,
-                    ids=[mem_id],
-                    with_payload=True
-                )
-                if points:
-                    _timeline_points.extend(points)  # Proposal #54
-                    payload = points[0].payload
+                payload = _payload_by_id.get(str(mem_id), {})
+                if payload:
                     created_at = payload.get('created_at', '')
                     session_id = payload.get('temporal_session_id', '')
                     source = payload.get('ownership_source', 'unknown')
@@ -1035,17 +1070,13 @@ def get_all_memories(limit: int = 500) -> str:
         limit: Maximo de memorias a retornar (default 500)
     """
     try:
-        # Usar Qdrant directo para obtener todas las memorias sin limite de mem0
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            limit=limit,
-            with_payload=True
-        )
+        # Scroll all episodic memories from PostgreSQL
+        points, _ = pg.scroll(limit=limit, is_semantic=False)
 
         if not points:
             return "No hay recuerdos almacenados."
 
-        # Proposal #54: Access tracking for ACT-R base-level update
+        # Access tracking for ACT-R base-level update
         _track_scroll_access(points)
 
         memories = []
@@ -1055,11 +1086,11 @@ def get_all_memories(limit: int = 500) -> str:
             category = point.payload.get("category", "general")
             memories.append(f"{i}. [{category}] [id:{mem_id[:8] if isinstance(mem_id, str) else mem_id}] {text[:80]}")
 
-        # Obtener count total
-        collection_info = qdrant.get_collection(COLLECTION_NAME)
+        # Get total count
+        collection_info = pg.count(is_semantic=False)
         total = collection_info.points_count
 
-        return f"Total en Qdrant: {total} | Mostrando: {len(memories)}\n" + "\n".join(memories)
+        return f"Total en PG: {total} | Mostrando: {len(memories)}\n" + "\n".join(memories)
     except Exception as e:
         return f"Error: {redact_secrets(str(e))}"
 
@@ -1088,7 +1119,7 @@ def delete_memory(memory_id: str, dry_run: bool = False, confirm_token: str = ""
             return _pad_guard_blocked(err)
 
     try:
-        memory.delete(memory_id=memory_id)
+        pg.delete(memory_id)
         delete_memory_fts(memory_id)
         log_security_event("destructive_exec", tool, outcome="executed",
                            payload_fingerprint=fp,
@@ -1108,7 +1139,7 @@ def delete_by_content(search_query: str, dry_run: bool = False,
     fp = compute_fingerprint(tool, search_query=search_query)
 
     try:
-        results = memory.search(query=search_query, user_id=USER_ID, limit=10)
+        results = pg.search(query=search_query, limit=10)
         if not results or not results.get("results"):
             return "No encontre memorias que coincidan."
 
@@ -1155,7 +1186,7 @@ def delete_by_content(search_query: str, dry_run: bool = False,
             mem_id = mem.get("id")
             if mem_id:
                 try:
-                    memory.delete(memory_id=mem_id)
+                    pg.delete(mem_id)
                     delete_memory_fts(mem_id)
                     deleted += 1
                 except Exception:
@@ -1206,7 +1237,8 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
                 return _pad_guard_blocked(err)
 
     try:
-        memory.delete_all(user_id=USER_ID)
+        with get_pg_conn() as conn:
+            conn.execute("DELETE FROM memories")
         log_security_event("destructive_exec", tool, outcome="executed",
                            payload_fingerprint=fp,
                            details={"action": "clear_all"})
@@ -1224,13 +1256,11 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
 
 def _track_scroll_access(points):
     """
-    Update access_count for Qdrant scroll results.
-    Same pattern as search_memory() lines 514-538.
+    Update access_count for scroll results (pgvector).
     """
     if not points:
         return
     try:
-        from modules.access_tracking import record_access
         ts = now_iso()
         for p in points:
             mid = str(p.id)
@@ -1241,7 +1271,7 @@ def _track_scroll_access(points):
                 access_ts = []
             access_ts.append(ts)
             access_ts = access_ts[-20:]
-            record_access(COLLECTION_NAME, mid, {
+            pg.update_payload(mid, {
                 'attention_access_count': access_count + 1,
                 'attention_last_accessed': ts,
                 'access_timestamps': access_ts,
@@ -1299,34 +1329,24 @@ def search_by_ownership(source: str = None, min_confidence: float = 0.0,
         Memorias que coinciden con los filtros
     """
     try:
-        filters = []
-
+        # Build filter dict for pg.scroll
+        pg_filters = {}
         if source:
-            filters.append(FieldCondition(
-                key='ownership_source',
-                match=MatchValue(value=source)
-            ))
-
-        if min_confidence > 0:
-            filters.append(FieldCondition(
-                key='ownership_confidence',
-                range=Range(gte=min_confidence)
-            ))
-
+            pg_filters['ownership_source'] = source
         if importance:
-            filters.append(FieldCondition(
-                key='narrative_importance',
-                match=MatchValue(value=importance)
-            ))
+            pg_filters['importance'] = importance
+        # Note: min_confidence filter uses JSONB — handled via direct query if needed
 
-        scroll_filter = Filter(must=filters) if filters else None
-
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=scroll_filter,
+        points, _ = pg.scroll(
+            filters=pg_filters if pg_filters else None,
             limit=limit,
-            with_payload=True
+            is_semantic=False,
         )
+
+        # Post-filter by min_confidence (stored in metadata JSONB)
+        if min_confidence > 0:
+            points = [p for p in points
+                      if float(p.payload.get('ownership_confidence', 0) or 0) >= min_confidence]
 
         if not points:
             return "No encontre memorias con esos filtros."
@@ -1352,15 +1372,14 @@ def get_my_experiences(limit: int = 10) -> str:
     Obtiene memorias que VIVI directamente (source=experienced, alta confianza).
     """
     try:
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='ownership_source', match=MatchValue(value='experienced')),
-                FieldCondition(key='ownership_confidence', range=Range(gte=0.8))
-            ]),
+        points, _ = pg.scroll(
+            filters={'ownership_source': 'experienced'},
             limit=limit,
-            with_payload=True
+            is_semantic=False,
         )
+        # Post-filter by confidence
+        points = [p for p in points
+                  if float(p.payload.get('ownership_confidence', 0) or 0) >= 0.8]
 
         if not points:
             return "No encontre experiencias propias."
@@ -1385,13 +1404,10 @@ def get_critical_memories() -> str:
     Obtiene memorias CRITICAS de identidad y alta importancia.
     """
     try:
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))
-            ]),
+        points, _ = pg.scroll(
+            filters={'importance': 'critical'},
             limit=20,
-            with_payload=True
+            is_semantic=False,
         )
 
         if not points:
@@ -1420,13 +1436,10 @@ def search_by_theme(theme: str, limit: int = 10) -> str:
         limit: Maximo de resultados
     """
     try:
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
-            ]),
+        points, _ = pg.scroll(
+            filters={'narrative_themes': theme},
             limit=limit,
-            with_payload=True
+            is_semantic=False,
         )
 
         if not points:
@@ -1463,8 +1476,7 @@ def update_memory_importance(memory_id: str, new_importance: str) -> str:
         if not full_id:
             return f"No encontre memoria con ID que empiece con '{memory_id}'"
 
-        from modules.access_tracking import record_access as _record_access
-        _record_access(COLLECTION_NAME, full_id, {
+        pg.update_payload(full_id, {
             'narrative_importance': new_importance,
         })
 

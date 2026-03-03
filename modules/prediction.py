@@ -6,17 +6,14 @@ Predictive processing: predict, surprise, beliefs, accuracy.
 import threading
 
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME,
+    USER_ID, COLLECTION_NAME,
     now_iso,
 )
 from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
-from modules.qdrant_utils import scroll_all
-
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+from modules.pg_store import pg
 
 __all__ = [
     "get_predictive_state",
@@ -53,7 +50,7 @@ def predict_context(current_context: str) -> str:
         current_context: Descripcion del contexto actual
     """
     try:
-        results = memory.search(query=current_context, user_id=USER_ID, limit=10)
+        results = pg.search(current_context, limit=10, is_semantic=False)
         if not results or not results.get('results'):
             prediction = {
                 'context': current_context, 'timestamp': now_iso(),
@@ -70,7 +67,7 @@ def predict_context(current_context: str) -> str:
             mem_id = r.get('id')
             score = r.get('score', 0)
             try:
-                points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[mem_id], with_payload=True)
+                points = pg.get_by_ids([mem_id])
                 if points:
                     payload = points[0].payload
                     predicted_memories.append({
@@ -80,7 +77,7 @@ def predict_context(current_context: str) -> str:
                         'importance': payload.get('narrative_importance', 'medium')
                     })
                     total_score += score
-                    record_access(COLLECTION_NAME, mem_id, {
+                    pg.update_payload(mem_id, {
                         'attention_access_count': int((payload or {}).get('attention_access_count', 0) or 0) + 1,
                         'attention_last_accessed': now_iso(),
                     })
@@ -136,11 +133,7 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
             _predictive_state['surprises'].append(surprise_record)
 
         content = f"[SORPRESA|{intensity.upper()}] Esperaba: {expected[:50]}... | Realidad: {actual[:50]}..."
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": "aprendizaje", "tipo": "prediction_error", "surprise_intensity": intensity}
-        )
+        result = pg.add(content=content, category="aprendizaje", source="experienced", importance="high" if intensity == "high" else "medium")
 
         if result and result.get("results"):
             for r in result["results"]:
@@ -152,7 +145,7 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
                         importance="high" if intensity == "high" else "medium",
                         emotional_valence="mixed"
                     )
-                    record_access(COLLECTION_NAME, mem_id, {
+                    pg.update_payload(mem_id, {
                         'prediction_error': True,
                         'prediction_error_value': surprise_value,
                     })
@@ -215,12 +208,7 @@ def get_prediction_accuracy() -> str:
             lines.append(f"**Sorpresas de alta intensidad:** {high_surprises}")
 
         try:
-            all_error_points = scroll_all(
-                scroll_filter=Filter(must=[
-                    FieldCondition(key='prediction_error', match=MatchValue(value=True))
-                ]),
-                max_results=500,
-            )
+            all_error_points, _ = pg.scroll(filters={"metadata_key": {"key": "prediction_error", "value": True}}, limit=500, is_semantic=False)
             if all_error_points:
                 lines.append(f"\n## Errores de Prediccion Almacenados ({len(all_error_points)})")
                 for p in all_error_points[:10]:
@@ -261,18 +249,14 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
             _predictive_state['belief_updates'].append(belief_update)
 
         content = f"[ACTUALIZACION DE CREENCIA] Sobre {topic}: Antes creia '{old_belief[:50]}...' | Ahora creo '{new_belief[:50]}...' | Razon: {reason[:50]}..."
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": "aprendizaje", "tipo": "belief_update", "topic": topic}
-        )
+        result = pg.add(content=content, category="aprendizaje", source="experienced", importance="high")
 
         if result and result.get("results"):
             for r in result["results"]:
                 mem_id = r.get("id")
                 if mem_id:
                     enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=content, source="experienced", importance="high")
-                    record_access(COLLECTION_NAME, mem_id, {
+                    pg.update_payload(mem_id, {
                         'belief_update': True,
                         'belief_topic': topic,
                     })

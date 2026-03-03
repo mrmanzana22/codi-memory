@@ -5,15 +5,13 @@ PAD emotional model, mood baseline, emotion-tagged memories.
 
 import json
 
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME,
+    USER_ID, COLLECTION_NAME,
     _emotional_state, CODI_EMOTION_MAP,
     now_iso, now_short,
 )
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     resolve_memory_id, enrich_with_ownership,
@@ -262,7 +260,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
         emotion_label = _classify_emotion(p, a, d)
         intensity = _calculate_emotional_intensity(p, a, d)
 
-        result = memory.add(messages=[{"role": "user", "content": content}], user_id=USER_ID, metadata={"category": category})
+        result = pg.add(content=content, category=category, source=source, importance=importance)
 
         if result and result.get("results"):
             for r in result["results"]:
@@ -287,7 +285,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
                         'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
                         'pad_emotion': emotion_label, 'pad_intensity': intensity, '_v': 2.2
                     }
-                    record_access(COLLECTION_NAME, mem_id, ownership_metadata)
+                    pg.update_payload(mem_id, ownership_metadata)
 
         # P1: backup removed from hot path
         result_json = {
@@ -321,7 +319,7 @@ def tag_memory_emotion(memory_id: str, pleasure: float, arousal: float, dominanc
         emotion_label = _classify_emotion(p, a, d)
         intensity = _calculate_emotional_intensity(p, a, d)
 
-        record_access(COLLECTION_NAME, full_id, {
+        pg.update_payload(full_id, {
             'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
             'pad_emotion': emotion_label, 'pad_intensity': intensity,
             'experiential_emotional_weight': min(intensity / 1.73, 1.0),
@@ -350,22 +348,15 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
         if emotion_type not in valid_emotions:
             return json.dumps({'result': 'error', 'message': f"Emocion no valida. Usar: {', '.join(valid_emotions)}"})
 
-        points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(must=[
-                FieldCondition(key='pad_emotion', match=MatchValue(value=emotion_type)),
-                FieldCondition(key='pad_intensity', range=Range(gte=threshold))
-            ]),
-            limit=limit, with_payload=True
-        )
+        all_points, _ = pg.scroll(filters={"metadata_key": {"key": "pad_emotion", "value": emotion_type}}, limit=limit * 5, is_semantic=False)
+        # Post-filter by pad_intensity >= threshold (Range filter)
+        points = [p for p in all_points if (p.payload or {}).get('pad_intensity', 0) >= threshold][:limit]
 
         if not points:
             return json.dumps({'result': 'Sin resultados', 'emotion': emotion_type, 'memories': []})
 
-        # Access tracking (same pattern as search_memory)
+        # Access tracking
         try:
-            from modules.access_tracking import record_access
-            from modules.config import COLLECTION_NAME, now_iso
             _ts = now_iso()
             for _p in points:
                 _mid = str(_p.id)
@@ -376,7 +367,7 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
                     _ats = []
                 _ats.append(_ts)
                 _ats = _ats[-20:]
-                record_access(COLLECTION_NAME, _mid, {
+                pg.update_payload(_mid, {
                     'attention_access_count': _acc + 1,
                     'attention_last_accessed': _ts,
                     'access_timestamps': _ats,
@@ -419,25 +410,31 @@ def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None
         limit: Maximo de resultados (default 10)
     """
     try:
-        filters = []
-        if pleasure_range == 'positive':
-            filters.append(FieldCondition(key='pad_pleasure', range=Range(gte=0.2)))
-        elif pleasure_range == 'negative':
-            filters.append(FieldCondition(key='pad_pleasure', range=Range(lte=-0.2)))
-        elif pleasure_range == 'neutral':
-            filters.append(FieldCondition(key='pad_pleasure', range=Range(gte=-0.2, lte=0.2)))
+        all_points, _ = pg.scroll(filters={}, limit=limit * 10, is_semantic=False)
 
-        if arousal_range == 'high':
-            filters.append(FieldCondition(key='pad_arousal', range=Range(gte=0.3)))
-        elif arousal_range == 'low':
-            filters.append(FieldCondition(key='pad_arousal', range=Range(lte=-0.3)))
-        elif arousal_range == 'neutral':
-            filters.append(FieldCondition(key='pad_arousal', range=Range(gte=-0.3, lte=0.3)))
+        # Post-filter by PAD ranges (Range filters applied in Python)
+        def _matches(p):
+            pl = p.payload or {}
+            pad_p = pl.get('pad_pleasure', None)
+            pad_a = pl.get('pad_arousal', None)
+            pad_i = pl.get('pad_intensity', None)
+            if pad_i is None:
+                return False
+            if pleasure_range == 'positive' and (pad_p is None or pad_p < 0.2):
+                return False
+            if pleasure_range == 'negative' and (pad_p is None or pad_p > -0.2):
+                return False
+            if pleasure_range == 'neutral' and (pad_p is None or pad_p < -0.2 or pad_p > 0.2):
+                return False
+            if arousal_range == 'high' and (pad_a is None or pad_a < 0.3):
+                return False
+            if arousal_range == 'low' and (pad_a is None or pad_a > -0.3):
+                return False
+            if arousal_range == 'neutral' and (pad_a is None or pad_a < -0.3 or pad_a > 0.3):
+                return False
+            return True
 
-        filters.append(FieldCondition(key='pad_intensity', range=Range(gte=0.0)))
-        scroll_filter = Filter(must=filters) if filters else None
-
-        points, _ = qdrant.scroll(collection_name=COLLECTION_NAME, scroll_filter=scroll_filter, limit=limit, with_payload=True)
+        points = [p for p in all_points if _matches(p)][:limit]
 
         if not points:
             return json.dumps({'result': 'Sin resultados', 'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': []})

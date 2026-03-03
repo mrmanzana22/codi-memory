@@ -17,33 +17,21 @@ from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, now_col
-from modules.access_tracking import record_access
+from modules.config import USER_ID, COLLECTION_NAME, BASE_DIR, now_col
+from modules.pg_store import pg
 from modules.secret_redact import redact_secrets
-
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 # Archivo local como backup/fallback
 LIBROS_FILE = os.path.join(BASE_DIR, "libros.json")
 
 
 def _cargar_libros_de_qdrant():
-    """Carga libros desde Qdrant buscando memorias con category=libro."""
+    """Carga libros desde pg_store buscando memorias con category=libro."""
     try:
         libros = {}
 
         # Buscar memorias que son libros
-        libro_points, _ = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=Filter(
-                must=[
-                    FieldCondition(key="category", match=MatchValue(value="libro"))
-                ]
-            ),
-            limit=100,
-            with_payload=True,
-            with_vectors=False
-        )
+        libro_points, _ = pg.scroll(filters={"category": "libro"}, limit=100, is_semantic=False)
 
         for point in libro_points:
             payload = point.payload
@@ -61,18 +49,9 @@ def _cargar_libros_de_qdrant():
 
         # Buscar capitulos para cada libro
         for libro_key in libros:
-            cap_points, _ = qdrant.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=Filter(
-                    must=[
-                        FieldCondition(key="category", match=MatchValue(value="capitulo")),
-                        FieldCondition(key="libro", match=MatchValue(value=libro_key))
-                    ]
-                ),
-                limit=100,
-                with_payload=True,
-                with_vectors=False
-            )
+            all_cap_points, _ = pg.scroll(filters={"category": "capitulo"}, limit=100, is_semantic=False)
+            # Post-filter for this specific libro
+            cap_points = [p for p in all_cap_points if p.payload.get('libro') == libro_key]
 
             capitulos = []
             for cap_point in cap_points:
@@ -89,10 +68,10 @@ def _cargar_libros_de_qdrant():
             capitulos.sort(key=lambda x: x.get('numero', 0))
             libros[libro_key]['capitulos'] = capitulos
 
-        return {"metadata": {"source": "qdrant"}, "libros": libros}
+        return {"metadata": {"source": "pg_store"}, "libros": libros}
 
     except Exception as e:
-        _logger.error("Error cargando de Qdrant: %s", redact_secrets(str(e)))
+        _logger.error("Error cargando de pg_store: %s", redact_secrets(str(e)))
         # Fallback a archivo local
         return _cargar_libros_local()
 
@@ -234,35 +213,26 @@ def register_tools(mcp):
             nuevo_numero = len(capitulos) + 1
             fecha = now_col().strftime('%Y-%m-%d')
 
-            # Guardar en Qdrant como memoria con category=capitulo
-            result = memory.add(
-                f"[{libro.upper()}] Capitulo {nuevo_numero}: {titulo}. {resumen}",
-                user_id=USER_ID,
-                metadata={
-                    'category': 'capitulo',
-                    'libro': libro_key,
-                    'numero': nuevo_numero,
-                    'titulo': titulo,
-                    'resumen': resumen,
-                    'fecha': fecha,
-                    'narrative_importance': 'high'
-                }
+            # Guardar en pg_store como memoria con category=capitulo
+            result = pg.add(
+                content=f"[{libro.upper()}] Capitulo {nuevo_numero}: {titulo}. {resumen}",
+                category='capitulo',
+                source='experienced',
+                importance='high'
             )
 
-            # Agregar metadata directamente en Qdrant para poder filtrar
+            # Actualizar payload con metadata adicional
             if result and result.get("results"):
-                for r in result["results"]:
-                    mem_id = r.get("id")
-                    if mem_id:
-                        record_access(COLLECTION_NAME, mem_id, {
-                            'category': 'capitulo',
-                            'libro': libro_key,
-                            'numero': nuevo_numero,
-                            'titulo': titulo,
-                            'resumen': resumen,
-                            'fecha': fecha,
-                            'narrative_importance': 'high',
-                        })
+                mem_id = result["results"][0]["id"]
+                if mem_id:
+                    pg.update_payload(mem_id, {
+                        'libro': libro_key,
+                        'numero': nuevo_numero,
+                        'titulo': titulo,
+                        'resumen': resumen,
+                        'fecha': fecha,
+                        'narrative_importance': 'high',
+                    })
 
             # También guardar en archivo local como backup
             nuevo_cap = {
@@ -311,37 +281,27 @@ Guardado en: Qdrant + backup local
 
             fecha_inicio = now_col().strftime('%Y-%m-%d')
 
-            # Guardar en Qdrant como memoria
-            result = memory.add(
-                f"LIBRO: {nombre.upper()} - {descripcion}",
-                user_id=USER_ID,
-                metadata={
-                    'category': 'libro',
-                    'libro_key': nombre_key,
-                    'nombre': nombre.upper(),
-                    'descripcion': descripcion,
-                    'iniciado': fecha_inicio,
-                    'estado': 'activo',
-                    'siguiente_paso': None,
-                    'narrative_importance': 'critical'
-                }
+            # Guardar en pg_store como memoria
+            result = pg.add(
+                content=f"LIBRO: {nombre.upper()} - {descripcion}",
+                category='libro',
+                source='experienced',
+                importance='critical'
             )
 
-            # Agregar metadata directamente en Qdrant para poder filtrar
+            # Actualizar payload con metadata adicional
             if result and result.get("results"):
-                for r in result["results"]:
-                    mem_id = r.get("id")
-                    if mem_id:
-                        record_access(COLLECTION_NAME, mem_id, {
-                            'category': 'libro',
-                            'libro_key': nombre_key,
-                            'nombre': nombre.upper(),
-                            'descripcion': descripcion,
-                            'iniciado': fecha_inicio,
-                            'estado': 'activo',
-                            'siguiente_paso': None,
-                            'narrative_importance': 'critical',
-                        })
+                mem_id = result["results"][0]["id"]
+                if mem_id:
+                    pg.update_payload(mem_id, {
+                        'libro_key': nombre_key,
+                        'nombre': nombre.upper(),
+                        'descripcion': descripcion,
+                        'iniciado': fecha_inicio,
+                        'estado': 'activo',
+                        'siguiente_paso': None,
+                        'narrative_importance': 'critical',
+                    })
 
             # También guardar en archivo local como backup
             data['libros'][nombre_key] = {
@@ -389,14 +349,14 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
 
             libro_data = data['libros'][libro_key]
 
-            # Actualizar en Qdrant si tenemos el memory_id
+            # Actualizar en pg_store si tenemos el memory_id
             if libro_data.get('memory_id'):
                 try:
-                    record_access(COLLECTION_NAME, libro_data['memory_id'], {
+                    pg.update_payload(libro_data['memory_id'], {
                         "siguiente_paso": siguiente,
                     })
                 except Exception as e:
-                    _logger.warning("No se pudo actualizar en Qdrant: %s", redact_secrets(str(e)))
+                    _logger.warning("No se pudo actualizar en pg_store: %s", redact_secrets(str(e)))
 
             # Actualizar en archivo local
             data['libros'][libro_key]['siguiente_paso'] = siguiente

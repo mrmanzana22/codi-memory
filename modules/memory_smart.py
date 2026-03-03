@@ -13,12 +13,13 @@ from datetime import datetime
 _logger = logging.getLogger(__name__)
 
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso,
+    USER_ID, COLLECTION_NAME, BACKUP_FILE, FTS_DB_PATH, now_iso,
     CONTRADICTION_SCORE_FLOOR, CONTRADICTION_PE_SILENT, CONTRADICTION_PE_ALERT,
     CONTRADICTION_MIN_ENTITIES, CONTRADICTION_COOLDOWN_MINUTES,
     CONTRADICTION_MAX_PER_SESSION,
 )
-from modules.access_tracking import record_access
+from modules.pg_store import pg
+from modules.config_pg import get_conn as get_pg_conn
 from modules.destructive_guard import (
     is_guard_enabled, compute_fingerprint,
     request_confirmation, validate_and_consume,
@@ -236,30 +237,13 @@ def fts_queue_stats() -> dict:
 
 
 def search_fts(query: str, limit: int = 20) -> list:
-    """Busca en FTS5 usando BM25 ranking.
+    """Busca usando PG tsvector (BM25-style ranking).
 
-    All user input is sanitized through fts_safety.sanitize_fts_query()
-    before reaching FTS5 MATCH. This prevents query injection (C-02).
+    Migrated from SQLite FTS5 to PostgreSQL tsvector in Fase 2.
+    Returns same format: [{memory_id, content, category, source, bm25_rank}]
     """
-    from modules.fts_safety import sanitize_fts_query, clamp_fts_limit
-
-    safe_query = sanitize_fts_query(query)
-    if not safe_query:
-        return []
-
-    safe_limit = clamp_fts_limit(limit)
-
-    conn = _fts_conn()
     try:
-        results = conn.execute("""
-            SELECT memory_id, content, category, source, rank
-            FROM memories_fts
-            WHERE content MATCH ?
-            ORDER BY rank
-            LIMIT ?
-        """, (safe_query, safe_limit)).fetchall()
-        return [{"memory_id": r[0], "content": r[1], "category": r[2],
-                 "source": r[3], "bm25_rank": r[4]} for r in results]
+        return pg.search_fts(query, limit=min(limit, 100))
     except Exception:
         return []
 
@@ -306,24 +290,23 @@ def get_text_by_id(memory_id: str):
     return result.get(memory_id)
 
 
-def search_with_fts_content(query, user_id, limit=5) -> dict:
-    """Vector ranking from mem0, original text from FTS.
+def search_with_fts_content(query, user_id=None, limit=5) -> dict:
+    """Vector cosine similarity search (pgvector).
 
-    Calls memory.search() for ranking, then bulk-replaces compressed
-    text with FTS originals. Preserves id, score, and all ranking metadata.
+    Returns mem0-compatible format: {"results": [{"id", "memory", "score"}, ...]}
+    Score is cosine similarity (0-1), used by BMR dedup scoring.
+    PG stores original content (no FTS overlay needed).
     """
-    results = memory.search(query=query, user_id=user_id, limit=limit)
-    if not results or not results.get("results"):
-        return results
-    ids = [r["id"] for r in results["results"] if r.get("id")]
-    if not ids:
-        return results
-    fts_map = get_texts_by_ids(ids)
-    for r in results["results"]:
-        fts = fts_map.get(r.get("id"))
-        if fts:
-            r["memory"] = fts["content"]
-    return results
+    try:
+        from modules.consolidation_common import _embed_text
+        embedding = _embed_text(query)
+        points = pg.query_vector(embedding, limit=limit, is_semantic=False)
+        return {"results": [
+            {"id": str(p.id), "memory": p.payload.get("data", ""), "score": p.score}
+            for p in points
+        ]}
+    except Exception:
+        return {"results": []}
 
 
 def sync_fts_from_backup():
@@ -525,7 +508,7 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
         exclude = set(exclude_ids or [])
         exclude.add(new_id)
 
-        similar = memory.search(query=content, user_id=USER_ID, limit=GRAPH_AUTO_CONNECT_K + 2)
+        similar = pg.search(content, limit=GRAPH_AUTO_CONNECT_K + 2, is_semantic=False)
         if not similar or not similar.get("results"):
             return
 
@@ -540,7 +523,7 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
                 break
 
         if connections:
-            record_access(COLLECTION_NAME, new_id, {
+            pg.update_payload(new_id, {
                 'related_memories': connections,
             })
             # S2-05: Record typed edges in SQLite
@@ -746,44 +729,44 @@ def add_memory_smart(content: str, category: str = "general",
 
             if top_score > relate_threshold:
                 # SIMILAR - guardar pero relacionar
-                result = memory.add(
-                    messages=[{"role": "user", "content": content}],
-                    user_id=USER_ID,
-                    metadata={"category": category}
+                _add_result = pg.add(
+                    content=content,
+                    category=category,
+                    source=source,
+                    importance=importance,
                 )
-
                 new_id = None
-                if result and result.get("results"):
-                    for r in result["results"]:
-                        new_id = r.get("id")
-                        if new_id:
-                            # Enriquecer con ownership + relacion
-                            enrich_with_ownership(
-                                memory_id=new_id,
-                                category=category,
-                                content=content,
-                                source=source,
-                                importance=importance
-                            )
-                            # Agregar metadata de relacion
-                            try:
-                                record_access(COLLECTION_NAME, new_id, {
-                                    'related_to': top_id,
-                                    'relation_score': top_score,
-                                    'relation_type': 'semantic_similar',
-                                })
-                            except Exception:
-                                pass
+                if _add_result and _add_result.get("results"):
+                    new_id = _add_result["results"][0].get("id")
 
-                            # Mini spreading activation: activar vecinos de la nueva relacion
-                            try:
-                                from modules.spreading import _spread_activation
-                                spread_seeds = [top_id]
-                                if new_id:
-                                    spread_seeds.append(new_id)
-                                _spread_activation(spread_seeds, depth=1, factor=0.3, seed_boost=0.05)
-                            except Exception:
-                                pass
+                if new_id:
+                    # Enriquecer con ownership + relacion
+                    enrich_with_ownership(
+                        memory_id=new_id,
+                        category=category,
+                        content=content,
+                        source=source,
+                        importance=importance
+                    )
+                    # Agregar metadata de relacion
+                    try:
+                        pg.update_payload(new_id, {
+                            'related_to': top_id,
+                            'relation_score': top_score,
+                            'relation_type': 'semantic_similar',
+                        })
+                    except Exception:
+                        pass
+
+                    # Mini spreading activation: activar vecinos de la nueva relacion
+                    try:
+                        from modules.spreading import _spread_activation
+                        spread_seeds = [top_id]
+                        if new_id:
+                            spread_seeds.append(new_id)
+                        _spread_activation(spread_seeds, depth=1, factor=0.3, seed_boost=0.05)
+                    except Exception:
+                        pass
 
                 # P1: backup removed from hot path
 
@@ -860,24 +843,24 @@ def add_memory_smart(content: str, category: str = "general",
             }, ensure_ascii=False)
 
         # 3. NUEVA - guardar normal
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": category}
+        _add_result = pg.add(
+            content=content,
+            category=category,
+            source=source,
+            importance=importance,
         )
-
         new_id = None
-        if result and result.get("results"):
-            for r in result["results"]:
-                new_id = r.get("id")
-                if new_id:
-                    enrich_with_ownership(
-                        memory_id=new_id,
-                        category=category,
-                        content=content,
-                        source=source,
-                        importance=importance
-                    )
+        if _add_result and _add_result.get("results"):
+            new_id = _add_result["results"][0].get("id")
+
+        if new_id:
+            enrich_with_ownership(
+                memory_id=new_id,
+                category=category,
+                content=content,
+                source=source,
+                importance=importance
+            )
 
         # P1: backup removed from hot path
 

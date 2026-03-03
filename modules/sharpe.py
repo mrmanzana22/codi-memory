@@ -291,14 +291,9 @@ def get_sharpe_report(topic: str = "", top_n: int = 20) -> str:
     Returns:
         Formatted report string
     """
-    from modules.config import COLLECTION_NAME, qdrant
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from modules.pg_store import pg
 
-    scroll_filter = None
-    if topic:
-        scroll_filter = Filter(must=[
-            FieldCondition(key="narrative_themes", match=MatchValue(value=topic))
-        ])
+    scroll_filters = {"narrative_themes": topic} if topic else {}
 
     all_scores = []
     offset = None
@@ -311,11 +306,10 @@ def get_sharpe_report(topic: str = "", top_n: int = 20) -> str:
 
     scrolled = 0
     while scrolled < max_scroll:
-        pts, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=scroll_filter,
+        pts, next_offset = pg.scroll(
+            filters=scroll_filters,
             limit=100,
-            with_payload=True,
+            is_semantic=False,
             offset=offset,
         )
         if not pts:

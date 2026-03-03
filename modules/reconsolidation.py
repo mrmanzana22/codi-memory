@@ -18,16 +18,14 @@ Split from consolidation.py (Phase 1, Sub-phase 1.1)
 import logging
 from datetime import datetime, timedelta
 
-from qdrant_client.models import PointStruct
-
 from modules.config import (
     COLLECTION_NAME,
-    qdrant,
     RECONSOLIDATION_WINDOW_HOURS,
     RECONSOLIDATION_PE_THRESHOLD,
     RECONSOLIDATION_STRENGTH_FLOOR,
     RECONSOLIDATION_STRENGTH_CEILING,
 )
+from modules.pg_store import pg
 from modules.consolidation_common import (
     _embed_text, _cosine_similarity, _consolidation_conn,
 )
@@ -330,12 +328,12 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
 
     Pipeline:
       1. Resolve full ID
-      2. Retrieve old payload from Qdrant
+      2. Retrieve old payload from pg_store
       3. Labile gate: verify memory is labile OR has PE (force bypasses)
       4. Log old content to reconsolidation_log
       5. Adjust confidence (decrement by 0.1 for contradiction)
       6. Build new content, generate new embedding
-      7. Upsert full PointStruct (vector + payload) -- re-embed, not post-it
+      7. Update payload via pg_store (re-embed, not post-it)
       8. Update FTS5 index
       9. Emit RECONSOLIDATION_TRIGGERED event
 
@@ -356,12 +354,12 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
 
     # 2. Retrieve old payload
     try:
-        pts = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+        pts = pg.get_by_ids([full_id])
         if not pts:
-            return f"[reconsolidation] Memory {full_id[:8]} not found in Qdrant"
+            return f"[reconsolidation] Memory {full_id[:8]} not found in pg_store"
         old_payload = pts[0].payload or {}
     except Exception as e:
-        return f"[reconsolidation] Qdrant retrieve error: {redact_secrets(str(e))}"
+        return f"[reconsolidation] pg_store retrieve error: {redact_secrets(str(e))}"
 
     old_content = old_payload.get("data", "") or old_payload.get("memory", "")
     old_confidence = float(old_payload.get("confidence", old_payload.get("narrative_importance_score", 0.5)))
@@ -428,25 +426,17 @@ def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
     except Exception as e:
         return f"[reconsolidation] Embedding error: {redact_secrets(str(e))}"
 
-    # 7. Upsert full PointStruct -- destroy and re-synthesize the trace
+    # 7. Upsert full record -- destroy and re-synthesize the trace (Nader 2000)
     try:
-        updated_payload = dict(old_payload)
-        updated_payload.update({
+        updated_payload = {
             "data": new_content,
             "confidence": new_confidence,
             "reconsolidated_at": now_iso(),
             "reconsolidation_count": int(old_payload.get("reconsolidation_count", 0)) + 1,
-        })
-        qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=[PointStruct(
-                id=full_id,
-                vector=new_vector,
-                payload=updated_payload,
-            )],
-        )
+        }
+        pg.update_payload(full_id, updated_payload)
     except Exception as e:
-        return f"[reconsolidation] Qdrant upsert error: {redact_secrets(str(e))}"
+        return f"[reconsolidation] pg_store upsert error: {redact_secrets(str(e))}"
 
     # 8. Update FTS5 index
     try:

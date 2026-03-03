@@ -7,12 +7,11 @@ not in emotion.py — it READS emotional state as input but IS attention logic.
 
 import json
 
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME,
+    USER_ID,
     _emotional_state, now_iso,
 )
+from modules.pg_store import pg
 from modules.secret_redact import redact_secrets
 from modules.memory_smart import search_with_fts_content
 from modules.utils import (
@@ -21,7 +20,6 @@ from modules.utils import (
 )
 from modules.activation import compute_unified_activation
 from modules.competition import CompetitionCandidate, run_workspace_competition
-from modules.access_tracking import record_access
 
 __all__ = [
     "get_workspace",
@@ -126,7 +124,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
             mem_id = r.get('id')
             base_score = r.get('score', 0)
             try:
-                points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[mem_id], with_payload=True)
+                points = pg.get_by_ids([mem_id])
                 if points:
                     payload = points[0].payload
                     salience = payload.get('attention_salience', 0.5)
@@ -161,7 +159,7 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                     # Update attention metadata (batched)
                     new_salience = min(salience + 0.1, 1.0)
                     access_count = payload.get('attention_access_count', 0)
-                    record_access(COLLECTION_NAME, mem_id, {
+                    pg.update_payload(mem_id, {
                         'attention_salience': new_salience,
                         'attention_access_count': access_count + 1,
                         'attention_last_accessed': now_iso(),
@@ -249,7 +247,7 @@ def broadcast_to_workspace(memory_id: str) -> str:
         if not full_id:
             return f"No encontre memoria con ID que empiece con '{memory_id}'"
 
-        points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[full_id], with_payload=True)
+        points = pg.get_by_ids([full_id])
         if not points:
             return f"No encontre memoria con ID {full_id}"
 
@@ -261,7 +259,7 @@ def broadcast_to_workspace(memory_id: str) -> str:
         lines.append(f"**Contenido:** {main_content[:80]}...")
         lines.append(f"**Temas:** {', '.join(main_themes) if main_themes else 'ninguno'}\n")
 
-        record_access(COLLECTION_NAME, full_id, {
+        pg.update_payload(full_id, {
             'attention_salience': 1.0,
             'attention_access_count': payload.get('attention_access_count', 0) + 5,
             'attention_last_accessed': now_iso(),
@@ -390,29 +388,20 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
             _chain_members = set()
 
         # Pre-filter: only scroll memories that can actually be decayed
-        # (salience above floor, not critical/high importance)
-        from qdrant_client.models import Filter, FieldCondition, Range, MatchValue
-        decay_filter = Filter(
-            must=[
-                FieldCondition(key='attention_salience', range=Range(gt=FADEM_FLOOR)),
-            ],
-            # Proposal #66 Fix 1: Only critical immune. High decays via FadeMem lambda.
-            # Bjork & Bjork 1992: storage strength != retrieval strength immunity.
-            must_not=[
-                FieldCondition(key='narrative_importance', match=MatchValue(value='critical')),
-            ]
-        )
+        # (salience above floor, not critical importance)
+        # Proposal #66 Fix 1: Only critical immune. High decays via FadeMem lambda.
+        # Bjork & Bjork 1992: storage strength != retrieval strength immunity.
+        # Range filter (attention_salience > FADEM_FLOOR) applied in Python post-filter.
 
         # Paginated scroll (same pattern as consolidation.py:208-267)
         offset = None
         MAX_SCROLL = 5000  # safety cap
 
         while total_scanned < MAX_SCROLL:
-            batch, next_offset = qdrant.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=decay_filter,
+            batch, next_offset = pg.scroll(
+                filters={"narrative_importance__not": "critical"},
                 limit=200,
-                with_payload=True,
+                is_semantic=False,
                 offset=offset,
             )
             if not batch:
@@ -420,6 +409,9 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
             for point in batch:
                 salience = point.payload.get('attention_salience', 0.5)
+                # Post-filter: skip memories at or below FADEM_FLOOR (Range replacement)
+                if salience <= FADEM_FLOOR:
+                    continue
                 importance = point.payload.get('narrative_importance', 'medium')
 
                 # K.1.4: Read SS/RS from payload (defaults for legacy memories)
@@ -456,7 +448,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                         'storage_strength': new_ss,
                         'retrieval_strength': new_rs,
                     }
-                    record_access(COLLECTION_NAME, point.id, decay_payload)
+                    pg.update_payload(point.id, decay_payload)
                     decayed_count += 1
 
             total_scanned += len(batch)
@@ -487,7 +479,7 @@ def get_high_salience_memories(limit: int = 10) -> str:
         limit: Cuantas memorias obtener
     """
     try:
-        all_points, _ = qdrant.scroll(collection_name=COLLECTION_NAME, limit=200, with_payload=True)
+        all_points, _ = pg.scroll(filters={}, limit=200, is_semantic=False)
         if not all_points:
             return "No hay memorias."
 
@@ -529,7 +521,7 @@ def emotional_focus_attention(context: str) -> str:
             mem_id = r.get('id')
             base_score = r.get('score', 0)
             try:
-                points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=[mem_id], with_payload=True)
+                points = pg.get_by_ids([mem_id])
                 if points:
                     payload = points[0].payload
                     salience = payload.get('attention_salience', 0.5)
@@ -564,7 +556,7 @@ def emotional_focus_attention(context: str) -> str:
                         'importance': importance, 'emotion': payload.get('pad_emotion', 'unknown')
                     })
                     new_salience = min(salience + 0.1, 1.0)
-                    record_access(COLLECTION_NAME, mem_id, {
+                    pg.update_payload(mem_id, {
                         'attention_salience': new_salience,
                         'attention_access_count': payload.get('attention_access_count', 0) + 1,
                         'attention_last_accessed': now_iso(),
@@ -643,16 +635,12 @@ def recalibrate_importance(
     high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
 
     # --- Scan critical memories ---
-    crit_filter = Filter(
-        must=[FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))],
-    )
     offset = None
     while scanned < max_scan:
-        batch, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=crit_filter,
+        batch, next_offset = pg.scroll(
+            filters={"importance": "critical"},
             limit=100,
-            with_payload=True,
+            is_semantic=False,
             offset=offset,
         )
         if not batch:
@@ -681,7 +669,7 @@ def recalibrate_importance(
                 effective_cutoff = (now - timedelta(days=half_days)).isoformat()
 
             if last_access and last_access < effective_cutoff:
-                record_access(COLLECTION_NAME, point.id, {
+                pg.update_payload(point.id, {
                     'narrative_importance': 'high',
                 })
                 downgraded_crit += 1
@@ -691,16 +679,12 @@ def recalibrate_importance(
         offset = next_offset
 
     # --- Scan high memories ---
-    high_filter = Filter(
-        must=[FieldCondition(key='narrative_importance', match=MatchValue(value='high'))],
-    )
     offset = None
     while scanned < max_scan:
-        batch, next_offset = qdrant.scroll(
-            collection_name=COLLECTION_NAME,
-            scroll_filter=high_filter,
+        batch, next_offset = pg.scroll(
+            filters={"importance": "high"},
             limit=100,
-            with_payload=True,
+            is_semantic=False,
             offset=offset,
         )
         if not batch:
@@ -729,7 +713,7 @@ def recalibrate_importance(
                 effective_cutoff = (now - timedelta(days=half_days)).isoformat()
 
             if last_access and last_access < effective_cutoff:
-                record_access(COLLECTION_NAME, point.id, {
+                pg.update_payload(point.id, {
                     'narrative_importance': 'medium',
                 })
                 downgraded_high += 1

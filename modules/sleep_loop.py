@@ -633,7 +633,8 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
     result = {"tick": "reconsolidation", "ok": False, "detail": ""}
 
     try:
-        from modules.config import FTS_DB_PATH, qdrant, COLLECTION_NAME
+        from modules.config import FTS_DB_PATH
+        from modules.pg_store import pg
 
         conn = connect_fts()
         now = datetime.now().isoformat()
@@ -655,9 +656,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
 
         for memory_id, pe, context in rows:
             try:
-                points = qdrant.retrieve(
-                    COLLECTION_NAME, [memory_id], with_payload=True
-                )
+                points = pg.get_by_ids([memory_id])
                 if not points:
                     conn.execute(
                         "DELETE FROM labile_memories WHERE memory_id = ?",
@@ -682,17 +681,13 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 confidence_reduction = min(0.2, pe * 0.3)
                 new_confidence = max(0.1, old_confidence - confidence_reduction)
 
-                # Update payload in Qdrant
-                qdrant.set_payload(
-                    COLLECTION_NAME,
-                    payload={
-                        "confidence": new_confidence,
-                        "reconsolidated_at": now,
-                        "reconsolidation_count": int(payload.get("reconsolidation_count", 0)) + 1,
-                        "last_pe_context": context[:200],
-                    },
-                    points=[memory_id],
-                )
+                # Update payload in pg_store
+                pg.update_payload(memory_id, {
+                    "confidence": new_confidence,
+                    "reconsolidated_at": now,
+                    "reconsolidation_count": int(payload.get("reconsolidation_count", 0)) + 1,
+                    "last_pe_context": context[:200],
+                })
 
                 # Log to reconsolidation_log
                 conn.execute("""
@@ -763,17 +758,13 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     if flagged_count >= MAX_FLAG_PER_CYCLE:
                         break
 
-                    # Find high-confidence memories in this domain from Qdrant
+                    # Find high-confidence memories in this domain from pg_store
                     try:
-                        from qdrant_client.models import Filter, FieldCondition, MatchValue
-                        hits = qdrant.scroll(
-                            COLLECTION_NAME,
-                            scroll_filter=Filter(must=[
-                                FieldCondition(key="category", match=MatchValue(value=domain)),
-                            ]),
+                        hits, _ = pg.scroll(
+                            filters={"category": domain},
                             limit=10,
-                            with_payload=True,
-                        )[0]  # scroll returns (points, next_offset)
+                            is_semantic=False,
+                        )
 
                         for point in hits:
                             if flagged_count >= MAX_FLAG_PER_CYCLE:
@@ -1080,7 +1071,8 @@ def _tick_backup(budget_ms: int) -> dict:
             dst = os.path.join(sqlite_dir, f"{db_name.replace('.db', '')}-{window}.db")
             try:
                 # Use SQLite backup API for consistency (not just file copy)
-                src_conn = sqlite3.connect(src)
+                src_conn = sqlite3.connect(src, timeout=10)
+                src_conn.execute("PRAGMA busy_timeout=10000")
                 dst_conn = sqlite3.connect(dst)
                 src_conn.backup(dst_conn)
                 dst_conn.close()
@@ -1310,10 +1302,9 @@ def _tick_health(budget_ms: int) -> dict:
     except Exception as e:
         parts.append(f"health: error {redact_secrets(str(e))[:50]}")
 
-    # Incremental FTS sync: index Qdrant memories not yet in FTS
+    # Incremental FTS sync: index pg_store memories not yet in FTS
     try:
-        from modules.qdrant_utils import scroll_all
-        from modules.config import qdrant as _qdrant, COLLECTION_NAME as _COLL
+        from modules.pg_store import pg as _pg
 
         fts_db_path = os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db')
         fts_conn = connect_fts(fts_db_path)
@@ -1325,17 +1316,16 @@ def _tick_health(budget_ms: int) -> dict:
         )
 
         # Quick check: skip if already in sync
-        qdrant_count = _qdrant.count(collection_name=_COLL).count
-        if len(fts_ids) >= qdrant_count:
+        pg_count = _pg.count(is_semantic=False).points_count
+        if len(fts_ids) >= pg_count:
             parts.append(f"fts_sync: in sync ({len(fts_ids)})")
             fts_conn.close()
         else:
-            # Paginated scroll through ALL Qdrant memories
-            points = scroll_all(
-                max_results=5000,
-                with_payload=['data', 'category', 'narrative_importance', 'ownership_source'],
-                with_vectors=False,
-                batch_size=200,
+            # Paginated scroll through ALL pg_store memories
+            points, _ = _pg.scroll(
+                filters={},
+                limit=5000,
+                is_semantic=False,
             )
 
             synced = 0

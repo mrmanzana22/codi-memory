@@ -10,16 +10,13 @@ import json
 import os
 import sqlite3
 
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
-
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME,
+    USER_ID, COLLECTION_NAME,
     now_iso, now_short, FTS_DB_PATH, connect_fts,
 )
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 from modules.memory_smart import search_with_fts_content
-from modules.qdrant_utils import scroll_all
 from modules.utils import (
     get_session_id, infer_themes, is_self_referential,
     calculate_confidence_score,
@@ -45,15 +42,9 @@ def reflect_on_self() -> str:
     Genera un modelo de quien soy basado en evidencia de mis experiencias.
     """
     try:
-        self_ref_points = scroll_all(Filter(must=[
-            FieldCondition(key='self_reference', match=MatchValue(value=True))
-        ]), max_results=100)
-        identity_points = scroll_all(Filter(must=[
-            FieldCondition(key='narrative_themes', match=MatchValue(value='identidad'))
-        ]), max_results=100)
-        critical_points = scroll_all(Filter(must=[
-            FieldCondition(key='narrative_importance', match=MatchValue(value='critical'))
-        ]), max_results=50)
+        self_ref_points, _ = pg.scroll(filters={"metadata_key": {"key": "self_reference", "value": True}}, limit=100, is_semantic=False)
+        identity_points, _ = pg.scroll(filters={"narrative_themes": "identidad"}, limit=100, is_semantic=False)
+        critical_points, _ = pg.scroll(filters={"narrative_importance": "critical"}, limit=50, is_semantic=False)
 
         all_points = {}
         for p in (self_ref_points or []) + (identity_points or []) + (critical_points or []):
@@ -66,7 +57,7 @@ def reflect_on_self() -> str:
         for pid, p in all_points.items():
             payload = p.payload or {}
             acc = int(payload.get('attention_access_count', 0) or 0)
-            record_access(COLLECTION_NAME, pid, {
+            pg.update_payload(pid, {
                 'attention_access_count': acc + 1,
                 'attention_last_accessed': ts,
             })
@@ -133,7 +124,7 @@ def assess_confidence(topic: str) -> str:
             return f"No tengo memorias sobre '{topic}'. Mi confianza es 0 - no se nada al respecto."
 
         memory_ids = [m.get('id') for m in search_results['results'] if m.get('id')]
-        points = qdrant.retrieve(collection_name=COLLECTION_NAME, ids=memory_ids, with_payload=True)
+        points = pg.get_by_ids(memory_ids)
 
         if not points:
             return f"Tengo referencias a '{topic}' pero sin metadata de ownership."
@@ -142,7 +133,7 @@ def assess_confidence(topic: str) -> str:
         for p in points:
             payload = p.payload or {}
             acc = int(payload.get('attention_access_count', 0) or 0)
-            record_access(COLLECTION_NAME, p.id, {
+            pg.update_payload(p.id, {
                 'attention_access_count': acc + 1,
                 'attention_last_accessed': ts,
             })
@@ -233,15 +224,13 @@ def identify_knowledge_gaps() -> str:
 
         for theme in expected_themes:
             try:
-                points = scroll_all(Filter(must=[
-                    FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
-                ]), max_results=500)
+                points, _ = pg.scroll(filters={"narrative_themes": theme}, limit=500, is_semantic=False)
                 if points:
                     ts = now_iso()
                     for p in points:
                         payload_p = p.payload or {}
                         acc = int(payload_p.get('attention_access_count', 0) or 0)
-                        record_access(COLLECTION_NAME, p.id, {
+                        pg.update_payload(p.id, {
                             'attention_access_count': acc + 1,
                             'attention_last_accessed': ts,
                         })
@@ -677,11 +666,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
         timestamp = now_short()
         content = f"[SELF-MODEL|{aspect.upper()}] {insight} | Registrado: {timestamp}"
 
-        result = memory.add(
-            messages=[{"role": "user", "content": content}],
-            user_id=USER_ID,
-            metadata={"category": "identidad", "self_model_aspect": aspect, "timestamp": timestamp}
-        )
+        result = pg.add(content=content, category="identidad", source="experienced", importance="high")
 
         if result and result.get("results"):
             for r in result["results"]:
@@ -705,7 +690,7 @@ def update_self_model(insight: str, aspect: str = "general") -> str:
                         'self_model_aspect': aspect,
                         '_v': 2.1
                     }
-                    record_access(COLLECTION_NAME, mem_id, ownership_metadata)
+                    pg.update_payload(mem_id, ownership_metadata)
 
         # P1: backup removed from hot path
         return f"Self-model actualizado [{aspect}]: {insight[:50]}..."
@@ -719,9 +704,7 @@ def get_self_model_summary() -> str:
     Organiza las observaciones por aspecto.
     """
     try:
-        points = scroll_all(Filter(must=[
-            FieldCondition(key='self_reference', match=MatchValue(value=True))
-        ]), max_results=200)
+        points, _ = pg.scroll(filters={"metadata_key": {"key": "self_reference", "value": True}}, limit=200, is_semantic=False)
 
         if not points:
             return "No tengo un self-model definido aun. Usa update_self_model() para agregar observaciones."
@@ -730,7 +713,7 @@ def get_self_model_summary() -> str:
         for p in points:
             payload = p.payload or {}
             acc = int(payload.get('attention_access_count', 0) or 0)
-            record_access(COLLECTION_NAME, p.id, {
+            pg.update_payload(p.id, {
                 'attention_access_count': acc + 1,
                 'attention_last_accessed': ts,
             })
@@ -968,9 +951,7 @@ def detect_self_discrepancies() -> dict:
         # 3. Self-model claims vs knowledge gap reality
         try:
             # Get self-model "capacidad" claims
-            cap_points = scroll_all(Filter(must=[
-                FieldCondition(key='self_model_aspect', match=MatchValue(value='capacidad'))
-            ]), max_results=20)
+            cap_points, _ = pg.scroll(filters={"metadata_key": {"key": "self_model_aspect", "value": "capacidad"}}, limit=20, is_semantic=False)
             if cap_points:
                 cap_themes = set()
                 for p in cap_points:
@@ -979,9 +960,7 @@ def detect_self_discrepancies() -> dict:
 
                 # Check if claimed capabilities actually have good knowledge
                 for theme in list(cap_themes)[:5]:
-                    theme_pts = scroll_all(Filter(must=[
-                        FieldCondition(key='narrative_themes', match=MatchValue(value=theme))
-                    ]), max_results=50)
+                    theme_pts, _ = pg.scroll(filters={"narrative_themes": theme}, limit=50, is_semantic=False)
                     if theme_pts:
                         conf = calculate_confidence_score(theme_pts)
                         if conf['score'] < 0.4:

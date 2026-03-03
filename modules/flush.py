@@ -3,9 +3,10 @@ import os
 import json
 from datetime import datetime
 from modules.config import (
-    memory, qdrant, USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR,
+    USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR,
     now_short, now_iso, now_col, SESSION_STATE_FILE, _emotional_state,
 )
+from modules.pg_store import pg
 from modules.secret_redact import redact_secrets
 
 _logger = logging.getLogger(__name__)
@@ -36,44 +37,40 @@ def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) 
         'patron': 'neutral'
     }
 
-    result = memory.add(
-        messages=[{"role": "user", "content": contenido}],
-        user_id=USER_ID,
-        metadata={
-            "category": "checkpoint",
-            "tipo_momento": momento,
-            "timestamp": timestamp
-        }
+    result = pg.add(
+        content=contenido,
+        category="checkpoint",
+        source="experienced",
+        importance=importance_map.get(momento, 'medium'),
     )
 
-    if result and result.get("results"):
-        for r in result["results"]:
-            mem_id = r.get("id")
-            if mem_id:
-                enrich_with_ownership(
-                    memory_id=mem_id,
-                    category="checkpoint",
-                    content=contenido,
-                    source="experienced",
-                    importance=importance_map.get(momento, 'medium'),
-                    emotional_weight=0.7,
-                    emotional_valence=valence_map.get(momento, 'neutral')
+    if result:
+        mem_id = result.get("id") if isinstance(result, dict) else None
+        if mem_id:
+            enrich_with_ownership(
+                memory_id=mem_id,
+                category="checkpoint",
+                content=contenido,
+                source="experienced",
+                importance=importance_map.get(momento, 'medium'),
+                emotional_weight=0.7,
+                emotional_valence=valence_map.get(momento, 'neutral')
+            )
+            # FTS indexing (same pattern as add_memory_smart)
+            try:
+                from modules.memory_smart import index_memory_fts
+                index_memory_fts(
+                    mem_id, contenido, "checkpoint",
+                    "experienced", importance_map.get(momento, 'medium')
                 )
-                # FTS indexing (same pattern as add_memory_smart)
-                try:
-                    from modules.memory_smart import index_memory_fts
-                    index_memory_fts(
-                        mem_id, contenido, "checkpoint",
-                        "experienced", importance_map.get(momento, 'medium')
-                    )
-                except Exception:
-                    pass
-                # Proposal #55: Auto-connect to graph neighbors (was missing here)
-                try:
-                    from modules.memory_smart import _auto_connect_neighbors
-                    _auto_connect_neighbors(mem_id, contenido)
-                except Exception:
-                    pass
+            except Exception:
+                pass
+            # Proposal #55: Auto-connect to graph neighbors (was missing here)
+            try:
+                from modules.memory_smart import _auto_connect_neighbors
+                _auto_connect_neighbors(mem_id, contenido)
+            except Exception:
+                pass
 
     maybe_backup(reason="checkpoint", force=True)
 

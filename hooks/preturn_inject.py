@@ -154,8 +154,9 @@ def contains_sensitive_data(text):
 
 def get_db_connection(read_only=True):
     """Get SQLite connection with WAL mode for concurrent reads."""
-    conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+    conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     if read_only:
         conn.execute("PRAGMA query_only=ON")
     return conn
@@ -425,7 +426,8 @@ def _run_gwt_competition(fts_results, wm_results, intentions, triggers, surprise
     # Get current attention focus for top-down bias
     current_focus = None
     try:
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=1)
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         row = conn.execute(
             "SELECT value FROM attention_state WHERE key = 'current_focus'"
         ).fetchone()
@@ -1470,7 +1472,8 @@ def _emit_prediction_error(surprise_info):
     # 1. Persist to SQLite directly (no dependency on dotenv/db_pool/config)
     try:
 
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("""
             INSERT INTO event_counts (event, count, last_seen)
             VALUES ('prediction_error', 1, ?)
@@ -2231,7 +2234,8 @@ def _load_attention_state():
     """
     last_focus = None
     try:
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         _ensure_attention_tables(conn)
         rows = conn.execute(
             "SELECT from_topic, to_topic, driver, created_at "
@@ -2263,7 +2267,8 @@ def _load_attention_state():
 def _save_attention_transition(from_topic, to_topic, driver, created_at):
     """Persist a new topic transition to SQLite for cross-process continuity."""
     try:
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         _ensure_attention_tables(conn)
         conn.execute(
             "INSERT INTO attention_transitions (from_topic, to_topic, driver, created_at) "
@@ -2297,7 +2302,8 @@ def _update_attention_from_prompt(prompt: str):
     try:
 
         now = datetime.now().isoformat()
-        conn = sqlite3.connect(FTS_DB_PATH, timeout=3)
+        conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
+        conn.execute("PRAGMA busy_timeout=10000")
         _ensure_attention_tables(conn)
 
         # Get previous focus

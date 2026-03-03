@@ -130,12 +130,12 @@
     },
     {
       "id": 23,
-      "pregunta": "Mi prediccion falla en 'memoria' (accuracy 0%, surprise 0.88). Que patrones me estoy perdiendo?",
+      "pregunta": "Mi prediccion falla en 'memoria' (accuracy 0%, IG=0.380, phase=explore). Que patrones me estoy perdiendo?",
       "categoria": "memoria",
-      "agregada": "2026-03-01 19:19",
+      "agregada": "2026-03-02 08:42",
       "prioridad": "media",
       "source": "prediction_error",
-      "curiosity_score": 0.135
+      "curiosity_score": 0.1562
     },
     {
       "id": 24,

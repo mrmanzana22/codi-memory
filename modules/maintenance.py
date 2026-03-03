@@ -1,11 +1,10 @@
 import os
 import json
 from datetime import datetime, timedelta, timezone
-from modules.config import memory, qdrant, USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short, TZ_COL
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+from modules.config import USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short, TZ_COL
 from modules.utils import calculate_confidence_score
 from modules.secret_redact import redact_secrets
-from modules.access_tracking import record_access
+from modules.pg_store import pg
 
 
 # ============================================================
@@ -204,14 +203,11 @@ def _marcar_mantenimiento_hecho(tarea_id: str, notas: str = "") -> str:
                 _guardar_mantenimiento(data)
 
                 # Guardar en memoria tambien
-                memory.add(
-                    f"Mantenimiento completado: {tarea['nombre']}. {notas}",
-                    user_id=USER_ID,
-                    metadata={
-                        'category': 'mantenimiento',
-                        'tarea_id': tarea_id,
-                        'fecha': hoy.isoformat()
-                    }
+                pg.add(
+                    content=f"Mantenimiento completado: {tarea['nombre']}. {notas}",
+                    category='mantenimiento',
+                    source='experienced',
+                    importance='medium',
                 )
 
                 return f"""
@@ -248,17 +244,7 @@ def _mantenimiento_memorias() -> str:
             hace_48h = now_col() - td(hours=48)
 
             # Buscar memorias recientes
-            points, _ = qdrant.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=Filter(must=[
-                    FieldCondition(
-                        key='created_at',
-                        range=Range(gte=hace_48h.isoformat())
-                    )
-                ]),
-                limit=50,
-                with_payload=True
-            )
+            points, _ = pg.scroll(filters={"created_after": hace_48h.isoformat()}, limit=50, is_semantic=False)
 
             if points:
                 # Agrupar por similitud de contenido
@@ -285,14 +271,9 @@ def _mantenimiento_memorias() -> str:
         resultado += "\n## 2. Decay de salience\n"
         try:
             # Buscar memorias con alta salience que no se han accedido recientemente
-            points_salience, _ = qdrant.scroll(
-                collection_name=COLLECTION_NAME,
-                scroll_filter=Filter(must=[
-                    FieldCondition(key='salience', range=Range(gte=0.5))
-                ]),
-                limit=30,
-                with_payload=True
-            )
+            all_salience_points, _ = pg.scroll(filters={}, limit=100, is_semantic=False)
+            # Post-filter by salience >= 0.5 (Range filter applied in Python)
+            points_salience = [p for p in all_salience_points if (p.payload or {}).get('salience', 0) >= 0.5][:30]
 
             decayed = 0
             for p in points_salience:
@@ -305,7 +286,7 @@ def _mantenimiento_memorias() -> str:
                             # Reducir salience
                             old_salience = p.payload.get('salience', 0.5)
                             new_salience = max(0.1, old_salience - 0.1)
-                            record_access(COLLECTION_NAME, p.id, {
+                            pg.update_payload(p.id, {
                                 'salience': new_salience,
                             })
                             decayed += 1
@@ -322,38 +303,16 @@ def _mantenimiento_memorias() -> str:
         # 3. Estadisticas generales
         resultado += "\n## 3. Estado de la memoria\n"
         try:
-            collection_info = qdrant.get_collection(COLLECTION_NAME)
+            collection_info = pg.count(is_semantic=False)
             total = collection_info.points_count
 
             # Contar por categoria
-            categorias = ['identidad', 'proyecto', 'aprendizaje', 'episodio', 'general']
-            for cat in categorias:
-                try:
-                    points_cat, _ = qdrant.scroll(
-                        collection_name=COLLECTION_NAME,
-                        scroll_filter=Filter(must=[
-                            FieldCondition(key='category', match=MatchValue(value=cat))
-                        ]),
-                        limit=1,
-                        with_payload=False
-                    )
-                    # Solo mostrar si tiene memorias
-                except Exception:
-                    pass
-
             resultado += f"- Total memorias: {total}\n"
 
             # Contar por importancia
             for imp in ['critical', 'high', 'medium', 'low']:
                 try:
-                    pts, _ = qdrant.scroll(
-                        collection_name=COLLECTION_NAME,
-                        scroll_filter=Filter(must=[
-                            FieldCondition(key='narrative_importance', match=MatchValue(value=imp))
-                        ]),
-                        limit=500,
-                        with_payload=False
-                    )
+                    pts, _ = pg.scroll(filters={"importance": imp}, limit=500, is_semantic=False)
                     if pts:
                         resultado += f"- {imp}: {len(pts)}\n"
                 except Exception:

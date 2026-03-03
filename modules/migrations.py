@@ -99,7 +99,8 @@ def get_current_version(db_path: str) -> Optional[str]:
     """Get the latest applied migration version, or None."""
     if not os.path.exists(db_path):
         return None
-    conn = sqlite3.connect(db_path, timeout=5)
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         _ensure_migrations_table(conn)
         row = conn.execute(
@@ -226,6 +227,7 @@ def ensure_schema_ready(conn: sqlite3.Connection, required_tables: list[str], db
 def ensure_schema_ready_db(db_path: str, required_tables: list[str], db_label: str = "FTS", timeout: float = 2.0) -> None:
     """Convenience: open conn, validate, close. For modules that don't keep a conn."""
     conn = sqlite3.connect(db_path, timeout=timeout)
+    conn.execute("PRAGMA busy_timeout=10000")
     try:
         ensure_schema_ready(conn, required_tables, db_label)
     finally:

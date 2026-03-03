@@ -17,6 +17,8 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 
+from modules.pg_store import pg
+
 _logger = logging.getLogger(__name__)
 
 # Thresholds
@@ -39,7 +41,7 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
     Returns:
         {total_edges, classified_causes, classified_enables, unchanged, errors}
     """
-    from modules.config import qdrant, COLLECTION_NAME, FTS_DB_PATH
+    from modules.config import COLLECTION_NAME, FTS_DB_PATH
 
     fts_db_path = fts_db_path or FTS_DB_PATH
     result = {
@@ -84,11 +86,7 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
     for i in range(0, len(id_list), BATCH_SIZE):
         batch = id_list[i:i + BATCH_SIZE]
         try:
-            pts = qdrant.retrieve(
-                collection_name=COLLECTION_NAME,
-                ids=batch,
-                with_payload=True,
-            )
+            pts = pg.get_by_ids(batch)
             for p in (pts or []):
                 payload_cache[str(p.id)] = p.payload or {}
         except Exception as e:
