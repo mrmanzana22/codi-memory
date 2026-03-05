@@ -126,15 +126,9 @@ def checkpoint_session_close(
         active_project = None
         wm_topics = []
         try:
-            from modules.working_memory import _get_conn as _get_wm_conn
-            with _get_wm_conn() as wm_conn:
-                rows = wm_conn.execute(
-                    "SELECT DISTINCT topic FROM working_memory "
-                    "WHERE active = 1 AND topic IS NOT NULL "
-                    "ORDER BY relevance DESC LIMIT 10"
-                ).fetchall()
-            for row in rows:
-                topic = row["topic"] if isinstance(row, dict) else row[0]
+            from modules.working_memory import wm_get_active_topics
+            topics = wm_get_active_topics(limit=10)
+            for topic in topics:
                 if topic and topic not in wm_topics:
                     wm_topics.append(topic)
                 if not active_project and topic not in ('metamemory', 'contradiction', 'general', ''):
@@ -184,21 +178,9 @@ def checkpoint_session_close(
         wm_items = []
         wm_active_count = 0
         try:
-            from modules.working_memory import _get_conn as _get_wm_conn
-            with _get_wm_conn() as wm_conn:
-                wm_active_count = wm_conn.execute(
-                    "SELECT COUNT(*) FROM working_memory WHERE active = 1"
-                ).fetchone()[0]
-                wm_rows = wm_conn.execute(
-                    "SELECT content, topic, relevance FROM working_memory "
-                    "WHERE active = 1 ORDER BY relevance DESC LIMIT 15"
-                ).fetchall()
-            for r in wm_rows:
-                wm_items.append({
-                    "content": (r[0] or "")[:200],
-                    "topic": r[1],
-                    "relevance": round(float(r[2] or 0), 2),
-                })
+            from modules.working_memory import wm_get_active_count, wm_get_active_items
+            wm_active_count = wm_get_active_count()
+            wm_items = wm_get_active_items(limit=15)
         except Exception:
             pass
 
@@ -228,16 +210,8 @@ def checkpoint_session_close(
         # 8. Active narrative traces
         active_traces = []
         try:
-            from modules.working_memory import _get_conn as _get_wm_conn
-            with _get_wm_conn() as wm_conn:
-                trace_rows = wm_conn.execute(
-                    "SELECT trace_name, theme FROM narrative_traces WHERE active = 1 LIMIT 10"
-                ).fetchall()
-            for r in trace_rows:
-                active_traces.append({
-                    "trace_name": r[0],
-                    "theme": r[1],
-                })
+            from modules.working_memory import wm_get_active_traces
+            active_traces = wm_get_active_traces(limit=10)
         except Exception:
             pass
 
@@ -246,15 +220,8 @@ def checkpoint_session_close(
         if decisions:
             decision_list.append({"decision": decisions[:300], "why": "session_param"})
         try:
-            from modules.working_memory import _get_conn as _get_wm_conn
-            with _get_wm_conn() as wm_conn:
-                dec_rows = wm_conn.execute(
-                    "SELECT content FROM working_memory "
-                    "WHERE active = 1 AND topic = 'decision' "
-                    "ORDER BY relevance DESC LIMIT 5"
-                ).fetchall()
-            for r in dec_rows:
-                decision_list.append({"decision": (r[0] or "")[:200], "why": "wm_topic"})
+            from modules.working_memory import wm_get_decision_items
+            decision_list.extend(wm_get_decision_items(limit=5))
         except Exception:
             pass
 

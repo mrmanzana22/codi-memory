@@ -36,16 +36,19 @@ Neuroscience basis:
 
 Created: 2026-03-02 (Sprint 15)
 Updated: 2026-03-02 (Sprint 15.5 - Structured Context)
+Updated: 2026-03-05 (Fase 5 - migrated from SQLite prospective.db to PostgreSQL)
 """
 
 import json
 import logging
-import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-from modules.config import PROSPECTIVE_DB_PATH, connect_fts, now_iso
+from psycopg.rows import dict_row
+
+from modules.config import now_iso
+from modules.config_pg import get_conn
 from modules.activation import (
     compute_unified_activation,
     ACTR_DECAY_DEFAULT,
@@ -90,33 +93,137 @@ CONTEXT_STALE_DAYS = 7
 
 
 # ============================================================
-# SQLITE CONNECTION (reuse prospective.db)
+# POSTGRESQL INIT
 # ============================================================
 
-_conn = None
+_TABLES_INITIALIZED = False
 
 
-def _get_conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
-        _conn = connect_fts(PROSPECTIVE_DB_PATH)
-        _init_tables(_conn)
-    return _conn
+def _ensure_tables():
+    """Create PG tables if not exist. Called once per process."""
+    global _TABLES_INITIALIZED
+    if _TABLES_INITIALIZED:
+        return
+    try:
+        with get_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS goals (
+                    id               TEXT PRIMARY KEY,
+                    title            TEXT NOT NULL,
+                    parent_id        TEXT REFERENCES goals(id) ON DELETE SET NULL,
+                    level            TEXT NOT NULL,
+                    status           TEXT DEFAULT 'active',
+                    priority         TEXT DEFAULT 'medium',
+                    access_count     INTEGER DEFAULT 0,
+                    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_accessed    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    deadline         TIMESTAMPTZ,
+                    assigned_to      TEXT,
+                    context          TEXT,
+                    metadata         JSONB,
+                    goal_what        TEXT,
+                    goal_why         TEXT,
+                    goal_last_state  TEXT,
+                    goal_next_step   TEXT,
+                    context_updated_at TIMESTAMPTZ
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS goal_log (
+                    id         SERIAL PRIMARY KEY,
+                    goal_id    TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                    event      TEXT NOT NULL,
+                    detail     TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_goals_status "
+                "ON goals(status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_goals_parent "
+                "ON goals(parent_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_goals_level "
+                "ON goals(level)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_goals_last_accessed "
+                "ON goals(last_accessed)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_goal_log_goal "
+                "ON goal_log(goal_id)"
+            )
+        _TABLES_INITIALIZED = True
+        _logger.info("Goals PG tables ready")
+    except Exception as e:
+        _logger.error("Failed to initialize goals PG tables: %s", e)
+        raise
 
 
-def _init_tables(conn: sqlite3.Connection):
-    """Validate goals tables exist (created by migration 002)."""
-    from modules.migrations import ensure_schema_ready
-    ensure_schema_ready(conn, ["goals", "goal_log"], db_label="prospective")
-    _logger.info("Goals tables validated OK")
+# ============================================================
+# HELPERS
+# ============================================================
+
+def _ts(val) -> Optional[str]:
+    """Convert TIMESTAMPTZ value (datetime or str) to ISO string."""
+    if val is None:
+        return None
+    if hasattr(val, "isoformat"):
+        return val.isoformat()
+    return str(val)
 
 
-def _log_event(conn: sqlite3.Connection, goal_id: str, event: str, detail: str = ""):
-    """Write to goal_log audit trail."""
+def _log_event(conn, goal_id: str, event: str, detail: str = ""):
+    """Write to goal_log audit trail (call inside a transaction)."""
     conn.execute(
-        "INSERT INTO goal_log (goal_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
-        (goal_id, event, detail, now_iso()),
+        "INSERT INTO goal_log (goal_id, event, detail) VALUES (%s, %s, %s)",
+        (goal_id, event, detail),
     )
+
+
+def _compute_goal_activation(row: dict) -> float:
+    """Compute ACT-R activation for a goal row dict.
+
+    Uses the unified activation scorer from activation.py with
+    goal-specific decay (DECAY_GOAL = 0.35).
+    """
+    result = compute_unified_activation(
+        memory_id=row["id"],
+        created_at=_ts(row["created_at"]) or "",
+        last_accessed=_ts(row["last_accessed"]),
+        access_count=row["access_count"],
+        importance=row["priority"],  # priority maps to importance
+        decay_override=DECAY_GOAL,
+        memory_type="episodic",
+        noise=False,  # Deterministic for goal selection
+    )
+    return result.total
+
+
+def _row_to_dict(row: dict) -> dict:
+    """Normalize a goal row dict (convert TIMESTAMPTZ to ISO strings)."""
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "parent_id": row["parent_id"],
+        "level": row["level"],
+        "status": row["status"],
+        "priority": row["priority"],
+        "access_count": row["access_count"],
+        "created_at": _ts(row["created_at"]),
+        "last_accessed": _ts(row["last_accessed"]),
+        "deadline": _ts(row["deadline"]),
+        "assigned_to": row["assigned_to"],
+        "goal_what": row["goal_what"],
+        "goal_why": row["goal_why"],
+        "goal_last_state": row["goal_last_state"],
+        "goal_next_step": row["goal_next_step"],
+        "context_updated_at": _ts(row["context_updated_at"]),
+    }
 
 
 # ============================================================
@@ -154,39 +261,40 @@ def create_goal(
     Returns:
         dict with goal details + warnings if structured fields missing.
     """
+    _ensure_tables()
     if level not in GOAL_LEVELS:
         return {"error": f"Invalid level '{level}'. Must be one of {GOAL_LEVELS}"}
     if priority not in GOAL_PRIORITIES:
         return {"error": f"Invalid priority '{priority}'. Must be one of {GOAL_PRIORITIES}"}
 
-    conn = _get_conn()
-    goal_id = str(uuid.uuid4())[:8]
-    now = now_iso()
+    goal_id = str(uuid.uuid4())
 
-    # Validate parent exists if specified
-    if parent_id:
-        parent = conn.execute(
-            "SELECT id, level FROM goals WHERE id = ?", (parent_id,)
-        ).fetchone()
-        if not parent:
-            return {"error": f"Parent goal '{parent_id}' not found"}
+    with get_conn() as conn:
+        with conn.transaction():
+            # Validate parent exists if specified
+            if parent_id:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT id, level FROM goals WHERE id = %s",
+                        (parent_id,),
+                    )
+                    parent = cur.fetchone()
+                if not parent:
+                    return {"error": f"Parent goal '{parent_id}' not found"}
 
-    meta_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+            conn.execute("""
+                INSERT INTO goals (id, title, parent_id, level, status, priority,
+                                  access_count, deadline, assigned_to, context, metadata,
+                                  goal_what, goal_why, goal_last_state, goal_next_step,
+                                  context_updated_at)
+                VALUES (%s, %s, %s, %s, 'active', %s, 0, %s, %s, %s, %s,
+                        %s, %s, NULL, %s, NOW())
+            """, (goal_id, title, parent_id, level, priority,
+                  deadline, assigned_to, context,
+                  json.dumps(metadata, ensure_ascii=False) if metadata else None,
+                  goal_what, goal_why, goal_next_step))
 
-    conn.execute("""
-        INSERT INTO goals (id, title, parent_id, level, status, priority,
-                          access_count, created_at, last_accessed, deadline,
-                          assigned_to, context, metadata,
-                          goal_what, goal_why, goal_last_state, goal_next_step,
-                          context_updated_at)
-        VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?, ?, ?, ?, ?,
-                ?, ?, NULL, ?, ?)
-    """, (goal_id, title, parent_id, level, priority, now, now,
-          deadline, assigned_to, context, meta_json,
-          goal_what, goal_why, goal_next_step, now))
-
-    _log_event(conn, goal_id, "created", f"level={level} priority={priority}")
-    conn.commit()
+            _log_event(conn, goal_id, "created", f"level={level} priority={priority}")
 
     result = {
         "id": goal_id,
@@ -195,7 +303,6 @@ def create_goal(
         "parent_id": parent_id,
         "priority": priority,
         "status": "active",
-        "created_at": now,
     }
 
     # Warn if structured context is missing (strong elicitation)
@@ -214,33 +321,6 @@ def create_goal(
 # 2. SELECT: get_active_goals()
 # ============================================================
 
-def _compute_goal_activation(row: tuple) -> float:
-    """Compute ACT-R activation for a goal row.
-
-    Uses the unified activation scorer from activation.py with
-    goal-specific decay (DECAY_GOAL = 0.35).
-
-    Args:
-        row: SQL result with columns:
-              0:id, 1:title, 2:parent_id, 3:level, 4:status, 5:priority,
-              6:access_count, 7:created_at, 8:last_accessed, 9:deadline,
-              10:assigned_to, 11:context, 12:metadata,
-              13:goal_what, 14:goal_why, 15:goal_last_state, 16:goal_next_step,
-              17:context_updated_at
-    """
-    result = compute_unified_activation(
-        memory_id=row[0],
-        created_at=row[7],
-        last_accessed=row[8],
-        access_count=row[6],
-        importance=row[5],  # priority maps to importance
-        decay_override=DECAY_GOAL,
-        memory_type="episodic",
-        noise=False,  # Deterministic for goal selection
-    )
-    return result.total
-
-
 def get_active_goals(
     status: str = "active",
     level: Optional[str] = None,
@@ -256,45 +336,33 @@ def get_active_goals(
     Returns:
         List of goal dicts with activation scores.
     """
-    conn = _get_conn()
-
-    query = ("SELECT id, title, parent_id, level, status, priority, "
-             "access_count, created_at, last_accessed, deadline, "
-             "assigned_to, context, metadata, "
-             "goal_what, goal_why, goal_last_state, goal_next_step, "
-             "context_updated_at "
-             "FROM goals WHERE status = ?")
+    _ensure_tables()
+    query = (
+        "SELECT id, title, parent_id, level, status, priority, "
+        "access_count, created_at, last_accessed, deadline, "
+        "assigned_to, context, metadata, "
+        "goal_what, goal_why, goal_last_state, goal_next_step, "
+        "context_updated_at "
+        "FROM goals WHERE status = %s"
+    )
     params = [status]
 
     if level:
-        query += " AND level = ?"
+        query += " AND level = %s"
         params.append(level)
 
-    rows = conn.execute(query, params).fetchall()
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
 
     # Compute activation for each goal
     scored = []
     for row in rows:
         activation = _compute_goal_activation(row)
-        scored.append({
-            "id": row[0],
-            "title": row[1],
-            "parent_id": row[2],
-            "level": row[3],
-            "status": row[4],
-            "priority": row[5],
-            "access_count": row[6],
-            "created_at": row[7],
-            "last_accessed": row[8],
-            "deadline": row[9],
-            "assigned_to": row[10],
-            "goal_what": row[13],
-            "goal_why": row[14],
-            "goal_last_state": row[15],
-            "goal_next_step": row[16],
-            "context_updated_at": row[17],
-            "activation": round(activation, 4),
-        })
+        d = _row_to_dict(row)
+        d["activation"] = round(activation, 4)
+        scored.append(d)
 
     # Sort by activation descending
     scored.sort(key=lambda g: g["activation"], reverse=True)
@@ -383,76 +451,75 @@ def update_goal(
     Returns:
         dict with updated goal or error.
     """
-    conn = _get_conn()
+    _ensure_tables()
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT id, status FROM goals WHERE id = %s", (goal_id,))
+            goal = cur.fetchone()
+        if not goal:
+            return {"error": f"Goal '{goal_id}' not found"}
 
-    goal = conn.execute("SELECT id, status FROM goals WHERE id = ?", (goal_id,)).fetchone()
-    if not goal:
-        return {"error": f"Goal '{goal_id}' not found"}
+        updates = []
+        params = []
+        changes = []
 
-    updates = []
-    params = []
-    changes = []
+        if status is not None:
+            if status not in GOAL_STATUSES:
+                return {"error": f"Invalid status '{status}'. Must be one of {GOAL_STATUSES}"}
+            updates.append("status = %s")
+            params.append(status)
+            changes.append(f"status→{status}")
 
-    if status is not None:
-        if status not in GOAL_STATUSES:
-            return {"error": f"Invalid status '{status}'. Must be one of {GOAL_STATUSES}"}
-        updates.append("status = ?")
-        params.append(status)
-        changes.append(f"status→{status}")
+        if priority is not None:
+            if priority not in GOAL_PRIORITIES:
+                return {"error": f"Invalid priority '{priority}'. Must be one of {GOAL_PRIORITIES}"}
+            updates.append("priority = %s")
+            params.append(priority)
+            changes.append(f"priority→{priority}")
 
-    if priority is not None:
-        if priority not in GOAL_PRIORITIES:
-            return {"error": f"Invalid priority '{priority}'. Must be one of {GOAL_PRIORITIES}"}
-        updates.append("priority = ?")
-        params.append(priority)
-        changes.append(f"priority→{priority}")
+        if deadline is not None:
+            updates.append("deadline = %s")
+            params.append(deadline)
+            changes.append(f"deadline→{deadline}")
 
-    if deadline is not None:
-        updates.append("deadline = ?")
-        params.append(deadline)
-        changes.append(f"deadline→{deadline}")
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+            changes.append("title updated")
 
-    if title is not None:
-        updates.append("title = ?")
-        params.append(title)
-        changes.append(f"title updated")
+        if assigned_to is not None:
+            updates.append("assigned_to = %s")
+            params.append(assigned_to)
+            changes.append(f"assigned_to→{assigned_to}")
 
-    if assigned_to is not None:
-        updates.append("assigned_to = ?")
-        params.append(assigned_to)
-        changes.append(f"assigned_to→{assigned_to}")
+        # Derivable fields (SOAR I-support: recomputable, updated on touch/flush)
+        if goal_last_state is not None:
+            updates.append("goal_last_state = %s")
+            params.append(goal_last_state)
+            changes.append("last_state updated")
 
-    # Derivable fields (SOAR I-support: recomputable, updated on touch/flush)
-    if goal_last_state is not None:
-        updates.append("goal_last_state = ?")
-        params.append(goal_last_state)
-        changes.append("last_state updated")
+        if goal_next_step is not None:
+            updates.append("goal_next_step = %s")
+            params.append(goal_next_step)
+            changes.append("next_step updated")
 
-    if goal_next_step is not None:
-        updates.append("goal_next_step = ?")
-        params.append(goal_next_step)
-        changes.append("next_step updated")
+        if not updates:
+            return {"error": "No fields to update"}
 
-    if not updates:
-        return {"error": "No fields to update"}
+        # Touch access + refresh context timestamp if derivable fields changed
+        updates.append("last_accessed = NOW()")
+        updates.append("access_count = access_count + 1")
 
-    # Touch access + refresh context timestamp if derivable fields changed
-    now = now_iso()
-    updates.append("last_accessed = ?")
-    params.append(now)
-    updates.append("access_count = access_count + 1")
+        if goal_last_state is not None or goal_next_step is not None:
+            updates.append("context_updated_at = NOW()")
 
-    if goal_last_state is not None or goal_next_step is not None:
-        updates.append("context_updated_at = ?")
-        params.append(now)
-
-    params.append(goal_id)
-    conn.execute(
-        f"UPDATE goals SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
-    _log_event(conn, goal_id, "updated", ", ".join(changes))
-    conn.commit()
+        params.append(goal_id)
+        with conn.transaction():
+            conn.execute(
+                f"UPDATE goals SET {', '.join(updates)} WHERE id = %s",
+                params,
+            )
+            _log_event(conn, goal_id, "updated", ", ".join(changes))
 
     return {"id": goal_id, "changes": changes}
 
@@ -482,48 +549,55 @@ def complete_goal(goal_id: str, outcome: str = "") -> dict:
     Returns:
         dict with completion info and cascade suggestions.
     """
-    conn = _get_conn()
+    _ensure_tables()
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT id, title, parent_id, level FROM goals WHERE id = %s",
+                (goal_id,),
+            )
+            goal = cur.fetchone()
+        if not goal:
+            return {"error": f"Goal '{goal_id}' not found"}
 
-    goal = conn.execute(
-        "SELECT id, title, parent_id, level FROM goals WHERE id = ?",
-        (goal_id,),
-    ).fetchone()
-    if not goal:
-        return {"error": f"Goal '{goal_id}' not found"}
+        with conn.transaction():
+            conn.execute(
+                "UPDATE goals SET status = 'completed', last_accessed = NOW(), "
+                "access_count = access_count + 1 WHERE id = %s",
+                (goal_id,),
+            )
+            _log_event(conn, goal_id, "completed", outcome)
 
-    now = now_iso()
-    conn.execute(
-        "UPDATE goals SET status = 'completed', last_accessed = ?, "
-        "access_count = access_count + 1 WHERE id = ?",
-        (now, goal_id),
-    )
-    _log_event(conn, goal_id, "completed", outcome)
-    conn.commit()
+        result = {
+            "id": goal_id,
+            "title": goal["title"],
+            "status": "completed",
+            "outcome": outcome,
+        }
 
-    result = {
-        "id": goal_id,
-        "title": goal[1],
-        "status": "completed",
-        "outcome": outcome,
-    }
-
-    # Cascade check: are all siblings of parent completed?
-    parent_id = goal[2]
-    if parent_id:
-        siblings = conn.execute(
-            "SELECT id, status FROM goals WHERE parent_id = ?",
-            (parent_id,),
-        ).fetchall()
-        all_done = all(s[1] in ("completed", "abandoned") for s in siblings)
-        if all_done:
-            parent = conn.execute(
-                "SELECT id, title FROM goals WHERE id = ?", (parent_id,)
-            ).fetchone()
-            result["cascade_suggestion"] = {
-                "parent_id": parent_id,
-                "parent_title": parent[1] if parent else "?",
-                "message": f"All children completed. Consider completing parent '{parent[1]}'.",
-            }
+        # Cascade check: are all siblings of parent completed?
+        parent_id = goal["parent_id"]
+        if parent_id:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id, status FROM goals WHERE parent_id = %s",
+                    (parent_id,),
+                )
+                siblings = cur.fetchall()
+            all_done = all(s["status"] in ("completed", "abandoned") for s in siblings)
+            if all_done:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT id, title FROM goals WHERE id = %s",
+                        (parent_id,),
+                    )
+                    parent = cur.fetchone()
+                parent_title = parent["title"] if parent else "?"
+                result["cascade_suggestion"] = {
+                    "parent_id": parent_id,
+                    "parent_title": parent_title,
+                    "message": f"All children completed. Consider completing parent '{parent_title}'.",
+                }
 
     return result
 
@@ -544,35 +618,37 @@ def check_goal_hygiene() -> dict:
     Returns:
         dict with paused goals and summary.
     """
-    conn = _get_conn()
+    _ensure_tables()
     now = datetime.now()
     paused = []
 
-    for level, days in GOAL_STALENESS_DAYS.items():
-        threshold = (now - timedelta(days=days)).isoformat()
-        stale = conn.execute(
-            "SELECT id, title, last_accessed FROM goals "
-            "WHERE status = 'active' AND level = ? AND last_accessed < ?",
-            (level, threshold),
-        ).fetchall()
+    with get_conn() as conn:
+        with conn.transaction():
+            for level, days in GOAL_STALENESS_DAYS.items():
+                threshold = now - timedelta(days=days)
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT id, title, last_accessed FROM goals "
+                        "WHERE status = 'active' AND level = %s AND last_accessed < %s",
+                        (level, threshold),
+                    )
+                    stale = cur.fetchall()
 
-        for goal_id, title, last_accessed in stale:
-            conn.execute(
-                "UPDATE goals SET status = 'paused', last_accessed = ? WHERE id = ?",
-                (now_iso(), goal_id),
-            )
-            _log_event(conn, goal_id, "auto_paused",
-                       f"Stale: no access in {days}d (level={level})")
-            paused.append({
-                "id": goal_id,
-                "title": title,
-                "level": level,
-                "last_accessed": last_accessed,
-                "days_stale": days,
-            })
-
-    if paused:
-        conn.commit()
+                for row in stale:
+                    conn.execute(
+                        "UPDATE goals SET status = 'paused', last_accessed = NOW() "
+                        "WHERE id = %s",
+                        (row["id"],),
+                    )
+                    _log_event(conn, row["id"], "auto_paused",
+                               f"Stale: no access in {days}d (level={level})")
+                    paused.append({
+                        "id": row["id"],
+                        "title": row["title"],
+                        "level": level,
+                        "last_accessed": _ts(row["last_accessed"]),
+                        "days_stale": days,
+                    })
 
     return {
         "paused_count": len(paused),
@@ -599,34 +675,40 @@ def touch_goal(
         last_state: Update where we left off (derivable, optional).
         next_step: Update next action (derivable, optional).
     """
-    conn = _get_conn()
-    goal = conn.execute("SELECT id FROM goals WHERE id = ?", (goal_id,)).fetchone()
-    if not goal:
-        return {"error": f"Goal '{goal_id}' not found"}
+    _ensure_tables()
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT id FROM goals WHERE id = %s", (goal_id,))
+            goal = cur.fetchone()
+        if not goal:
+            return {"error": f"Goal '{goal_id}' not found"}
 
-    now = now_iso()
-    updates = ["access_count = access_count + 1", "last_accessed = ?"]
-    params = [now]
+        updates = ["access_count = access_count + 1", "last_accessed = NOW()"]
+        params = []
 
-    if last_state is not None:
-        updates.append("goal_last_state = ?")
-        params.append(last_state)
+        if last_state is not None:
+            updates.append("goal_last_state = %s")
+            params.append(last_state)
 
-    if next_step is not None:
-        updates.append("goal_next_step = ?")
-        params.append(next_step)
+        if next_step is not None:
+            updates.append("goal_next_step = %s")
+            params.append(next_step)
 
-    if last_state is not None or next_step is not None:
-        updates.append("context_updated_at = ?")
-        params.append(now)
+        if last_state is not None or next_step is not None:
+            updates.append("context_updated_at = NOW()")
 
-    params.append(goal_id)
-    conn.execute(
-        f"UPDATE goals SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
-    conn.commit()
-    return {"id": goal_id, "touched": True, "context_refreshed": last_state is not None or next_step is not None}
+        params.append(goal_id)
+        with conn.transaction():
+            conn.execute(
+                f"UPDATE goals SET {', '.join(updates)} WHERE id = %s",
+                params,
+            )
+
+    return {
+        "id": goal_id,
+        "touched": True,
+        "context_refreshed": last_state is not None or next_step is not None,
+    }
 
 
 # ============================================================
@@ -642,37 +724,44 @@ def get_goal_tree(root_id: Optional[str] = None) -> list:
     Returns:
         List of goal dicts with children nested.
     """
-    conn = _get_conn()
+    _ensure_tables()
+    with get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            if root_id:
+                cur.execute(
+                    "SELECT id, title, level, status, priority, access_count, "
+                    "created_at, last_accessed FROM goals WHERE id = %s",
+                    (root_id,),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, title, level, status, priority, access_count, "
+                    "created_at, last_accessed FROM goals WHERE parent_id IS NULL "
+                    "ORDER BY created_at DESC"
+                )
+            roots = cur.fetchall()
 
-    if root_id:
-        roots = conn.execute(
-            "SELECT id, title, level, status, priority, access_count, "
-            "created_at, last_accessed FROM goals WHERE id = ?",
-            (root_id,),
-        ).fetchall()
-    else:
-        roots = conn.execute(
-            "SELECT id, title, level, status, priority, access_count, "
-            "created_at, last_accessed FROM goals WHERE parent_id IS NULL "
-            "ORDER BY created_at DESC",
-        ).fetchall()
+        def _build_node(row, cur):
+            node = {
+                "id": row["id"],
+                "title": row["title"],
+                "level": row["level"],
+                "status": row["status"],
+                "priority": row["priority"],
+            }
+            cur.execute(
+                "SELECT id, title, level, status, priority, access_count, "
+                "created_at, last_accessed FROM goals WHERE parent_id = %s "
+                "ORDER BY created_at",
+                (row["id"],),
+            )
+            children = cur.fetchall()
+            if children:
+                node["children"] = [_build_node(c, cur) for c in children]
+            return node
 
-    def _build_node(row):
-        node = {
-            "id": row[0], "title": row[1], "level": row[2],
-            "status": row[3], "priority": row[4],
-        }
-        children = conn.execute(
-            "SELECT id, title, level, status, priority, access_count, "
-            "created_at, last_accessed FROM goals WHERE parent_id = ? "
-            "ORDER BY created_at",
-            (row[0],),
-        ).fetchall()
-        if children:
-            node["children"] = [_build_node(c) for c in children]
-        return node
-
-    return [_build_node(r) for r in roots]
+        with conn.cursor(row_factory=dict_row) as cur:
+            return [_build_node(r, cur) for r in roots]
 
 
 # ============================================================

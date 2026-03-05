@@ -530,18 +530,11 @@ def process_elapsed_time(elapsed_seconds: float):
     # --- WM item decay (Ebbinghaus 1885 exponential forgetting) ---
     if elapsed_hours >= 0.5:  # 30+ minutes
         try:
-            from modules.working_memory import _get_conn
-            # P0-1 FIX: _get_conn is a @contextmanager, must use `with`
-            with _get_conn() as conn:
-                # Exponential decay: relevance * exp(-lambda * hours)
-                # lambda=0.1: ~60% at 5h, ~37% at 10h, ~14% at 20h
-                decay_multiplier = math.exp(-0.1 * elapsed_hours)
-                conn.execute("""
-                    UPDATE working_memory
-                    SET relevance = MAX(0.1, relevance * ?)
-                    WHERE active = 1
-                """, (decay_multiplier,))
-                conn.commit()
+            from modules.working_memory import wm_apply_decay
+            # Exponential decay: relevance * exp(-lambda * hours)
+            # lambda=0.1: ~60% at 5h, ~37% at 10h, ~14% at 20h
+            decay_multiplier = math.exp(-0.1 * elapsed_hours)
+            wm_apply_decay(decay_multiplier)
         except Exception as e:
             _logger.error("WM decay error: %s", redact_secrets(str(e)))
 

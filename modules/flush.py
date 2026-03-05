@@ -183,15 +183,9 @@ def _save_session_state(resumen: str = "") -> bool:
         active_project = None
         wm_topics = []
         try:
-            from modules.working_memory import _get_conn as _get_wm_conn
-            with _get_wm_conn() as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT topic FROM working_memory "
-                    "WHERE active = 1 AND topic IS NOT NULL "
-                    "ORDER BY relevance DESC LIMIT 10"
-                ).fetchall()
-            for row in rows:
-                topic = row["topic"] if isinstance(row, dict) else row[0]
+            from modules.working_memory import wm_get_active_topics
+            topics = wm_get_active_topics(limit=10)
+            for topic in topics:
                 if topic and topic not in wm_topics:
                     wm_topics.append(topic)
                 if not active_project and topic not in ('metamemory', 'contradiction', 'general', ''):

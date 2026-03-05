@@ -101,14 +101,8 @@ def _intention_exists_today(topic: str) -> bool:
     """Check if a PE intention for this topic was already created today."""
     dedupe_key = _compute_intention_dedupe_key(topic)
     try:
-        from modules.prospective import _get_conn
-        conn = _get_conn()
-        row = conn.execute(
-            "SELECT id FROM intentions "
-            "WHERE status = 'pending' AND context_at_creation LIKE ?",
-            (f"%pe_dedupe:{dedupe_key}%",)
-        ).fetchone()
-        return row is not None
+        from modules.prospective import check_intention_exists
+        return check_intention_exists(f"pe_dedupe:{dedupe_key}")
     except Exception:
         return False
 

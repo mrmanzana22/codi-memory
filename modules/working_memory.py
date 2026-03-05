@@ -1,11 +1,12 @@
 """
 Codi Memory - Working Memory module (Fase 2).
 Short-term, high-relevance items with temporal chains and narrative traces.
-SQLite-backed (memories_fts.db), connection-per-call, WAL mode.
+PostgreSQL-backed (config_pg pool), autocommit=True.
 """
 
 import json
 import hashlib
+import socket
 import time
 from datetime import datetime, timedelta
 from contextlib import contextmanager
@@ -13,50 +14,132 @@ from contextlib import contextmanager
 from modules.config import (
     WORKING_MEMORY_MAX_ACTIVE,
     now_col, now_iso, TZ_COL,
-    get_qdrant, COLLECTION_NAME,
 )
-from modules.db_pool import get_conn
+from modules.config_pg import get_conn
 from modules.secret_redact import redact_secrets
+from psycopg.rows import dict_row
 
 # Dedup window to prevent identical pushes (Proposal #57: 30→120s)
 # Covers async add_memory_smart() latency (observed 15-84s)
 _push_dedup = {}  # {content_hash: timestamp}
 _DEDUP_WINDOW_S = 120
 
+# Machine identifier for multi-host tracking
+_MACHINE_ID = socket.gethostname()
+
 # ============================================================
-# DATABASE INIT & CONNECTION
+# DATABASE INIT
 # ============================================================
 
 _TABLES_INITIALIZED = False
 
 
-def _init_tables(conn: sqlite3.Connection):
-    """Validate working memory tables exist (created by migrations)."""
-    from modules.migrations import ensure_schema_ready
-    ensure_schema_ready(conn, [
-        "working_memory", "narrative_traces", "trace_chains",
-    ])
+def _ensure_tables():
+    """Create PG tables if not exist. Called once per process."""
+    global _TABLES_INITIALIZED
+    if _TABLES_INITIALIZED:
+        return
+    try:
+        with get_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS working_memory (
+                    id          SERIAL PRIMARY KEY,
+                    content     TEXT NOT NULL,
+                    topic       TEXT DEFAULT 'general',
+                    relevance   REAL DEFAULT 0.5,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    occurred_at TIMESTAMPTZ,
+                    source      TEXT DEFAULT 'interaction',
+                    related_memory_id TEXT,
+                    chain_id    TEXT,
+                    active      BOOLEAN DEFAULT TRUE,
+                    last_accessed_at TIMESTAMPTZ,
+                    access_count INTEGER DEFAULT 0,
+                    machine_id  TEXT DEFAULT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS narrative_traces (
+                    id           SERIAL PRIMARY KEY,
+                    trace_name   TEXT NOT NULL UNIQUE,
+                    chain_ids    JSONB NOT NULL,
+                    theme        TEXT,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    active       BOOLEAN DEFAULT TRUE
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trace_chains (
+                    trace_id INTEGER NOT NULL REFERENCES narrative_traces(id) ON DELETE CASCADE,
+                    chain_id TEXT NOT NULL,
+                    UNIQUE (trace_id, chain_id)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wm_active_relevance "
+                "ON working_memory(active, relevance DESC) WHERE active = TRUE"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wm_chain_active_time "
+                "ON working_memory(chain_id, active, occurred_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wm_topic_active_time "
+                "ON working_memory(topic, active, occurred_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wm_created_at "
+                "ON working_memory(created_at)"
+            )
+            # Add machine_id column if not exists (Fase 5 multi-host)
+            try:
+                conn.execute(
+                    "ALTER TABLE working_memory ADD COLUMN IF NOT EXISTS "
+                    "machine_id TEXT DEFAULT NULL"
+                )
+            except Exception:
+                pass
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_traces_active_updated "
+                "ON narrative_traces(active, last_updated)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_trace_chain "
+                "ON trace_chains(trace_id, chain_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_trace_chains_chain "
+                "ON trace_chains(chain_id)"
+            )
+        _TABLES_INITIALIZED = True
+    except Exception:
+        raise
 
 
 @contextmanager
 def _get_conn():
-    """Yield a pooled SQLite connection. PRAGMAs set by db_pool, not here."""
-    global _TABLES_INITIALIZED
-    conn = get_conn()
-    if not _TABLES_INITIALIZED:
-        _init_tables(conn)
-        _TABLES_INITIALIZED = True
-    yield conn
+    """Yield a pooled PG connection. Maintains context manager interface
+    for backward compatibility with session_bridge, flush, wiring, sleep_loop."""
+    _ensure_tables()
+    with get_conn() as conn:
+        yield conn
 
 
 # ============================================================
 # SCORING
 # ============================================================
 
-def _hours_since(iso_str: str) -> float:
-    """Hours elapsed since an ISO timestamp (Colombia TZ aware)."""
+def _hours_since(ts_val) -> float:
+    """Hours elapsed since a timestamp (datetime or ISO string)."""
     try:
-        dt = datetime.fromisoformat(iso_str)
+        if hasattr(ts_val, 'total_seconds'):
+            # timedelta
+            return max(0.0, ts_val.total_seconds() / 3600)
+        if hasattr(ts_val, 'isoformat'):
+            dt = ts_val
+        else:
+            dt = datetime.fromisoformat(str(ts_val))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=TZ_COL)
         delta = now_col() - dt
@@ -65,10 +148,10 @@ def _hours_since(iso_str: str) -> float:
         return 168.0  # 7 days fallback
 
 
-def _effective_score(relevance, last_accessed_at, access_count, added_at):
+def _effective_score(relevance, last_accessed_at, access_count, created_at):
     """Compute effective score in [0, 1]."""
     relevance = min(1.0, max(0.0, float(relevance or 0)))
-    ref_time = last_accessed_at or added_at
+    ref_time = last_accessed_at or created_at
     hours = _hours_since(ref_time) if ref_time else 168.0
     recency = min(1.0, max(0.0, 1.0 - (hours / 168.0)))
     frequency = min(1.0, max(0.0, (access_count or 0) / 10.0))
@@ -81,7 +164,7 @@ def _effective_score(relevance, last_accessed_at, access_count, added_at):
 
 _general_counter = 0
 
-def _resolve_chain_id(conn: sqlite3.Connection, topic: str, occurred_at: str) -> str:
+def _resolve_chain_id(conn, topic: str, occurred_at) -> str:
     """Determine chain_id using temporal window logic."""
     global _general_counter
     if topic == "general":
@@ -91,7 +174,10 @@ def _resolve_chain_id(conn: sqlite3.Connection, topic: str, occurred_at: str) ->
 
     # Look for active items with same topic within 7 days
     try:
-        ref_dt = datetime.fromisoformat(occurred_at)
+        if hasattr(occurred_at, 'isoformat'):
+            ref_dt = occurred_at
+        else:
+            ref_dt = datetime.fromisoformat(str(occurred_at))
         if ref_dt.tzinfo is None:
             ref_dt = ref_dt.replace(tzinfo=TZ_COL)
     except Exception:
@@ -100,13 +186,15 @@ def _resolve_chain_id(conn: sqlite3.Connection, topic: str, occurred_at: str) ->
     window_start = (ref_dt - timedelta(days=7)).isoformat()
     window_end = (ref_dt + timedelta(days=7)).isoformat()
 
-    row = conn.execute(
-        """SELECT chain_id FROM working_memory
-           WHERE topic = ? AND active = 1
-             AND occurred_at >= ? AND occurred_at <= ?
-           ORDER BY occurred_at DESC LIMIT 1""",
-        (topic, window_start, window_end)
-    ).fetchone()
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """SELECT chain_id FROM working_memory
+               WHERE topic = %s AND active = TRUE
+                 AND occurred_at >= %s AND occurred_at <= %s
+               ORDER BY occurred_at DESC LIMIT 1""",
+            (topic, window_start, window_end)
+        )
+        row = cur.fetchone()
 
     if row:
         return row["chain_id"]
@@ -120,12 +208,14 @@ def _resolve_chain_id(conn: sqlite3.Connection, topic: str, occurred_at: str) ->
 # INTERNAL CURATION
 # ============================================================
 
-def _auto_curate_buffer(conn: sqlite3.Connection):
+def _auto_curate_buffer(conn):
     """If active items exceed MAX, archive lowest-scored ones."""
-    rows = conn.execute(
-        "SELECT id, relevance, last_accessed_at, access_count, added_at "
-        "FROM working_memory WHERE active = 1"
-    ).fetchall()
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT id, relevance, last_accessed_at, access_count, created_at "
+            "FROM working_memory WHERE active = TRUE"
+        )
+        rows = cur.fetchall()
 
     if len(rows) <= WORKING_MEMORY_MAX_ACTIVE:
         return
@@ -133,17 +223,16 @@ def _auto_curate_buffer(conn: sqlite3.Connection):
     scored = []
     for r in rows:
         s = _effective_score(r["relevance"], r["last_accessed_at"],
-                             r["access_count"], r["added_at"])
+                             r["access_count"], r["created_at"])
         scored.append((r["id"], s))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     to_archive = [item[0] for item in scored[WORKING_MEMORY_MAX_ACTIVE:]]
 
     if to_archive:
-        placeholders = ",".join("?" * len(to_archive))
         conn.execute(
-            f"UPDATE working_memory SET active = 0 WHERE id IN ({placeholders})",
-            to_archive
+            "UPDATE working_memory SET active = FALSE WHERE id = ANY(%s)",
+            (to_archive,)
         )
 
 
@@ -155,11 +244,13 @@ def _load_working_memory_context() -> str:
     """Top 10 active items by effective_score, truncated to 2000 chars."""
     try:
         with _get_conn() as conn:
-            rows = conn.execute(
-                "SELECT id, content, topic, chain_id, relevance, "
-                "last_accessed_at, access_count, added_at "
-                "FROM working_memory WHERE active = 1"
-            ).fetchall()
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id, content, topic, chain_id, relevance, "
+                    "last_accessed_at, access_count, created_at "
+                    "FROM working_memory WHERE active = TRUE"
+                )
+                rows = cur.fetchall()
 
         if not rows:
             return ""
@@ -167,7 +258,7 @@ def _load_working_memory_context() -> str:
         scored = []
         for r in rows:
             s = _effective_score(r["relevance"], r["last_accessed_at"],
-                                 r["access_count"], r["added_at"])
+                                 r["access_count"], r["created_at"])
             scored.append((r, s))
 
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -191,6 +282,114 @@ def _load_working_memory_context() -> str:
 
 
 # ============================================================
+# PUBLIC HELPER FUNCTIONS (for session_bridge, flush, wiring)
+# ============================================================
+
+def wm_get_active_topics(limit: int = 10) -> list:
+    """Get distinct active topics ordered by relevance (for session_bridge, flush)."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT DISTINCT topic FROM working_memory "
+                    "WHERE active = TRUE AND topic IS NOT NULL "
+                    "ORDER BY topic LIMIT %s",
+                    (limit,)
+                )
+                rows = cur.fetchall()
+        return [r["topic"] for r in rows if r["topic"]]
+    except Exception:
+        return []
+
+
+def wm_get_active_items(limit: int = 15) -> list:
+    """Get active working memory items ordered by relevance (for session_bridge)."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT content, topic, relevance FROM working_memory "
+                    "WHERE active = TRUE ORDER BY relevance DESC LIMIT %s",
+                    (limit,)
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "content": (r["content"] or "")[:200],
+                "topic": r["topic"],
+                "relevance": round(float(r["relevance"] or 0), 2),
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def wm_get_active_count() -> int:
+    """Get count of active working memory items (for session_bridge)."""
+    try:
+        with _get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM working_memory WHERE active = TRUE"
+            ).fetchone()
+            return row[0] if row else 0
+    except Exception:
+        return 0
+
+
+def wm_get_active_traces(limit: int = 10) -> list:
+    """Get active narrative traces (for session_bridge)."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT trace_name, theme FROM narrative_traces "
+                    "WHERE active = TRUE LIMIT %s",
+                    (limit,)
+                )
+                rows = cur.fetchall()
+        return [{"trace_name": r["trace_name"], "theme": r["theme"]} for r in rows]
+    except Exception:
+        return []
+
+
+def wm_get_decision_items(limit: int = 5) -> list:
+    """Get active working memory items with topic='decision' (for session_bridge)."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT content FROM working_memory "
+                    "WHERE active = TRUE AND topic = 'decision' "
+                    "ORDER BY relevance DESC LIMIT %s",
+                    (limit,)
+                )
+                rows = cur.fetchall()
+        return [{"decision": (r["content"] or "")[:200], "why": "wm_topic"} for r in rows]
+    except Exception:
+        return []
+
+
+def wm_apply_decay(multiplier: float) -> int:
+    """Apply exponential decay to active WM items (for wiring.py).
+
+    Sets relevance = GREATEST(0.1, relevance * multiplier) for all active items.
+    Returns number of rows updated.
+    """
+    try:
+        with _get_conn() as conn:
+            cur = conn.execute(
+                "UPDATE working_memory "
+                "SET relevance = GREATEST(0.1, relevance * %s) "
+                "WHERE active = TRUE",
+                (multiplier,)
+            )
+            return cur.rowcount
+    except Exception:
+        return 0
+
+
+# ============================================================
 # TOOLS
 # ============================================================
 
@@ -201,9 +400,9 @@ def get_working_memory() -> str:
     """
     try:
         with _get_conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM working_memory WHERE active = 1"
-            ).fetchall()
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute("SELECT * FROM working_memory WHERE active = TRUE")
+                rows = cur.fetchall()
 
             if not rows:
                 return json.dumps({
@@ -214,20 +413,18 @@ def get_working_memory() -> str:
             now = now_iso()
             ids = [r["id"] for r in rows]
 
-            # Update access in same connection
-            placeholders = ",".join("?" * len(ids))
+            # Update access in same connection (autocommit handles each statement)
             conn.execute(
-                f"UPDATE working_memory SET access_count = access_count + 1, "
-                f"last_accessed_at = ? WHERE id IN ({placeholders})",
-                [now] + ids
+                "UPDATE working_memory SET access_count = access_count + 1, "
+                "last_accessed_at = %s WHERE id = ANY(%s)",
+                (now, ids)
             )
-            conn.commit()
 
             # Score and sort
             items = []
             for r in rows:
                 s = _effective_score(r["relevance"], r["last_accessed_at"],
-                                     r["access_count"], r["added_at"])
+                                     r["access_count"], r["created_at"])
                 items.append({
                     "id": r["id"],
                     "content": r["content"],
@@ -235,11 +432,11 @@ def get_working_memory() -> str:
                     "relevance": r["relevance"],
                     "chain_id": r["chain_id"],
                     "source": r["source"],
-                    "added_at": r["added_at"],
-                    "occurred_at": r["occurred_at"],
+                    "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+                    "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
                     "related_memory_id": r["related_memory_id"],
                     "access_count": r["access_count"],
-                    "last_accessed_at": r["last_accessed_at"],
+                    "last_accessed_at": r["last_accessed_at"].isoformat() if r["last_accessed_at"] and hasattr(r["last_accessed_at"], "isoformat") else r["last_accessed_at"],
                     "effective_score": round(s, 4),
                 })
 
@@ -290,7 +487,7 @@ def push_to_working_memory(
         source: Origin of info ('interaction', 'system', 'observation')
     """
     try:
-        # Dedup: skip if identical content pushed in last 30 seconds
+        # Dedup: skip if identical content pushed in last 120 seconds
         content_hash = hashlib.md5(content[:300].encode()).hexdigest()
         _now = time.time()
         if content_hash in _push_dedup and (_now - _push_dedup[content_hash]) < _DEDUP_WINDOW_S:
@@ -307,9 +504,9 @@ def push_to_working_memory(
                 if _push_dedup[k] < cutoff:
                     del _push_dedup[k]
 
-        added_at = now_iso()
+        created_at = now_iso()
         if occurred_at is None:
-            occurred_at = added_at
+            occurred_at = created_at
 
         relevance = min(1.0, max(0.0, float(relevance)))
         base_relevance = relevance
@@ -324,26 +521,22 @@ def push_to_working_memory(
             pass
 
         with _get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
+            with conn.transaction():
                 chain_id = _resolve_chain_id(conn, topic, occurred_at)
 
-                conn.execute(
-                    """INSERT INTO working_memory
-                       (content, topic, relevance, added_at, occurred_at,
-                        source, chain_id, active, access_count)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0)""",
-                    (content, topic, relevance, added_at, occurred_at,
-                     source, chain_id)
-                )
-
-                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO working_memory
+                           (content, topic, relevance, created_at, occurred_at,
+                            source, chain_id, active, access_count, machine_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
+                           RETURNING id""",
+                        (content, topic, relevance, created_at, occurred_at,
+                         source, chain_id, _MACHINE_ID)
+                    )
+                    new_id = cur.fetchone()[0]
 
                 _auto_curate_buffer(conn)
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
 
             return json.dumps({
                 "id": new_id,
@@ -351,7 +544,7 @@ def push_to_working_memory(
                 "topic": topic,
                 "relevance": base_relevance,
                 "effective_relevance": relevance,
-                "added_at": added_at,
+                "created_at": created_at,
                 "occurred_at": occurred_at,
                 "pretty": f"# WORKING MEMORY\nPushed: {content[:60]}... -> chain {chain_id}",
             }, ensure_ascii=False)
@@ -367,7 +560,7 @@ def update_working_memory(
 ) -> str:
     """
     Updates an active working memory item's relevance or active status.
-    Only editable if currently active=1. Archived items are historical.
+    Only editable if currently active=TRUE. Archived items are historical.
 
     Args:
         item_id: The ID of the working memory item
@@ -382,22 +575,21 @@ def update_working_memory(
         params = []
         if relevance is not None:
             relevance = min(1.0, max(0.0, float(relevance)))
-            sets.append("relevance = ?")
+            sets.append("relevance = %s")
             params.append(relevance)
         if active is not None:
-            active = 1 if active else 0
-            sets.append("active = ?")
-            params.append(active)
+            active_bool = bool(active)
+            sets.append("active = %s")
+            params.append(active_bool)
 
         params.append(int(item_id))
 
         with _get_conn() as conn:
             cursor = conn.execute(
                 f"UPDATE working_memory SET {', '.join(sets)} "
-                f"WHERE id = ? AND active = 1",
+                f"WHERE id = %s AND active = TRUE",
                 params
             )
-            conn.commit()
 
             if cursor.rowcount == 0:
                 return json.dumps({
@@ -426,7 +618,7 @@ def get_narrative_chain(
 ) -> str:
     """
     Retrieves a narrative chain by chain_id or topic.
-    Shows full timeline (active + archived). Enriches with Qdrant if available.
+    Shows full timeline (active + archived).
 
     Args:
         topic_or_chain_id: A chain_id (e.g., 'trading_2026020808') or topic name
@@ -434,27 +626,30 @@ def get_narrative_chain(
     """
     try:
         depth = min(100, max(1, int(depth)))
-        qdrant_included = False
 
         with _get_conn() as conn:
             # Step 1: Try as chain_id
-            rows = conn.execute(
-                "SELECT * FROM working_memory WHERE chain_id = ? "
-                "ORDER BY occurred_at ASC LIMIT ?",
-                (topic_or_chain_id, depth)
-            ).fetchall()
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT * FROM working_memory WHERE chain_id = %s "
+                    "ORDER BY occurred_at ASC LIMIT %s",
+                    (topic_or_chain_id, depth)
+                )
+                rows = cur.fetchall()
 
             # Step 2: Fallback to topic
             if not rows:
-                rows = conn.execute(
-                    "SELECT * FROM working_memory WHERE topic = ? "
-                    "ORDER BY occurred_at ASC LIMIT ?",
-                    (topic_or_chain_id, depth)
-                ).fetchall()
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT * FROM working_memory WHERE topic = %s "
+                        "ORDER BY occurred_at ASC LIMIT %s",
+                        (topic_or_chain_id, depth)
+                    )
+                    rows = cur.fetchall()
 
         if not rows:
             return json.dumps({
-                "items": [], "count": 0, "qdrant_included": False,
+                "items": [], "count": 0,
                 "pretty": f"# NARRATIVE CHAIN\nNo items for '{topic_or_chain_id}'",
             }, ensure_ascii=False)
 
@@ -467,35 +662,19 @@ def get_narrative_chain(
                 "relevance": r["relevance"],
                 "chain_id": r["chain_id"],
                 "source": r["source"],
-                "added_at": r["added_at"],
-                "occurred_at": r["occurred_at"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] and hasattr(r["created_at"], "isoformat") else r["created_at"],
+                "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
                 "related_memory_id": r["related_memory_id"],
                 "active": r["active"],
                 "access_count": r["access_count"],
             }
-
-            # Enrich with Qdrant if related_memory_id exists
-            if r["related_memory_id"]:
-                try:
-                    qdrant_client = get_qdrant()
-                    points = qdrant_client.retrieve(
-                        collection_name=COLLECTION_NAME,
-                        ids=[r["related_memory_id"]],
-                        with_payload=True
-                    )
-                    if points:
-                        p = points[0]
-                        item["qdrant_memory"] = p.payload.get("data", "")
-                        qdrant_included = True
-                except Exception:
-                    pass
 
             items.append(item)
 
         # Pretty
         pretty_lines = [
             f"# NARRATIVE CHAIN: {topic_or_chain_id}",
-            f"Items: {len(items)} | Qdrant: {'yes' if qdrant_included else 'no'}\n",
+            f"Items: {len(items)}\n",
         ]
         for it in items:
             status = "active" if it.get("active") else "archived"
@@ -506,7 +685,6 @@ def get_narrative_chain(
         return json.dumps({
             "items": items,
             "count": len(items),
-            "qdrant_included": qdrant_included,
             "pretty": "\n".join(pretty_lines),
         }, ensure_ascii=False)
 
@@ -537,54 +715,50 @@ def link_narrative_trace(
         chain_ids_json = json.dumps(chain_ids, ensure_ascii=False)
 
         with _get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                existing = conn.execute(
-                    "SELECT id FROM narrative_traces WHERE trace_name = ?",
-                    (trace_name,)
-                ).fetchone()
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT id FROM narrative_traces WHERE trace_name = %s",
+                        (trace_name,)
+                    )
+                    existing = cur.fetchone()
 
                 if existing:
                     trace_id = existing["id"]
                     conn.execute(
-                        "UPDATE narrative_traces SET chain_ids = ?, theme = ?, "
-                        "last_updated = ? WHERE id = ?",
+                        "UPDATE narrative_traces SET chain_ids = %s::jsonb, theme = %s, "
+                        "last_updated = %s WHERE id = %s",
                         (chain_ids_json, theme, now, trace_id)
                     )
                     # Clean and re-insert trace_chains
                     conn.execute(
-                        "DELETE FROM trace_chains WHERE trace_id = ?",
+                        "DELETE FROM trace_chains WHERE trace_id = %s",
                         (trace_id,)
                     )
                     for cid in chain_ids:
                         conn.execute(
                             "INSERT INTO trace_chains (trace_id, chain_id) "
-                            "VALUES (?, ?)",
+                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (trace_id, cid)
                         )
                     action = "updated"
                 else:
-                    conn.execute(
-                        "INSERT INTO narrative_traces "
-                        "(trace_name, chain_ids, theme, created_at, last_updated, active) "
-                        "VALUES (?, ?, ?, ?, ?, 1)",
-                        (trace_name, chain_ids_json, theme, now, now)
-                    )
-                    trace_id = conn.execute(
-                        "SELECT last_insert_rowid()"
-                    ).fetchone()[0]
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO narrative_traces "
+                            "(trace_name, chain_ids, theme, created_at, last_updated, active) "
+                            "VALUES (%s, %s::jsonb, %s, %s, %s, TRUE) "
+                            "RETURNING id",
+                            (trace_name, chain_ids_json, theme, now, now)
+                        )
+                        trace_id = cur.fetchone()[0]
                     for cid in chain_ids:
                         conn.execute(
                             "INSERT INTO trace_chains (trace_id, chain_id) "
-                            "VALUES (?, ?)",
+                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (trace_id, cid)
                         )
                     action = "created"
-
-                conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
 
             return json.dumps({
                 "trace_id": trace_id,
@@ -605,17 +779,16 @@ def link_narrative_trace(
 # ============================================================
 
 def wm_noche_cleanup():
-    """Archive low-relevance, old items. NULL last_accessed_at safe (uses added_at)."""
+    """Archive low-relevance, old items. NULL last_accessed_at safe (uses created_at)."""
     try:
         cutoff = (now_col() - timedelta(days=7)).isoformat()
         with _get_conn() as conn:
             cursor = conn.execute(
-                """UPDATE working_memory SET active = 0
-                   WHERE active = 1 AND relevance < 0.2
-                     AND COALESCE(last_accessed_at, added_at) < ?""",
+                """UPDATE working_memory SET active = FALSE
+                   WHERE active = TRUE AND relevance < 0.2
+                     AND COALESCE(last_accessed_at, created_at) < %s""",
                 (cutoff,)
             )
-            conn.commit()
             return cursor.rowcount
     except Exception:
         return 0
@@ -626,9 +799,9 @@ def wm_active_count() -> int:
     try:
         with _get_conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM working_memory WHERE active = 1"
+                "SELECT COUNT(*) FROM working_memory WHERE active = TRUE"
             ).fetchone()
-            return row["cnt"] if row else 0
+            return row[0] if row else 0
     except Exception:
         return 0
 
