@@ -36,10 +36,14 @@ __all__ = [
 ]
 
 
-def reflect_on_self() -> str:
+def reflect_on_self(update_attention: bool = True) -> str:
     """
     Reflexiona sobre mi identidad analizando mis memorias auto-referenciales.
     Genera un modelo de quien soy basado en evidencia de mis experiencias.
+
+    Args:
+        update_attention: If False, skip attention_access_count updates
+                         (used by sleep_loop to avoid N+1 remote DB queries).
     """
     try:
         self_ref_points, _ = pg.scroll(filters={"metadata_key": {"key": "self_reference", "value": True}}, limit=100, is_semantic=False)
@@ -53,14 +57,22 @@ def reflect_on_self() -> str:
         if not all_points:
             return "No encontre memorias sobre mi identidad. Necesito mas experiencias para reflexionar."
 
-        ts = now_iso()
-        for pid, p in all_points.items():
-            payload = p.payload or {}
-            acc = int(payload.get('attention_access_count', 0) or 0)
-            pg.update_payload(pid, {
-                'attention_access_count': acc + 1,
-                'attention_last_accessed': ts,
-            })
+        if update_attention:
+            ts = now_iso()
+            # Batch update in one transaction instead of N+1 individual calls
+            from modules.config_pg import get_conn as _pg_conn
+            point_ids = list(all_points.keys())
+            with _pg_conn() as conn:
+                conn.execute(
+                    "UPDATE memories SET "
+                    "metadata = jsonb_set(jsonb_set(metadata, "
+                    "'{attention_access_count}', "
+                    "(COALESCE((metadata->>'attention_access_count')::int, 0) + 1)::text::jsonb), "
+                    "'{attention_last_accessed}', %s::jsonb), "
+                    "updated_at = NOW() "
+                    "WHERE id = ANY(%s::uuid[])",
+                    (f'"{now_iso()}"', [str(pid) for pid in point_ids]),
+                )
 
         reflection = ["# REFLEXION SOBRE MI MISMO\n"]
         capacidades = []
@@ -840,15 +852,15 @@ def detect_self_discrepancies() -> dict:
             res = get_fok_resolution(fts_db_path=FTS_DB_PATH)
             if res["n_records"] >= 10:
                 gamma = res["gamma"]
-                if gamma < 0.3:
+                if gamma < -0.2:
                     discrepancies.append({
                         "domain": "metacognition",
-                        "expected": "FOK resolution gamma >= 0.3",
+                        "expected": "FOK resolution gamma >= -0.2 (not actively misleading)",
                         "actual": f"gamma={gamma:.3f} (C={res['concordant']}, "
                                   f"D={res['discordant']}, T={res['tied']}, "
                                   f"n={res['n_records']})",
                         "discrepancy_type": "actual/ideal (poor resolution)",
-                        "magnitude": max(0.0, 0.3 - gamma),
+                        "magnitude": max(0.0, -0.2 - gamma),
                     })
         except Exception:
             pass
@@ -1109,14 +1121,23 @@ def detect_self_discrepancies() -> dict:
         # Control 3: Knowledge gap → curiosity trigger
         gap_discs = [d for d in discrepancies if d["discrepancy_type"] == "actual/ideal"
                      and d["domain"] not in ("metacognition",)]
+        try:
+            from modules.curiosity import _cargar_curiosidades
+            _cur_data = _cargar_curiosidades()
+            _existing_cats = {item.get("categoria") for item in _cur_data.get("pendientes", [])}
+        except Exception:
+            _existing_cats = set()
         for gd in gap_discs[:2]:
             try:
                 from modules.curiosity import push_curiosidad
+                if gd["domain"] in _existing_cats:
+                    continue  # already queued, skip
                 push_curiosidad(
-                    tema=f"Knowledge gap in '{gd['domain']}': confidence={gd['actual']}",
+                    tema=f"Knowledge gap in '{gd['domain']}': {gd['actual']}",
                     prioridad="media",
                     categoria=gd["domain"],
                 )
+                _existing_cats.add(gd["domain"])
             except Exception:
                 pass
 

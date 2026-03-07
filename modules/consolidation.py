@@ -41,7 +41,7 @@ from modules.config_pg import get_conn as get_pg_conn
 from modules.consolidation_common import (
     _embed_text, _cosine_similarity,
     init_consolidation_db, get_embed_cache_info, _get_oai,
-    _embed_text_cached,
+    _embed_text_cached, _try_ollama,
 )
 from modules.utils import now_iso
 from modules.bmr import bmr_should_consolidate, bmr_should_prune
@@ -643,15 +643,21 @@ def _llm_classify_edges(ids: list, texts: list) -> tuple:
     _DEFAULT_CONF = {"causes": 0.8, "enables": 0.7, "prevents": 0.8, "co_occurs": 0.5}
 
     try:
-        from modules.consolidation_common import _get_oai
-        response = _get_oai().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=300,
-        )
+        from modules.consolidation_common import _get_oai, _try_ollama
 
-        raw = response.choices[0].message.content.strip()
+        # Try Ollama first (edge_classify task)
+        ollama_result = _try_ollama("edge_classify", prompt)
+        if ollama_result is not None:
+            raw = ollama_result
+        else:
+            response = _get_oai().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=300,
+            )
+            raw = response.choices[0].message.content.strip()
+
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -1076,15 +1082,21 @@ def _phase_extraction(clusters: list) -> list:
         prompt = _build_extraction_prompt(topic, episodes_block, len(texts))
 
         try:
-            from modules.consolidation_common import _get_oai
-            response = _get_oai().chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1500,
-            )
+            from modules.consolidation_common import _get_oai, _try_ollama
 
-            raw = response.choices[0].message.content.strip()
+            # Try Ollama first (semantic_extract task)
+            ollama_result = _try_ollama("semantic_extract", prompt)
+            if ollama_result is not None:
+                raw = ollama_result
+            else:
+                response = _get_oai().chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=1500,
+                )
+                raw = response.choices[0].message.content.strip()
+
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -1175,14 +1187,21 @@ Episodes:
 {episodes_block}"""
 
     try:
-        from modules.consolidation_common import _get_oai
-        response = _get_oai().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=1000,
-        )
-        raw = response.choices[0].message.content.strip()
+        from modules.consolidation_common import _get_oai, _try_ollama
+
+        # Try Ollama first (self_extract task)
+        ollama_result = _try_ollama("self_extract", prompt)
+        if ollama_result is not None:
+            raw = ollama_result
+        else:
+            response = _get_oai().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1000,
+            )
+            raw = response.choices[0].message.content.strip()
+
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -1518,13 +1537,18 @@ def _phase_compression(scope: str = "full") -> dict:
         prompt = COMPRESSION_PROMPT.format(n=len(members), episodes=episodes_block)
 
         try:
-            response = _get_oai().chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=500,
-            )
-            summary = response.choices[0].message.content.strip()
+            # Try Ollama first (compress_episodes task)
+            ollama_result = _try_ollama("compress_episodes", prompt)
+            if ollama_result is not None:
+                summary = ollama_result
+            else:
+                response = _get_oai().chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=500,
+                )
+                summary = response.choices[0].message.content.strip()
 
             if not summary or len(summary) < 30:
                 continue
@@ -1804,13 +1828,18 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
         )
 
         try:
-            resp = oai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.3,
-            )
-            summary_text = resp.choices[0].message.content.strip()
+            # Try Ollama first (compress_checkpoints task)
+            ollama_result = _try_ollama("compress_checkpoints", prompt)
+            if ollama_result is not None:
+                summary_text = ollama_result
+            else:
+                resp = oai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    temperature=0.3,
+                )
+                summary_text = resp.choices[0].message.content.strip()
         except Exception as e:
             _logger.error("Checkpoint compression LLM failed for %s: %s", date, e)
             continue

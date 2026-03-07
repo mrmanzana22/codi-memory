@@ -95,6 +95,7 @@ from modules import sleep_loop
 from modules import write_queue
 from modules import narrative
 from modules import tool_governance
+from modules import ollama_router
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -128,6 +129,7 @@ sleep_loop.register_tools(mcp)
 write_queue.register_tools(mcp)
 narrative.register_tools(mcp)
 tool_governance.register_governance_tool(mcp)
+ollama_router.register_tools(mcp)
 
 # ============================================================
 # TOOL GOVERNANCE - Apply bundle-based visibility filter

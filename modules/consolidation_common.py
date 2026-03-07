@@ -72,6 +72,24 @@ def _cosine_similarity(a: list, b: list) -> float:
 
 
 # ============================================================
+# OLLAMA ROUTING (opt-in via CODI_USE_OLLAMA=true)
+# ============================================================
+
+def _try_ollama(task_type: str, prompt: str) -> str | None:
+    """Try routing a chat completion through Ollama.
+
+    Returns response text on success, None if disabled/unavailable/failed.
+    When None, caller should fall back to OpenAI as before.
+    """
+    try:
+        from modules.ollama_router import ollama_chat_completion
+        return ollama_chat_completion(task_type, prompt)
+    except Exception as e:
+        _logger.debug("Ollama routing unavailable: %s", e)
+        return None
+
+
+# ============================================================
 # SQLITE CONNECTION
 # ============================================================
 

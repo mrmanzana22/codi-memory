@@ -395,7 +395,8 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
         # Paginated scroll (same pattern as consolidation.py:208-267)
         offset = None
-        MAX_SCROLL = 5000  # safety cap
+        MAX_SCROLL = 500  # reduced for remote DB latency
+        pending_updates = []  # batch updates to avoid N+1 round-trips
 
         while total_scanned < MAX_SCROLL:
             batch, next_offset = pg.scroll(
@@ -443,18 +444,27 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                     new_rs = rs + (new_rs - rs) * 0.5
 
                 if new_salience < salience:
-                    decay_payload = {
-                        'attention_salience': new_salience,
-                        'storage_strength': new_ss,
-                        'retrieval_strength': new_rs,
-                    }
-                    pg.update_payload(point.id, decay_payload)
+                    pending_updates.append((str(point.id), new_salience, new_ss, new_rs))
                     decayed_count += 1
 
             total_scanned += len(batch)
             if not next_offset:
                 break
             offset = next_offset
+
+        # Batch update all decayed memories in one transaction
+        if pending_updates:
+            from modules.config_pg import get_conn as _pg_conn
+            from datetime import datetime as _dt
+            _now = _dt.now()
+            with _pg_conn() as conn:
+                for mid, sal, ss_val, rs_val in pending_updates:
+                    conn.execute(
+                        "UPDATE memories SET activation_score = %s, "
+                        "storage_strength = %s, retrieval_strength = %s, "
+                        "updated_at = %s WHERE id = %s",
+                        (sal, ss_val, rs_val, _now, mid),
+                    )
 
         if total_scanned == 0:
             return "No hay memorias para aplicar decay."
@@ -634,6 +644,10 @@ def recalibrate_importance(
     critical_cutoff = (now - timedelta(days=critical_decay_days)).isoformat()
     high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
 
+    # Collect batch updates to avoid N+1 round-trips to remote PG
+    downgrade_to_high = []
+    downgrade_to_medium = []
+
     # --- Scan critical memories ---
     offset = None
     while scanned < max_scan:
@@ -669,9 +683,7 @@ def recalibrate_importance(
                 effective_cutoff = (now - timedelta(days=half_days)).isoformat()
 
             if last_access and last_access < effective_cutoff:
-                pg.update_payload(point.id, {
-                    'narrative_importance': 'high',
-                })
+                downgrade_to_high.append(str(point.id))
                 downgraded_crit += 1
 
         if next_offset is None:
@@ -713,14 +725,29 @@ def recalibrate_importance(
                 effective_cutoff = (now - timedelta(days=half_days)).isoformat()
 
             if last_access and last_access < effective_cutoff:
-                pg.update_payload(point.id, {
-                    'narrative_importance': 'medium',
-                })
+                downgrade_to_medium.append(str(point.id))
                 downgraded_high += 1
 
         if next_offset is None:
             break
         offset = next_offset
+
+    # Batch update downgrades in one transaction
+    if downgrade_to_high or downgrade_to_medium:
+        from modules.config_pg import get_conn as _pg_conn
+        with _pg_conn() as conn:
+            if downgrade_to_high:
+                conn.execute(
+                    "UPDATE memories SET importance = 'high', updated_at = NOW() "
+                    "WHERE id = ANY(%s::uuid[])",
+                    (downgrade_to_high,),
+                )
+            if downgrade_to_medium:
+                conn.execute(
+                    "UPDATE memories SET importance = 'medium', updated_at = NOW() "
+                    "WHERE id = ANY(%s::uuid[])",
+                    (downgrade_to_medium,),
+                )
 
     total_downgraded = downgraded_crit + downgraded_high
     if total_downgraded > 0:

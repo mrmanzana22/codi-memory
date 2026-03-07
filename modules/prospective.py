@@ -187,12 +187,12 @@ def _resolve_id(conn, prefix: str) -> str:
         return prefix
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT id FROM intentions WHERE id LIKE %s LIMIT 2",
+            "SELECT id FROM intentions WHERE id::text LIKE %s LIMIT 2",
             (f"{prefix}%",),
         )
         rows = cur.fetchall()
     if len(rows) == 1:
-        return rows[0]["id"]
+        return str(rows[0]["id"])
     if len(rows) == 0:
         raise ValueError(f"No intention found with prefix '{prefix}'")
     raise ValueError(f"Ambiguous prefix '{prefix}', matches {len(rows)} intentions")

@@ -207,9 +207,9 @@ def _compute_goal_activation(row: dict) -> float:
 def _row_to_dict(row: dict) -> dict:
     """Normalize a goal row dict (convert TIMESTAMPTZ to ISO strings)."""
     return {
-        "id": row["id"],
+        "id": str(row["id"]) if row["id"] is not None else None,
         "title": row["title"],
-        "parent_id": row["parent_id"],
+        "parent_id": str(row["parent_id"]) if row["parent_id"] is not None else None,
         "level": row["level"],
         "status": row["status"],
         "priority": row["priority"],
@@ -643,7 +643,7 @@ def check_goal_hygiene() -> dict:
                     _log_event(conn, row["id"], "auto_paused",
                                f"Stale: no access in {days}d (level={level})")
                     paused.append({
-                        "id": row["id"],
+                        "id": str(row["id"]),
                         "title": row["title"],
                         "level": level,
                         "last_accessed": _ts(row["last_accessed"]),
@@ -743,7 +743,7 @@ def get_goal_tree(root_id: Optional[str] = None) -> list:
 
         def _build_node(row, cur):
             node = {
-                "id": row["id"],
+                "id": str(row["id"]),
                 "title": row["title"],
                 "level": row["level"],
                 "status": row["status"],

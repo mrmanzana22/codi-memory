@@ -346,6 +346,18 @@ def _update_attention_schema(focus: str, driver: str = "unknown", strength: floa
                     transitions.pop(i)
                     break  # Remove only the oldest occurrence
 
+            # Hebbian strengthening: A->C actually happened, boost its weight
+            # by appending a second entry. The bigram predictor counts occurrences,
+            # so an extra entry shifts probability toward the correct transition.
+            if focus:
+                transitions.append({
+                    "from": old_focus,
+                    "to": focus,
+                    "at": now,
+                    "driver": "hebbian_boost",
+                })
+                _attention_schema["topic_transitions"] = transitions[-30:]
+
 
 def get_attention_schema() -> dict:
     """Return the current attention schema state (for external queries)."""
@@ -364,6 +376,55 @@ def get_attention_schema() -> dict:
         "last_actual_focus": _attention_schema.get("last_actual_focus"),
         "attention_prediction_error": _attention_schema.get("attention_prediction_error", 0.0),
     }
+
+
+def _decay_attention_schema(max_transition_age_hours: float = 24.0, max_history: int = 20):
+    """Remove stale entries from the attention schema.
+
+    Called periodically (e.g. from sleep loop) to prevent unbounded growth
+    of topic_transitions and history over long sessions.
+
+    - topic_transitions: drop entries older than max_transition_age_hours.
+    - history: trim to max_history most recent entries.
+    """
+    global _attention_schema
+    from datetime import datetime, timedelta
+    from modules.config import now_col
+
+    cutoff = now_col() - timedelta(hours=max_transition_age_hours)
+
+    original_len = len(_attention_schema["topic_transitions"])
+    kept = []
+    for t in _attention_schema["topic_transitions"]:
+        at_str = t.get("at")
+        if not at_str:
+            kept.append(t)
+            continue
+        try:
+            at_dt = datetime.fromisoformat(at_str)
+            # Make offset-naive for comparison if cutoff is offset-aware
+            if at_dt.tzinfo is not None and cutoff.tzinfo is not None:
+                if at_dt >= cutoff:
+                    kept.append(t)
+            else:
+                if at_dt.replace(tzinfo=None) >= cutoff.replace(tzinfo=None):
+                    kept.append(t)
+        except (ValueError, TypeError):
+            kept.append(t)  # Keep entries with unparseable timestamps
+
+    _attention_schema["topic_transitions"] = kept
+    pruned_transitions = original_len - len(kept)
+
+    # Trim history to most recent entries
+    history_before = len(_attention_schema["history"])
+    _attention_schema["history"] = _attention_schema["history"][-max_history:]
+    pruned_history = history_before - len(_attention_schema["history"])
+
+    if pruned_transitions > 0 or pruned_history > 0:
+        _logger.debug(
+            "attention decay: removed %d old transitions (>%dh), trimmed %d history entries",
+            pruned_transitions, int(max_transition_age_hours), pruned_history,
+        )
 
 
 def describe_attention() -> str:
@@ -628,14 +689,15 @@ def _on_competition_complete(event_name: str, data: dict):
         if loser_ids:
             try:
                 from modules.config import COLLECTION_NAME
+                from modules.access_tracking import record_spreading
                 batch_ids = loser_ids[:20]
                 points = _pg.get_by_ids(batch_ids)
-                for p in points:
-                    old_sal = p.payload.get('attention_salience', 0.5)
-                    new_sal = max(0.1, old_sal - 0.05)
-                    _pg.update_payload(p.id, {
-                        'attention_salience': new_sal,
-                    })
+                sal_updates = {
+                    p.id: max(0.1, p.payload.get('attention_salience', 0.5) - 0.05)
+                    for p in points
+                }
+                if sal_updates:
+                    record_spreading(COLLECTION_NAME, sal_updates)
             except Exception:
                 pass
     except Exception as e:
@@ -869,6 +931,7 @@ def _on_sleep_loop_complete(event_name: str, data: dict):
             relevance=0.5,
             source="sleep_loop_complete",
         )
+        _decay_attention_schema()
     except Exception as e:
         _logger.error("_on_sleep_loop_complete error: %s", redact_secrets(str(e)))
 
@@ -907,6 +970,42 @@ def _on_emotion_gating_applied(event_name: str, data: dict):
         _logger.error("_on_emotion_gating_applied error: %s", redact_secrets(str(e)))
 
 
+def _on_attention_prediction_error(event_name: str, data: dict):
+    """AST-1: Attention prediction error — reconnects a dead event to reconsolidation.
+
+    When error == 1.0 (full mismatch), the system was confidently wrong about
+    where attention would go. Log it and push to working memory so higher-order
+    processes can notice the pattern.
+    """
+    try:
+        predicted = data.get("predicted", "")
+        actual = data.get("actual", "")
+        error = data.get("error", 0.0)
+
+        if error == 1.0:
+            _logger.debug(
+                "Attention PE full mismatch: predicted=%r actual=%r", predicted, actual
+            )
+            try:
+                from modules.working_memory import push_to_working_memory
+                push_to_working_memory(
+                    content=(
+                        f"[ATTENTION PE] Full mismatch: predicted '{predicted}' "
+                        f"but focus shifted to '{actual}'"
+                    ),
+                    topic="attention_prediction_error",
+                    relevance=0.7,
+                    source="attention_schema",
+                )
+            except Exception as e:
+                _logger.error(
+                    "_on_attention_prediction_error WM push error: %s",
+                    redact_secrets(str(e)),
+                )
+    except Exception as e:
+        _logger.error("_on_attention_prediction_error error: %s", redact_secrets(str(e)))
+
+
 def wire_event_bus():
     """Register all event handlers. Called from server.py at startup.
 
@@ -936,6 +1035,9 @@ def wire_event_bus():
     event_bus.on(Events.SLEEP_LOOP_COMPLETE, _on_sleep_loop_complete)
     event_bus.on(Events.PERF_BUDGET_VIOLATION, _on_perf_budget_violation)
     event_bus.on(Events.EMOTION_GATING_APPLIED, _on_emotion_gating_applied)
+
+    # AST-1: Connect previously dead event — attention prediction error
+    event_bus.on(Events.ATTENTION_PREDICTION_ERROR, _on_attention_prediction_error)
 
     # Bloque 2: PE -> Action handlers (flag-gated inside pe_actions)
     try:

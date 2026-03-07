@@ -91,6 +91,7 @@ def record_access(collection: str, point_id: str, payload: dict) -> None:
         _direct_set_payload(collection, point_id, payload)
         return
 
+    needs_overflow = False
     with _lock:
         key = str(point_id)
         existing = _pending.get(key)
@@ -99,10 +100,10 @@ def record_access(collection: str, point_id: str, payload: dict) -> None:
         else:
             _pending[key] = dict(payload)
         _stats["enqueued"] += 1
-        pending_size = len(_pending)
+        needs_overflow = len(_pending) >= MAX_PENDING
         _ensure_flusher()
 
-    if pending_size >= MAX_PENDING:
+    if needs_overflow:
         threading.Thread(
             target=_flush_cycle, args=("overflow",), daemon=True
         ).start()
@@ -131,6 +132,7 @@ def record_spreading(
     from modules.config import now_iso
     ts = last_accessed or now_iso()
 
+    needs_overflow = False
     with _lock:
         for pid, sal in updates.items():
             key = str(pid)
@@ -144,9 +146,10 @@ def record_spreading(
             else:
                 _pending[key] = payload
             _stats["enqueued"] += 1
+        needs_overflow = len(_pending) >= MAX_PENDING
         _ensure_flusher()
 
-    if len(updates) + len(_pending) >= MAX_PENDING:
+    if needs_overflow:
         threading.Thread(
             target=_flush_cycle, args=("overflow",), daemon=True
         ).start()

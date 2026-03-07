@@ -34,7 +34,7 @@ _local = threading.local()
 _PRAGMAS = (
     "PRAGMA journal_mode=WAL",
     "PRAGMA synchronous=NORMAL",
-    "PRAGMA busy_timeout=10000",
+    "PRAGMA busy_timeout=30000",
     "PRAGMA foreign_keys=ON",
 )
 
@@ -49,11 +49,18 @@ def _is_alive(conn: sqlite3.Connection) -> bool:
 
 
 def _create_conn(db_path: str) -> sqlite3.Connection:
-    """Create a new SQLite connection with standard PRAGMAs."""
+    """Create a new SQLite connection with standard PRAGMAs.
+
+    Uses autocommit (isolation_level=None) so every DML statement commits
+    immediately. This prevents implicit transactions from holding write locks
+    across coroutines/threads. Explicit BEGIN…COMMIT still works for callers
+    that need atomicity (e.g. migrations).
+    """
     conn = sqlite3.connect(
         db_path,
-        timeout=10,
+        timeout=30,
         detect_types=sqlite3.PARSE_DECLTYPES,
+        isolation_level=None,  # AUTOCOMMIT — no implicit transactions
     )
     conn.row_factory = sqlite3.Row
     for pragma in _PRAGMAS:
@@ -85,6 +92,13 @@ def get_conn(db_path: str = None) -> sqlite3.Connection:
     conn = conns.get(db_path)
 
     if conn is not None and _is_alive(conn):
+        # Ensure autocommit (live-upgrade old connections)
+        if conn.isolation_level is not None:
+            try:
+                conn.commit()  # flush any pending implicit txn
+            except Exception:
+                pass
+            conn.isolation_level = None
         return conn
 
     # Connection missing or dead — (re)create

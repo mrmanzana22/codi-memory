@@ -343,6 +343,12 @@ def main():
     except Exception:
         pass
 
+    # Phase 3: Finalize nuance transcript for next session
+    try:
+        _finalize_nuance_transcript(session_id, transcript_path)
+    except Exception:
+        pass
+
 
 def _session_bridge_checkpoint(session_id: str):
     """Lightweight session bridge checkpoint via direct SQLite.
@@ -505,6 +511,80 @@ def _session_bridge_checkpoint(session_id: str):
         pass
     finally:
         conn.close()
+
+
+PENDING_DIR = os.path.join(BASE_DIR, "hooks", ".pending_nuances")
+NUANCE_MAX_BYTES = 25_000
+NUANCE_MAX_TURN_CHARS = 500
+NUANCE_MIN_TURNS = 3
+
+
+def _truncate_at_sentence(text: str, max_chars: int) -> str:
+    """Truncate text at the last sentence boundary before max_chars."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    for sep in [". ", "? ", "! ", "\n"]:
+        pos = truncated.rfind(sep)
+        if pos > max_chars // 2:
+            return truncated[:pos + 1].rstrip()
+    pos = truncated.rfind(" ")
+    if pos > max_chars // 2:
+        return truncated[:pos]
+    return truncated
+
+
+def _finalize_nuance_transcript(session_id: str, transcript_path: str):
+    """Finalize nuance transcript with both Hare and Codi turns.
+
+    Overwrites the incremental file (user-only) with the complete
+    version including Codi responses. If < MIN_TURNS, deletes the file.
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return
+
+    # Parse full transcript (all entries, no UUID filter)
+    entries, _ = parse_transcript(transcript_path, after_uuid=None)
+    if not entries:
+        return
+
+    # Build condensed turns
+    turns = []
+    for entry in entries:
+        role = entry["role"]
+        text = _truncate_at_sentence(entry["text"], NUANCE_MAX_TURN_CHARS)
+        if text.strip():
+            turns.append({
+                "role": role,
+                "text": text.strip(),
+                "ts": entry.get("timestamp", ""),
+            })
+
+    if len(turns) < NUANCE_MIN_TURNS:
+        # Session too short, clean up incremental file
+        filepath = os.path.join(PENDING_DIR, f"{session_id}.json")
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        return
+
+    data = {
+        "session_id": session_id,
+        "started_at": turns[0].get("ts", datetime.now().isoformat()),
+        "updated_at": datetime.now().isoformat(),
+        "finalized": True,
+        "turns": turns,
+    }
+
+    # Enforce size limit: drop oldest turns
+    serialized = json.dumps(data, ensure_ascii=False)
+    while len(serialized) > NUANCE_MAX_BYTES and len(data["turns"]) > 1:
+        data["turns"].pop(0)
+        serialized = json.dumps(data, ensure_ascii=False)
+
+    os.makedirs(PENDING_DIR, exist_ok=True)
+    filepath = os.path.join(PENDING_DIR, f"{session_id}.json")
+    with open(filepath, "w") as f:
+        f.write(serialized)
 
 
 if __name__ == '__main__':

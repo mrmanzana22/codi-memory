@@ -262,6 +262,9 @@ def _build_where(filters: Optional[dict], params: list, is_semantic: Optional[bo
                 clauses.append("is_semantic = TRUE")
             else:
                 clauses.append("is_semantic = FALSE")
+        elif key == "narrative_importance__not":
+            clauses.append("importance != %s")
+            params.append(value)
         elif key == "narrative_themes":
             # JSONB array containment: metadata->'narrative_themes' @> '["theme"]'
             clauses.append("metadata->'narrative_themes' @> %s::jsonb")

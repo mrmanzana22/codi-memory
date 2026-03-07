@@ -66,20 +66,60 @@ PROSPECTIVE_DB_PATH = os.path.join(os.path.dirname(FTS_DB_PATH), "prospective.db
 # ---------------------------------------------------------------------------
 # Centralized SQLite connection factory
 # ---------------------------------------------------------------------------
-_SQLITE_TIMEOUT = 10          # seconds to wait for lock
-_SQLITE_BUSY_TIMEOUT = 10000  # ms — PRAGMA busy_timeout
+_SQLITE_TIMEOUT = 30          # seconds to wait for lock
+_SQLITE_BUSY_TIMEOUT = 30000  # ms — PRAGMA busy_timeout
+
+
+class _PooledConn:
+    """Wraps a pooled SQLite connection so .close() never kills the pool conn.
+
+    With autocommit mode (isolation_level=None) in the pool, there are no
+    implicit transactions to commit. close() is a true no-op.
+    """
+    __slots__ = ('_real',)
+
+    def __init__(self, real: sqlite3.Connection):
+        object.__setattr__(self, '_real', real)
+
+    def close(self):
+        pass  # Pool manages lifecycle; autocommit handles writes
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def __setattr__(self, name, value):
+        if name == '_real':
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._real, name, value)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass  # No-op with autocommit
+
 
 def connect_fts(db_path: str = None) -> sqlite3.Connection:
-    """Create a SQLite connection with consistent timeout and WAL settings.
+    """Get a thread-local pooled SQLite connection with WAL and autocommit.
 
-    Use this instead of raw sqlite3.connect() throughout the codebase.
-    The caller is responsible for closing the connection.
-    For pooled (thread-local, never-close) connections, use db_pool.get_conn().
+    Returns a pooled connection wrapped so that .close() is a no-op.
+    All callers share the same connection per thread — no more leaks.
+    Falls back to a fresh connection if the pool import fails.
     """
-    conn = sqlite3.connect(db_path or FTS_DB_PATH, timeout=_SQLITE_TIMEOUT)
-    conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT}")
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    try:
+        from modules.db_pool import get_conn
+        return _PooledConn(get_conn(db_path or FTS_DB_PATH))
+    except Exception:
+        # Fallback: raw connection (during early init or circular import)
+        conn = sqlite3.connect(
+            db_path or FTS_DB_PATH,
+            timeout=_SQLITE_TIMEOUT,
+            isolation_level=None,  # AUTOCOMMIT — match pool behavior
+        )
+        conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT}")
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
 MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
 JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
 CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
@@ -201,7 +241,12 @@ TOPIC_KEYWORDS = {
     'codigo': ['codigo', 'python', 'javascript', 'programar', 'server.py'],
     'proyecto': ['proyecto', 'implementar', 'desarrollar', 'feature'],
     'configuracion': ['config', 'variable', 'entorno', 'setup', 'easypanel'],
-    'consciencia': ['consciencia', 'consciente', 'self-model', 'prediccion'],
+    'consciencia': [
+        'consciencia', 'consciente', 'self-model', 'prediccion',
+        'consciousness', 'awareness', 'metacognicion', 'metacognition',
+        'self_model', 'sleep_loop', 'reconsolidacion', 'reconsolidation',
+        'preturn', 'butlin', 'gwt', 'gnw', 'fok_calibration',
+    ],
 }
 
 TRIGGER_PRIORITY_ORDER = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']

@@ -106,7 +106,7 @@ def run_workspace_competition(
                 c.activation = min(1.0, c.activation + ATTENTION_FOCUS_BONUS)
 
     # Phase 2: Coalition formation (LIDA-inspired)
-    # Candidates from different domains converging on same topic get a bonus.
+    # Candidates from a single domain covering different topics get a bonus (diversity reward).
     _apply_coalition_bonus(candidates)
 
     # Phase 3: Ignition threshold (Dehaene & Changeux 2011)
