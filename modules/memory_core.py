@@ -10,7 +10,7 @@ from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
-from modules.config import USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso
+from modules.config import USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso, classify_topic as _classify_topic
 from modules.pg_store import pg
 from modules.config_pg import get_conn as get_pg_conn
 from modules.secret_redact import redact_secrets
@@ -669,7 +669,7 @@ def search_memory(query: str, limit: int = 5) -> str:
                     source_domain="episodic" if m["memory_type"] == "episodic" else "semantic",
                     activation=m["combined_score"],
                     memory_id=m["id"],
-                    metadata={"topic": query.split()[0] if query.split() else ""},
+                    metadata={"topic": _classify_topic(query)},
                 )
                 for m in merged
             ]
@@ -820,7 +820,7 @@ def search_memory(query: str, limit: int = 5) -> str:
             try:
                 with get_pg_conn() as _pg_conn:
                     init_failed_searches_table(_pg_conn)
-                    topic = query.split()[0] if query.split() else ""
+                    topic = _classify_topic(query)
                     log_failed_search(_pg_conn, query, retrieval_meta.result_count, retrieval_meta.top_activation, topic)
             except Exception:
                 pass

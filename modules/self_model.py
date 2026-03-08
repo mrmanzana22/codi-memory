@@ -212,13 +212,15 @@ def identify_knowledge_gaps() -> str:
             pass
 
         # Source 2: Low-confidence topics from retrieval buffer
+        # (#69: use classify_topic instead of word splitting — Loewenstein 1994)
         try:
             from modules.retrieval_metadata import get_retrieval_buffer
+            from modules.config import classify_topic
             for r in get_retrieval_buffer():
                 if r.coverage in ("sparse", "empty"):
-                    words = [w for w in r.query.lower().split() if len(w) > 3]
-                    if words:
-                        dynamic_themes.add(words[0])
+                    topic = classify_topic(r.query)
+                    if topic != "general":
+                        dynamic_themes.add(topic)
         except Exception:
             pass
 

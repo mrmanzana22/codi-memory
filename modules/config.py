@@ -251,6 +251,26 @@ TOPIC_KEYWORDS = {
 
 TRIGGER_PRIORITY_ORDER = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']
 
+
+def classify_topic(text: str) -> str:
+    """Classify text into a known topic using keyword matching.
+
+    Loewenstein 1994: Curiosity is driven by information gaps in specific
+    DOMAINS, not random words. Proper classification ensures gaps are
+    meaningful and actionable.
+
+    Returns topic string or 'general' if no match.
+    """
+    text_lower = text.lower()
+    scores = {}
+    for topic, keywords in TOPIC_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text_lower)
+        if score > 0:
+            scores[topic] = score
+    if not scores:
+        return "general"
+    return max(scores, key=scores.get)
+
 # ============================================================
 # PERFORMANCE CONTRACTS - p95/p99 latency budgets (ms)
 # ============================================================

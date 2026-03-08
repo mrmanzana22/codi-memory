@@ -123,7 +123,7 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     causal_chains_count = _extract_causal_chains()
 
     # Phase 2.7: Cross-topic bridging — dream creativity (S3-05)
-    bridge_edges = _phase_cross_topic_bridging(clusters)
+    bridge_edges = _phase_cross_topic_bridges(clusters)
 
     # Phase 2.8: Temporal renormalization (Sprint 12, PN-21)
     # Episode clusters → Events → Narratives → Themes
@@ -879,6 +879,107 @@ def _phase_graph_edges(clusters: list) -> int:
     return total_edges
 
 
+def _phase_cross_topic_bridges(clusters: list) -> int:
+    """Phase 2.7: Create cross-topic bridge edges between clusters.
+
+    Neuroscience basis:
+    - Walker & Stickgold 2004: Sleep enhances creative problem-solving
+      by integrating disparate memory traces
+    - Wagner et al. 2004: Sleep-dependent insight (hidden rules discovered
+      at 2x rate after sleep vs wake)
+    - Cai et al. 2009: REM primes associative networks for remote associations
+    - Lewis & Durrant 2011: Gist extraction across schemas during consolidation
+
+    Strategy:
+    1. Compute centroid for each cluster (using PG vectors)
+    2. Compare centroids between clusters of DIFFERENT topics
+    3. Create 'cross_topic_bridge' spreading_edges for pairs above threshold
+    """
+    BRIDGE_SIMILARITY_THRESHOLD = 0.55  # Lower than within-topic (0.7)
+    MAX_BRIDGES_PER_RUN = 10
+
+    if len(clusters) < 2:
+        return 0
+
+    # Step 1: Compute centroid embedding for each cluster via PG
+    centroids = []
+    for cluster in clusters:
+        ids = cluster.get("episode_ids", [])[:5]
+        topic = cluster.get("topic", "general")
+        if not ids:
+            continue
+        try:
+            pts = pg.get_by_ids(ids)
+            vecs = [p.vector for p in pts if getattr(p, "vector", None)]
+            if vecs:
+                centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(len(vecs[0]))]
+                centroids.append({
+                    "topic": topic,
+                    "centroid": centroid,
+                    "episode_ids": cluster["episode_ids"],
+                })
+        except Exception:
+            continue
+
+    # Step 2: Compare centroids between DIFFERENT topics
+    bridge_pairs = []
+    for i, a in enumerate(centroids):
+        for j, b in enumerate(centroids):
+            if j <= i or a["topic"] == b["topic"]:
+                continue
+            sim = _cosine_similarity(a["centroid"], b["centroid"])
+            if sim >= BRIDGE_SIMILARITY_THRESHOLD:
+                bridge_pairs.append((i, j, sim))
+
+    bridge_pairs.sort(key=lambda x: -x[2])
+    bridge_pairs = bridge_pairs[:MAX_BRIDGES_PER_RUN]
+
+    # Step 3: Create cross-topic bridge edges in PG spreading_edges
+    bridges_created = 0
+    from modules.utils import now_iso
+    ts = now_iso()
+
+    edge_conn = None
+    try:
+        from modules.config import connect_fts as _connect_fts
+        edge_conn = _connect_fts()
+        from modules.spreading import _init_edge_table, _record_edges
+        _init_edge_table(edge_conn)
+    except Exception:
+        edge_conn = None
+
+    for i, j, sim in bridge_pairs:
+        a_ids = centroids[i]["episode_ids"][:3]
+        b_ids = centroids[j]["episode_ids"][:3]
+
+        for aid in a_ids:
+            try:
+                pg.update_payload(aid, {
+                    "cross_topic_bridges": b_ids[:3],
+                })
+                if edge_conn:
+                    from modules.spreading import _record_edges
+                    _record_edges(edge_conn, aid, b_ids[:3], ts,
+                                  edge_type="cross_topic_bridge", strength=sim)
+                bridges_created += len(b_ids[:3])
+            except Exception:
+                pass
+
+    if edge_conn:
+        try:
+            edge_conn.close()
+        except Exception:
+            pass
+
+    if bridges_created > 0:
+        _logger.info(
+            "Cross-topic bridges: %d edges across %d pairs (threshold=%.2f)",
+            bridges_created, len(bridge_pairs), BRIDGE_SIMILARITY_THRESHOLD,
+        )
+
+    return bridges_created
+
+
 def _extract_causal_chains(fts_db_path: str = None) -> int:
     """Sprint 5.5: Phase 2.6 — Extract causal chains via BFS over causal edges.
 
@@ -980,89 +1081,8 @@ def _extract_causal_chains(fts_db_path: str = None) -> int:
         return 0
 
 
-# S3-05: Cross-topic similarity threshold for bridge edges
-BRIDGE_SIMILARITY_THRESHOLD = 0.55
 
 
-def _phase_cross_topic_bridging(clusters: list) -> int:
-    """Phase 2.7: Cross-topic bridging — dream creativity (S3-05).
-
-    Find cluster pairs with DIFFERENT topics but high semantic similarity.
-    Create 'bridge' typed edges between representative members.
-
-    Walker & Stickgold 2010: sleep promotes creative insight by forming
-    remote associations across topic boundaries. This is the "creative
-    dreamer" that was missing (Cycle 5 finding: 0 cross-topic edges).
-
-    Returns:
-        Number of bridge edges created.
-    """
-    if len(clusters) < 2:
-        return 0
-
-    from modules.config import FTS_DB_PATH
-
-    # Compute centroid embedding for each cluster (using cached embedder)
-    centroids = []
-    for cluster in clusters:
-        texts = cluster.get("texts", [])
-        representative = " ".join(texts[:3])[:500]
-        try:
-            vec = _embed_text_cached(representative)
-            centroids.append(vec)
-        except Exception:
-            centroids.append(None)
-
-    # Find cross-topic pairs with high similarity
-    bridges = []
-    for i in range(len(clusters)):
-        for j in range(i + 1, len(clusters)):
-            if clusters[i]["topic"] == clusters[j]["topic"]:
-                continue  # Same topic, not a bridge
-            if centroids[i] is None or centroids[j] is None:
-                continue
-            sim = _cosine_similarity(centroids[i], centroids[j])
-            if sim >= BRIDGE_SIMILARITY_THRESHOLD:
-                bridges.append((i, j, sim))
-
-    if not bridges:
-        return 0
-
-    # Create bridge edges in SQLite
-    edge_conn = None
-    try:
-        from modules.config import connect_fts as _connect_fts
-        edge_conn = _connect_fts()
-        from modules.spreading import _init_edge_table, _record_edges
-        _init_edge_table(edge_conn)
-    except Exception:
-        return 0
-
-    total_edges = 0
-    ts = now_iso()
-    for i, j, sim in bridges:
-        # Connect top 2 representatives from each cluster (bidirectional)
-        ids_i = clusters[i]["episode_ids"][:2]
-        ids_j = clusters[j]["episode_ids"][:2]
-        for mid_i in ids_i:
-            _record_edges(edge_conn, mid_i, ids_j, ts, edge_type="co_occurs")
-            total_edges += len(ids_j)
-        for mid_j in ids_j:
-            _record_edges(edge_conn, mid_j, ids_i, ts, edge_type="co_occurs")
-            total_edges += len(ids_i)
-
-    if edge_conn:
-        try:
-            edge_conn.close()
-        except Exception:
-            pass
-
-    if total_edges > 0:
-        _logger.info("Cross-topic bridges: %d edges across %d pairs (topics: %s)",
-                     total_edges, len(bridges),
-                     ", ".join(f"{clusters[i]['topic']}<->{clusters[j]['topic']}" for i, j, _ in bridges))
-
-    return total_edges
 
 
 def _phase_extraction(clusters: list) -> list:
