@@ -320,32 +320,74 @@ def clear_expired_labile():
 # CORRECT MEMORY (RECONSOLIDATION)
 # ============================================================
 
-def correct_memory(memory_id: str, correction: str, force: bool = False) -> str:
+def correct_memory(
+    memory_id: str, correction: str, force: bool = False,
+    confirm_token: str = "", confirm_code: str = "",
+) -> str:
     """Update a memory based on new evidence (reconsolidation).
 
     Nader 2000: The original trace is DESTROYED and re-synthesized.
     Sevenster 2013: Prediction error is a prerequisite for reconsolidation.
 
+    GUARDED: Requires two-step confirmation token (added 2026-03-08 after audit
+    identified this as the highest-risk unguarded destructive operation).
+
     Pipeline:
-      1. Resolve full ID
-      2. Retrieve old payload from pg_store
-      3. Labile gate: verify memory is labile OR has PE (force bypasses)
-      4. Log old content to reconsolidation_log
-      5. Adjust confidence (decrement by 0.1 for contradiction)
-      6. Build new content, generate new embedding
-      7. Update payload via pg_store (re-embed, not post-it)
-      8. Update FTS5 index
-      9. Emit RECONSOLIDATION_TRIGGERED event
+      1. Destructive guard check (two-step token)
+      2. Resolve full ID
+      3. Retrieve old payload from pg_store
+      4. Labile gate: verify memory is labile OR has PE (force bypasses)
+      5. Log old content to reconsolidation_log
+      6. Adjust confidence (decrement by 0.1 for contradiction)
+      7. Build new content, generate new embedding
+      8. Update payload via pg_store (re-embed, not post-it)
+      9. Update FTS5 index
+      10. Emit RECONSOLIDATION_TRIGGERED event
 
     Args:
         memory_id: ID (or prefix) of the memory to correct
         correction: The correct/updated information
         force: If True, bypass labile gate (for human-initiated corrections)
+        confirm_token: Two-step confirmation token from destructive_guard
+        confirm_code: Legacy confirmation code (deprecated)
 
     Returns:
         Summary of reconsolidation action
     """
+    from modules.destructive_guard import (
+        is_guard_enabled, compute_fingerprint,
+        request_confirmation, validate_and_consume, log_security_event,
+    )
     from modules.utils import resolve_memory_id as _resolve
+
+    tool = "correct_memory"
+    fp = compute_fingerprint(tool, memory_id=memory_id, correction=correction[:100])
+
+    if is_guard_enabled():
+        if not confirm_token:
+            # Step 1: Preview + issue token
+            preview = (
+                f"CORRECT MEMORY {memory_id[:12]}...\n"
+                f"New content: {correction[:200]}...\n"
+                f"Force: {force}"
+            )
+            token_info = request_confirmation(tool, fp)
+            log_security_event("destructive_preview", tool, payload_fingerprint=fp)
+            return (
+                f"CONFIRMACION REQUERIDA para correct_memory:\n{preview}\n\n"
+                f"Token: {token_info['confirm_token']}\n"
+                f"Expira en {token_info['ttl_seconds']}s.\n"
+                f"Llama de nuevo con confirm_token para ejecutar."
+            )
+        else:
+            # Step 2: Validate token
+            ok, msg = validate_and_consume(tool, confirm_token, fp)
+            if not ok:
+                log_security_event("destructive_rejected", tool,
+                                   outcome="token_invalid", payload_fingerprint=fp)
+                return f"[correct_memory] Token invalido o expirado: {msg}"
+            log_security_event("destructive_executed", tool,
+                               outcome="token_validated", payload_fingerprint=fp)
 
     # 1. Resolve full ID
     full_id = _resolve(memory_id)
