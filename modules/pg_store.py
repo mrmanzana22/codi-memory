@@ -511,25 +511,20 @@ class PGMemoryStore:
             return result.rowcount > 0
 
     def delete_many(self, memory_ids: list) -> int:
-        """Delete multiple memories by IDs. Returns count deleted."""
-        if not memory_ids:
-            return 0
-        with get_conn() as conn:
-            result = conn.execute(
-                "DELETE FROM memories WHERE id = ANY(%s)",
-                ([str(mid) for mid in memory_ids],),
-            )
-            return result.rowcount
+        """DISABLED: Bulk delete is too dangerous. Use delete() one by one.
+        Disabled after 20,859 memories were lost on 2026-03-03."""
+        raise RuntimeError(
+            "delete_many() is permanently disabled. "
+            "Use delete() for single-record deletion with audit trail."
+        )
 
     def delete_by_filter(self, filters: dict) -> int:
-        """Delete memories matching filter. Returns count deleted."""
-        params = []
-        where = _build_where(filters, params)
-        with get_conn() as conn:
-            # Use numbered params ($1, $2...)
-            sql = f"DELETE FROM memories WHERE {where}"
-            result = conn.execute(sql, params)
-            return result.rowcount
+        """DISABLED: Filter-based delete is too dangerous (empty filters = delete all).
+        Disabled after 20,859 memories were lost on 2026-03-03."""
+        raise RuntimeError(
+            "delete_by_filter() is permanently disabled. "
+            "Use delete() for single-record deletion with audit trail."
+        )
 
     # -----------------------------------------------------------------------
     # GET BY IDS (replaces qdrant.retrieve)

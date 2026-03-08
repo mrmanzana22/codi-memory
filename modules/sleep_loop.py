@@ -1252,6 +1252,46 @@ def _tick_backup(budget_ms: int) -> dict:
             except Exception as e:
                 parts.append(f"{db_name}: error {str(e)[:40]}")
 
+    # Backup PostgreSQL memories table (added after 20,859 memory loss on 2026-03-03)
+    pg_dir = os.path.join(backup_dir, '..', 'postgresql')
+    os.makedirs(pg_dir, exist_ok=True)
+    try:
+        from modules.config_pg import get_conn as _pg_get_conn
+        import csv
+        import io
+
+        pg_dst = os.path.join(pg_dir, f"memories-{window}.csv.gz")
+        with _pg_get_conn() as pg_conn:
+            cur = pg_conn.execute(
+                "SELECT id, content, is_semantic, category, importance, "
+                "created_at, updated_at, metadata::text "
+                "FROM memories ORDER BY created_at"
+            )
+            rows = cur.fetchall()
+
+        if rows:
+            import gzip as _gzip
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["id", "content", "is_semantic", "category",
+                             "importance", "created_at", "updated_at", "metadata"])
+            for row in rows:
+                writer.writerow(row)
+            compressed = _gzip.compress(buf.getvalue().encode("utf-8"))
+            with open(pg_dst, 'wb') as f:
+                f.write(compressed)
+            size_kb = round(len(compressed) / 1024)
+            parts.append(f"pg_memories: {len(rows)} rows, {size_kb}KB")
+
+            # Keep only last 3 PG backups
+            existing = sorted(glob_mod.glob(os.path.join(pg_dir, "memories-*.csv.gz")))
+            while len(existing) > 3:
+                os.remove(existing.pop(0))
+        else:
+            parts.append("pg_memories: 0 rows (EMPTY!)")
+    except Exception as e:
+        parts.append(f"pg_memories: error {str(e)[:50]}")
+
     # Upload to Supabase Storage (off-site backup)
     try:
         import gzip

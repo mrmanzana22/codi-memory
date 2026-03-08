@@ -1802,14 +1802,16 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
             "data": text,
         })
 
-    # Step 3: Delete trivial (batch)
+    # Step 3: Soft-delete trivial (mark as consolidated, DO NOT hard delete)
+    # Changed from pg.delete() after 20,859 memories were lost on 2026-03-03.
+    # Marking as consolidated makes them invisible to search but preserves data.
     trivial_deleted = 0
     for tid in trivial_ids:
         try:
-            pg.delete(tid)
+            pg.update_payload(tid, {"consolidated": True, "compression_tier": "trivial"})
             trivial_deleted += 1
         except Exception as e:
-            _logger.error("Checkpoint compression: delete failed: %s", e)
+            _logger.error("Checkpoint compression: soft-delete failed: %s", e)
 
     # Step 4: Compress progress by day
     summaries_created = 0

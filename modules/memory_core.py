@@ -1206,48 +1206,18 @@ def delete_by_content(search_query: str, dry_run: bool = False,
 
 def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
                        confirm_code: str = "") -> str:
-    """PELIGRO: Elimina TODOS los recuerdos. Requiere confirm_token (two-step)."""
+    """DESHABILITADO PERMANENTEMENTE. Esta funcion causo la perdida de 20,859 memorias
+    el 3 de marzo de 2026. No se permite su ejecucion bajo ninguna circunstancia."""
     tool = "clear_all_memories"
     fp = compute_fingerprint(tool)
-
-    if is_guard_enabled():
-        # Legacy bridge: confirm_code only if CODI_DESTRUCTIVE_LEGACY=on
-        if confirm_code == "DELETE_ALL_MEMORIES" and not confirm_token:
-            if is_legacy_enabled():
-                pass  # fall through to execute
-            else:
-                return (
-                    "GUARD: confirm_code ya no es suficiente. "
-                    "Llama sin parametros para obtener un confirm_token."
-                )
-
-        if dry_run:
-            return "[DRY RUN] clear_all_memories eliminaria TODAS las memorias del usuario."
-
-        if not confirm_token and confirm_code != "DELETE_ALL_MEMORIES":
-            token = request_confirmation(tool, fp)
-            return (
-                "GUARD: Esto eliminara TODAS las memorias.\n"
-                f"Para confirmar, llama con confirm_token='{token}'"
-            )
-
-        if confirm_token:
-            err = validate_and_consume(confirm_token, tool, fp)
-            if err:
-                return _pad_guard_blocked(err)
-
-    try:
-        with get_pg_conn() as conn:
-            conn.execute("DELETE FROM memories")
-        log_security_event("destructive_exec", tool, outcome="executed",
-                           payload_fingerprint=fp,
-                           details={"action": "clear_all"})
-        return "Todos los recuerdos han sido eliminados."
-    except Exception as e:
-        log_security_event("destructive_exec", tool, outcome="error",
-                           payload_fingerprint=fp,
-                           details={"action": "clear_all", "error": str(e)[:200]})
-        return f"Error: {redact_secrets(str(e))}"
+    log_security_event("destructive_blocked", tool, outcome="permanently_disabled",
+                       payload_fingerprint=fp,
+                       details={"reason": "Function disabled after catastrophic data loss 2026-03-03"})
+    return (
+        "BLOQUEADO PERMANENTEMENTE: clear_all_memories esta deshabilitado. "
+        "Esta funcion causo la perdida de 20,859 memorias el 3 de marzo 2026. "
+        "Si necesitas eliminar memorias, usa delete_memory() una por una."
+    )
 
 
 # ============================================================
