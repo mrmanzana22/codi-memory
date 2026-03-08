@@ -42,13 +42,6 @@ _EDGE_TYPE_WEIGHT = {
     'prevents': -0.5,     # A prevents B -> INHIBITORY (S2-6)
     'co_occurs': 0.0,     # Mere co-occurrence = ZERO spreading (S2-5, item 1.4)
     'confounded': 0.0,    # Confounded = do not propagate
-    # Legacy types (pre-migration 018, mapped to co_occurs semantics)
-    'similarity': 0.0,
-    'consolidated': 0.0,
-    'bridge': 0.0,
-    'outgoing': 0.0,
-    'temporal': 0.0,
-    'broadcast': 0.0,
 }
 
 
