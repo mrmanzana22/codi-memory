@@ -168,9 +168,11 @@ def get_bind_host() -> str:
     api_key = os.getenv("CODI_API_KEY", "").strip()
 
     if requested in ("0.0.0.0", "::"):
-        if not api_key:
+        has_allowed_hosts = bool(os.getenv("CODI_ALLOWED_HOSTS", "").strip())
+        if not api_key and not has_allowed_hosts:
             _logger.warning(
-                "CODI_SERVER_HOST=%s without CODI_API_KEY -- forcing 127.0.0.1",
+                "CODI_SERVER_HOST=%s without CODI_API_KEY or CODI_ALLOWED_HOSTS"
+                " -- forcing 127.0.0.1",
                 requested,
             )
             return "127.0.0.1"
