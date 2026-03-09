@@ -285,9 +285,9 @@ if __name__ == "__main__":
                 # 2b. MCP protocol paths (/sse, /messages) from allowed
                 # tunnel hosts skip API key auth. The tunnel URL itself
                 # serves as the access control (random, unguessable).
-                _MCP_PATHS = ("/sse", "/messages", "/messages/")
+                _MCP_PATHS = ("/sse", "/messages", "/messages/", "/mcp", "/mcp/")
                 _is_tunnel = hostname not in _DEFAULT_ALLOWED_HOSTS
-                if _is_tunnel and host_ok and path in _MCP_PATHS:
+                if _is_tunnel and host_ok and (path in _MCP_PATHS or path.startswith("/mcp")):
                     return await call_next(request)
 
                 ip = _client_ip(request)
@@ -544,20 +544,49 @@ if __name__ == "__main__":
                 _logger.error("api_search error: %s", e)
                 return JSONResponse({"error": redact_secrets(str(e))}, status_code=500)
 
+        # Streamable HTTP transport (for Codex CLI and modern MCP clients)
+        import contextlib
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        streamable_manager = StreamableHTTPSessionManager(
+            app=mcp._mcp_server,
+            stateless=False,
+        )
+
+        @contextlib.asynccontextmanager
+        async def lifespan(app):
+            async with streamable_manager.run():
+                yield
+
         port = int(os.getenv("PORT", 8000))
         host = get_bind_host()
         print(f"[codi-memory] Starting MCP server on {transport} transport, {host}:{port}")
+        print(f"[codi-memory] Transports: SSE at /sse, Streamable HTTP at /mcp")
         print(f"[codi-memory] Allowed hosts: {sorted(_allowed_hosts)}")
 
-        # Rutas: MCP en /, API HTTP para n8n, recordatorios, health
-        app = Starlette(routes=[
-            Route("/api/context", api_context, methods=["GET"]),
-            Route("/api/memory", api_memory, methods=["POST"]),
-            Route("/api/search", api_search, methods=["GET"]),
-            Route("/recordatorio", recibir_recordatorio, methods=["POST"]),
-            Route("/health", health, methods=["GET"]),
-            Mount("/", app=mcp.sse_app())
-        ], middleware=[Middleware(SecurityMiddleware)])
+        # Normalize /mcp -> /mcp/ so Mount matches (redirect breaks POST body)
+        class TrailingSlashMCP:
+            def __init__(self, app):
+                self.app = app
+            async def __call__(self, scope, receive, send):
+                if scope["type"] == "http" and scope["path"] == "/mcp":
+                    scope = dict(scope, path="/mcp/")
+                await self.app(scope, receive, send)
+
+        # Rutas: MCP SSE en /, Streamable HTTP en /mcp, API HTTP, health
+        inner = Starlette(
+            routes=[
+                Route("/api/context", api_context, methods=["GET"]),
+                Route("/api/memory", api_memory, methods=["POST"]),
+                Route("/api/search", api_search, methods=["GET"]),
+                Route("/recordatorio", recibir_recordatorio, methods=["POST"]),
+                Route("/health", health, methods=["GET"]),
+                Mount("/mcp", app=streamable_manager.handle_request),
+                Mount("/", app=mcp.sse_app())
+            ],
+            middleware=[Middleware(SecurityMiddleware)],
+            lifespan=lifespan,
+        )
+        app = TrailingSlashMCP(inner)
         uvicorn.run(app, host=host, port=port)
     else:
         mcp.run()

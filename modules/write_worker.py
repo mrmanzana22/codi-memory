@@ -264,7 +264,20 @@ def process_one_job(lease_seconds: int = DEFAULT_LEASE_SECONDS) -> bool:
 
     Returns True if a job was processed (or skipped), False if queue was empty.
     """
-    claimed = claim_next_job(lease_seconds=lease_seconds)
+    import sqlite3 as _sqlite3
+    for _attempt in range(3):
+        try:
+            claimed = claim_next_job(lease_seconds=lease_seconds)
+            break
+        except _sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and _attempt < 2:
+                _logger.warning("claim_next_job: database locked, retry %d/3", _attempt + 2)
+                import time as _time
+                _time.sleep(2 ** _attempt)  # 1s, 2s
+                continue
+            raise
+    else:
+        return False
     if not claimed:
         return False
 
