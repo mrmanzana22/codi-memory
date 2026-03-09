@@ -61,6 +61,8 @@ class Events:
     EMOTION_GATING_APPLIED = 'emotion_gating_applied'                        # HOT-4 runtime evidence (Bower 1981)
     AFFECTIVE_CHARGE_COMPUTED = 'affective_charge_computed'                     # Sprint 4: AC from policy shift (Joffily & Coricelli 2013)
     CURIOSITY_RESOLVED = 'curiosity_resolved'                                    # Curiosity discovery saved to long-term memory
+    MEMORY_VAULTED = 'memory_vaulted'
+    MEMORY_REACTIVATED = 'memory_reactivated'
 
 
 class EventBus:

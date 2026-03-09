@@ -368,12 +368,12 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         compute_fadem_strength, compute_fadem_strength_ss_rs,
         _get_hours_since_access,
         _get_emotional_arousal, _is_consolidated, _get_memory_type,
-        FADEM_FLOOR,
+        FADEM_FLOOR, should_enter_vault,
     )
+    from modules.events import event_bus, Events
 
     try:
         decayed_count = 0
-        preserved_count = 0
         fadem_count = 0
         total_scanned = 0
 
@@ -395,12 +395,13 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
         # Paginated scroll (same pattern as consolidation.py:208-267)
         offset = None
-        MAX_SCROLL = 500  # reduced for remote DB latency
+        MAX_SCROLL = 10000  # Bug #4 fix: was 500, only covered ~14% of memories
         pending_updates = []  # batch updates to avoid N+1 round-trips
+        vault_candidates = []
 
         while total_scanned < MAX_SCROLL:
             batch, next_offset = pg.scroll(
-                filters={"narrative_importance__not": "critical"},
+                filters={"narrative_importance__not": "critical", "is_dormant": False},
                 limit=200,
                 is_semantic=False,
                 offset=offset,
@@ -446,6 +447,12 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                 if new_salience < salience:
                     pending_updates.append((str(point.id), new_salience, new_ss, new_rs))
                     decayed_count += 1
+                    vault_payload = dict(point.payload or {})
+                    vault_payload["retrieval_strength"] = new_rs
+                    vault_payload["attention_salience"] = new_salience
+                    vault_payload["_chain_member"] = str(point.id) in _chain_members
+                    if should_enter_vault(vault_payload):
+                        vault_candidates.append(str(point.id))
 
             total_scanned += len(batch)
             if not next_offset:
@@ -466,6 +473,17 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                         (sal, ss_val, rs_val, _now, mid),
                     )
 
+        vaulted_count = 0
+        if vault_candidates:
+            unique_candidates = list(dict.fromkeys(vault_candidates))
+            vaulted_count = pg.batch_update_dormant(unique_candidates)
+            if vaulted_count:
+                try:
+                    for mid in unique_candidates[:vaulted_count]:
+                        event_bus.emit(Events.MEMORY_VAULTED, {"memory_id": mid})
+                except Exception:
+                    pass
+
         if total_scanned == 0:
             return "No hay memorias para aplicar decay."
 
@@ -475,7 +493,8 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         lines.append(f"**Con decay aplicado:** {decayed_count}")
         lines.append(f"**FadeMem curves:** {fadem_count}")
         lines.append(f"**Flat fallback:** {decayed_count - fadem_count}")
-        lines.append(f"**Preservadas (filtradas):** critical/high excluded via pre-filter")
+        lines.append(f"**Movidas al vault:** {vaulted_count}")
+        lines.append(f"**Preservadas (filtradas):** critical y dormant excluidas")
         return "\n".join(lines)
     except Exception as e:
         return f"Error aplicando decay: {redact_secrets(str(e))}"

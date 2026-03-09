@@ -228,6 +228,104 @@ class TestConsolidationDetection:
         assert _is_consolidated({"consolidated": False}) is False
 
 
+class TestMemoryVault:
+    """Vault admission and reactivation spacing logic."""
+
+    def test_should_enter_vault_for_old_weak_episodic_memory(self):
+        from modules.forgetting import should_enter_vault
+        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        payload = {
+            "created_at": ts,
+            "retrieval_strength": 0.11,
+            "narrative_importance": "medium",
+            "memory_type": "episodic",
+        }
+        assert should_enter_vault(payload) is True
+
+    def test_should_not_enter_vault_for_critical_memory(self):
+        from modules.forgetting import should_enter_vault
+        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        payload = {
+            "created_at": ts,
+            "retrieval_strength": 0.05,
+            "narrative_importance": "critical",
+        }
+        assert should_enter_vault(payload) is False
+
+    def test_should_not_enter_vault_for_semantic_memory(self):
+        from modules.forgetting import should_enter_vault
+        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        payload = {
+            "created_at": ts,
+            "retrieval_strength": 0.05,
+            "is_semantic": True,
+        }
+        assert should_enter_vault(payload) is False
+
+    def test_compute_reactivation_boost_increases_ss_and_sets_labile_rs(self):
+        from modules.forgetting import compute_reactivation_boost, VAULT_REACTIVATION_RS
+        boost = compute_reactivation_boost(ss=0.4, hours_dormant=24 * 21, reactivation_count=0)
+        assert boost["new_ss"] > 0.4
+        assert boost["new_rs"] == VAULT_REACTIVATION_RS
+        assert 0.0 < boost["new_activation"] <= 1.0
+
+    def test_reactivation_boost_has_diminishing_returns(self):
+        from modules.forgetting import compute_reactivation_boost
+        first = compute_reactivation_boost(ss=0.4, hours_dormant=24 * 21, reactivation_count=0)
+        repeated = compute_reactivation_boost(ss=0.4, hours_dormant=24 * 21, reactivation_count=4)
+        assert first["ss_gain"] > repeated["ss_gain"]
+
+    def test_should_not_enter_vault_for_causal_chain_member(self):
+        from modules.forgetting import should_enter_vault
+        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        payload = {
+            "created_at": ts,
+            "retrieval_strength": 0.05,
+            "narrative_importance": "medium",
+            "causal_links": [{"source": "a", "target": "b"}],
+        }
+        assert should_enter_vault(payload) is False
+
+    def test_should_not_enter_vault_for_young_memory(self):
+        from modules.forgetting import should_enter_vault
+        ts = (datetime.now() - timedelta(days=3)).isoformat()
+        payload = {
+            "created_at": ts,
+            "retrieval_strength": 0.05,
+            "narrative_importance": "medium",
+        }
+        assert should_enter_vault(payload) is False
+
+    def test_reactivation_spacing_bonus_scales_with_dormancy(self):
+        """Longer dormancy = larger SS gain (Cepeda et al. 2006)."""
+        from modules.forgetting import compute_reactivation_boost
+        short = compute_reactivation_boost(ss=0.3, hours_dormant=24, reactivation_count=0)
+        long = compute_reactivation_boost(ss=0.3, hours_dormant=24 * 60, reactivation_count=0)
+        assert long["ss_gain"] > short["ss_gain"]
+
+    def test_vault_probe_threshold_is_070(self):
+        """Contract: vault probe uses 0.70 similarity threshold (always-probe strategy).
+
+        The vault is probed on every search (not conditionally). Only hits with
+        cosine similarity >= 0.70 are reactivated. This threshold exists in
+        memory_core.py search_memory() and must remain high to avoid false
+        positives from the vector-only vault search.
+        """
+        import re
+        from pathlib import Path
+        core_path = Path(__file__).parent.parent / "modules" / "memory_core.py"
+        source = core_path.read_text()
+        # Verify the always-probe pattern (no conditional gate)
+        assert "if _query_embedding is not None:" in source, \
+            "Vault probe must be unconditional (always-probe strategy)"
+        # Verify threshold is 0.70
+        match = re.search(r'getattr\(hit, "score".*?< ([\d.]+)', source)
+        assert match, "Could not find vault similarity threshold in memory_core.py"
+        threshold = float(match.group(1))
+        assert threshold >= 0.65, f"Vault threshold {threshold} too low (min 0.65)"
+        assert threshold <= 0.85, f"Vault threshold {threshold} too high (max 0.85)"
+
+
 class TestCalibration:
     """Regression tests for expected decay values at key time points."""
 

@@ -3,7 +3,43 @@
     "descripcion": "Preguntas que Codi quiere explorar en sus sesiones autonomas",
     "creado": "2026-01-22"
   },
-  "pendientes": [],
+  "pendientes": [
+    {
+      "id": 52,
+      "pregunta": "Knowledge gap in 'memoria': confidence=0.29 (bajo)",
+      "categoria": "memoria",
+      "agregada": "2026-03-08 14:00",
+      "prioridad": "media"
+    },
+    {
+      "id": 53,
+      "pregunta": "Knowledge gap in 'aprendizaje': confidence=0.26 (bajo)",
+      "categoria": "aprendizaje",
+      "agregada": "2026-03-08 14:00",
+      "prioridad": "media"
+    },
+    {
+      "id": 54,
+      "pregunta": "Knowledge gap in 'desarrollo': confidence=0.32 (bajo)",
+      "categoria": "desarrollo",
+      "agregada": "2026-03-08 20:11",
+      "prioridad": "media"
+    },
+    {
+      "id": 55,
+      "pregunta": "Knowledge gap in 'proyectos': confidence=0.26 (bajo)",
+      "categoria": "proyectos",
+      "agregada": "2026-03-08 20:11",
+      "prioridad": "media"
+    },
+    {
+      "id": 56,
+      "pregunta": "Knowledge gap in 'identidad': confidence=0.37 (bajo)",
+      "categoria": "identidad",
+      "agregada": "2026-03-08 22:00",
+      "prioridad": "media"
+    }
+  ],
   "exploradas": [
     {
       "id": 1,

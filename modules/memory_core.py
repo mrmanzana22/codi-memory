@@ -30,6 +30,7 @@ from modules.retrieval_metadata import (
     wrap_retrieval_result, init_failed_searches_table, log_failed_search,
     metacognitive_control, compute_memory_confidence,
 )
+from modules.forgetting import compute_reactivation_boost
 
 
 # ============================================================
@@ -638,11 +639,87 @@ def search_memory(query: str, limit: int = 5) -> str:
                 "bm25_text": "",
             })
 
+        # Sort unified ranking
+        merged.sort(key=lambda x: -x["combined_score"])
+
+        # Vault probe: always check dormant memories for high-similarity matches.
+        # Unlike active search (3-channel hybrid), vault uses vector-only (Tulving 1983
+        # direct cue). Only reactivate if similarity >= 0.70 (strong match).
+        #
+        # WHY ALWAYS-PROBE (not conditional on poor active results):
+        #   With 3500+ memories, vector search returns scores > 0.35 even for garbage
+        #   queries. A conditional gate (e.g., "if top_score < 0.40") almost never
+        #   triggers, making the vault effectively unreachable. Always-probe with a
+        #   HIGH threshold (0.70) is the correct strategy: cheap (one HNSW query on
+        #   partial index) and precise (only truly matching dormant memories wake up).
+        #
+        # WHY 0.70 (not lower):
+        #   Cosine similarity on text-embedding-3-small 1536d: 0.70+ indicates strong
+        #   semantic match. Below that, false positives dominate. This threshold is
+        #   guarded by test_vault_probe_threshold_is_070 in test_forgetting.py.
+        #
+        # Neuroscience: Bjork & Bjork 1992 — dormant memories have high SS (storage
+        # strength) but RS=0. The vault probe provides the retrieval cue that
+        # reactivates RS, with spacing bonus (Cepeda et al. 2006).
+        if _query_embedding is not None:
+            try:
+                vault_hits = pg.search_vault(_query_embedding, limit=3)
+                for hit in vault_hits:
+                    if float(getattr(hit, "score", 0.0) or 0.0) < 0.70:
+                        continue
+
+                    hit_payload = hit.payload or {}
+                    boost = compute_reactivation_boost(
+                        ss=float(hit_payload.get("storage_strength", 0.3) or 0.3),
+                        hours_dormant=float(hit_payload.get("hours_dormant", 0.0) or 0.0),
+                        reactivation_count=int(hit_payload.get("reactivation_count", 0) or 0),
+                    )
+                    reactivated = pg.reactivate_memory(
+                        str(hit.id),
+                        boost["new_ss"],
+                        boost["new_rs"],
+                        boost["new_activation"],
+                    )
+                    if not reactivated:
+                        continue
+
+                    hit_payload["is_dormant"] = False
+                    hit_payload["dormant_at"] = ""
+                    hit_payload["reactivation_count"] = int(hit_payload.get("reactivation_count", 0) or 0) + 1
+                    hit_payload["storage_strength"] = boost["new_ss"]
+                    hit_payload["retrieval_strength"] = boost["new_rs"]
+                    hit_payload["attention_salience"] = boost["new_activation"]
+                    hit_payload["activation_score"] = boost["new_activation"]
+                    payload_map[str(hit.id)] = hit_payload
+
+                    merged.append({
+                        "id": str(hit.id),
+                        "combined_score": max(float(hit.score), boost["new_activation"]),
+                        "activation": boost["new_activation"],
+                        "memory_type": "episodic",
+                        "vector_result": {"id": str(hit.id), "memory": hit_payload.get("data", ""), "score": float(hit.score)},
+                        "bm25_text": "",
+                        "vault_reactivated": True,
+                        "skip_access_tracking": True,
+                    })
+
+                    try:
+                        event_bus.emit(Events.MEMORY_REACTIVATED, {
+                            "memory_id": str(hit.id),
+                            "query": query,
+                            "similarity": float(hit.score),
+                            "hours_dormant": float(hit_payload.get("hours_dormant", 0.0) or 0.0),
+                        })
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            merged.sort(key=lambda x: -x["combined_score"])
+
         if not merged:
             return "No encontre recuerdos relacionados."
 
-        # Sort unified ranking
-        merged.sort(key=lambda x: -x["combined_score"])
         merged = merged[:limit]
 
         # Emit emotion gating evidence if any memory scores were modified (HOT-4)
@@ -696,6 +773,8 @@ def search_memory(query: str, limit: int = 5) -> str:
             mid = item["id"]
             try:
                 if item["memory_type"] == "episodic":
+                    if item.get("skip_access_tracking"):
+                        continue
                     # Episodic: update ACT-R access timestamps in codi_memories
                     payload = payload_map.get(str(mid), {})
                     access_count = int(payload.get('attention_access_count', 0) or 0)
@@ -893,6 +972,8 @@ def search_memory(query: str, limit: int = 5) -> str:
 
                     if not text:
                         text = payload.get("data", payload.get("memory", ""))
+                    if item.get("vault_reactivated"):
+                        text = f"[VAULT] {text}"
 
                     # Per-memory confidence (Koriat 1997)
                     try:

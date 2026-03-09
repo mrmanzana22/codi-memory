@@ -171,6 +171,9 @@ def _row_to_point(row: dict, with_vectors: bool = False) -> Point:
         "access_count": row.get("access_count", 0),
         "storage_strength": row.get("storage_strength", 1.0),
         "retrieval_strength": row.get("retrieval_strength", 1.0),
+        "is_dormant": row.get("is_dormant", False),
+        "dormant_at": row["dormant_at"].isoformat() if row.get("dormant_at") else "",
+        "reactivation_count": row.get("reactivation_count", 0),
         "emotion_p": row.get("emotion_p", 0.0),
         "emotion_a": row.get("emotion_a", 0.0),
         "emotion_d": row.get("emotion_d", 0.0),
@@ -230,6 +233,7 @@ def _build_where(filters: Optional[dict], params: list, is_semantic: Optional[bo
         "source": "source",
         "importance": "importance",
         "is_semantic": "is_semantic",
+        "is_dormant": "is_dormant",
     }
 
     for key, value in filters.items():
@@ -274,6 +278,9 @@ def _build_where(filters: Optional[dict], params: list, is_semantic: Optional[bo
             if isinstance(value, dict):
                 mk = value.get("key", "")
                 mv = value.get("value", "")
+                # Sanitize mk: only allow alphanumeric + underscore (prevent SQL injection)
+                if not mk or not all(c.isalnum() or c == '_' for c in mk):
+                    continue
                 clauses.append(f"metadata->>'{mk}' = %s")
                 params.append(str(mv))
 
@@ -371,6 +378,7 @@ class PGMemoryStore:
         w_vector: float = 0.40,
         w_fts: float = 0.15,
         w_activation: float = 0.45,
+        include_dormant: bool = False,
     ) -> dict:
         """Hybrid RRF 3-channel search.
 
@@ -399,6 +407,8 @@ class PGMemoryStore:
         elif is_semantic is False:
             semantic_clause = "AND is_semantic = FALSE"
 
+        dormant_clause = "" if include_dormant else "AND COALESCE(is_dormant, FALSE) = FALSE"
+
         with get_conn() as conn:
             rows = conn.execute(
                 f"""
@@ -406,14 +416,14 @@ class PGMemoryStore:
                     SELECT id, content, category, source, importance,
                            is_semantic, confidence, evidence_count,
                            metadata, activation_score,
-                           storage_strength, retrieval_strength,
+                           storage_strength, retrieval_strength, is_dormant, dormant_at, reactivation_count,
                            emotion_p, emotion_a, emotion_d,
                            access_count, created_at, updated_at, last_accessed_at,
                            ROW_NUMBER() OVER (
                                ORDER BY embedding::halfvec(1536) <=> %(emb)s::halfvec(1536)
                            ) AS rank
                     FROM memories
-                    WHERE embedding IS NOT NULL {semantic_clause}
+                    WHERE embedding IS NOT NULL {semantic_clause} {dormant_clause}
                     LIMIT %(k_vec)s
                 ),
                 fts AS (
@@ -422,7 +432,7 @@ class PGMemoryStore:
                                ORDER BY ts_rank(fts_combined, to_tsquery('english', %(fts)s)) DESC
                            ) AS rank
                     FROM memories
-                    WHERE fts_combined @@ to_tsquery('english', %(fts)s) {semantic_clause}
+                    WHERE fts_combined @@ to_tsquery('english', %(fts)s) {semantic_clause} {dormant_clause}
                     LIMIT %(k_fts)s
                 ),
                 act AS (
@@ -431,7 +441,7 @@ class PGMemoryStore:
                                ORDER BY activation_score DESC
                            ) AS rank
                     FROM memories
-                    WHERE activation_score > 0.05 {semantic_clause}
+                    WHERE activation_score > 0.05 {semantic_clause} {dormant_clause}
                     LIMIT %(k_act)s
                 ),
                 combined AS (
@@ -451,7 +461,7 @@ class PGMemoryStore:
                        m.content, m.category, m.source, m.importance,
                        m.is_semantic, m.confidence, m.evidence_count,
                        m.metadata, m.activation_score,
-                       m.storage_strength, m.retrieval_strength,
+                       m.storage_strength, m.retrieval_strength, m.is_dormant, m.dormant_at, m.reactivation_count,
                        m.emotion_p, m.emotion_a, m.emotion_d,
                        m.access_count, m.created_at, m.updated_at, m.last_accessed_at
                 FROM combined c
@@ -490,7 +500,10 @@ class PGMemoryStore:
                     "activation": float(row[4]),
                 },
                 "activation_score": float(row[13] or 0),
-                "created_at": row[20].isoformat() if row[20] else "",
+                "is_dormant": bool(row[16]),
+                "dormant_at": row[17].isoformat() if row[17] else "",
+                "reactivation_count": int(row[18] or 0),
+                "created_at": row[23].isoformat() if row[23] else "",
             })
 
         return {"results": results}
@@ -552,6 +565,7 @@ class PGMemoryStore:
                            is_semantic, confidence, evidence_count,
                            metadata, activation_score, access_count,
                            storage_strength, retrieval_strength,
+                           is_dormant, dormant_at, reactivation_count,
                            emotion_p, emotion_a, emotion_d,
                            created_at, updated_at, last_accessed_at
                            {vec_col}
@@ -602,6 +616,7 @@ class PGMemoryStore:
                            is_semantic, confidence, evidence_count,
                            metadata, activation_score, access_count,
                            storage_strength, retrieval_strength,
+                           is_dormant, dormant_at, reactivation_count,
                            emotion_p, emotion_a, emotion_d,
                            created_at, updated_at, last_accessed_at
                            {vec_col}
@@ -627,6 +642,7 @@ class PGMemoryStore:
         is_semantic: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         with_vectors: bool = False,
+        include_dormant: bool = False,
     ) -> list[Point]:
         """Vector similarity search using HNSW halfvec index.
 
@@ -637,6 +653,8 @@ class PGMemoryStore:
             semantic_clause = "AND is_semantic = TRUE"
         elif is_semantic is False:
             semantic_clause = "AND is_semantic = FALSE"
+
+        dormant_clause = "" if include_dormant else "AND COALESCE(m.is_dormant, FALSE) = FALSE"
 
         threshold_clause = ""
         if score_threshold is not None:
@@ -652,12 +670,13 @@ class PGMemoryStore:
                            m.is_semantic, m.confidence, m.evidence_count,
                            m.metadata, m.activation_score, m.access_count,
                            m.storage_strength, m.retrieval_strength,
+                           m.is_dormant, m.dormant_at, m.reactivation_count,
                            m.emotion_p, m.emotion_a, m.emotion_d,
                            m.created_at, m.updated_at, m.last_accessed_at,
                            1 - (m.embedding::halfvec(1536) <=> %s::halfvec(1536)) AS score
                            {vec_col}
                     FROM memories m
-                    WHERE m.embedding IS NOT NULL {semantic_clause}
+                    WHERE m.embedding IS NOT NULL {semantic_clause} {dormant_clause}
                     ORDER BY m.embedding::halfvec(1536) <=> %s::halfvec(1536)
                     LIMIT %s
                     """,
@@ -785,6 +804,7 @@ class PGMemoryStore:
             "confidence", "evidence_count", "access_count",
             "category", "source", "importance", "content",
             "last_accessed_at", "updated_at",
+            "is_dormant", "dormant_at", "reactivation_count",
         }
 
         set_parts = []
@@ -854,8 +874,11 @@ class PGMemoryStore:
                 SELECT id AS memory_id, content, category, source, importance,
                        ts_rank(fts_combined, to_tsquery('english', %s)) AS bm25_rank
                 FROM memories
-                WHERE fts_combined @@ to_tsquery('english', %s)
-                   OR fts_combined @@ to_tsquery('spanish', %s)
+                WHERE (
+                    fts_combined @@ to_tsquery('english', %s)
+                    OR fts_combined @@ to_tsquery('spanish', %s)
+                )
+                  AND COALESCE(is_dormant, FALSE) = FALSE
                 ORDER BY bm25_rank DESC
                 LIMIT %s
                 """,
@@ -897,6 +920,97 @@ class PGMemoryStore:
                 """,
                 (memory_id, now, context[:200] if context else None),
             )
+
+    def search_vault(self, embedding: list, limit: int = 5) -> list[Point]:
+        """Vector-only search over dormant episodic memories."""
+        with get_conn() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                rows = cur.execute(
+                    """
+                    SELECT m.id, m.content, m.category, m.source, m.importance,
+                           m.is_semantic, m.confidence, m.evidence_count,
+                           m.metadata, m.activation_score, m.access_count,
+                           m.storage_strength, m.retrieval_strength,
+                           m.is_dormant, m.dormant_at, m.reactivation_count,
+                           m.emotion_p, m.emotion_a, m.emotion_d,
+                           m.created_at, m.updated_at, m.last_accessed_at,
+                           EXTRACT(EPOCH FROM (NOW() - m.dormant_at)) / 3600.0 AS hours_dormant,
+                           1 - (m.embedding::halfvec(1536) <=> %s::halfvec(1536)) AS score
+                    FROM memories m
+                    WHERE m.embedding IS NOT NULL
+                      AND COALESCE(m.is_dormant, FALSE) = TRUE
+                      AND m.is_semantic = FALSE
+                    ORDER BY m.embedding::halfvec(1536) <=> %s::halfvec(1536)
+                    LIMIT %s
+                    """,
+                    (embedding, embedding, limit),
+                ).fetchall()
+
+        points = []
+        for r in rows:
+            p = _row_to_point(r)
+            p.score = float(r["score"])
+            p.payload["hours_dormant"] = float(r.get("hours_dormant") or 0.0)
+            points.append(p)
+        return points
+
+    def reactivate_memory(
+        self,
+        memory_id: str,
+        new_ss: float,
+        new_rs: float,
+        new_activation: float,
+        context: str = "vault_reactivation",
+    ) -> bool:
+        """Wake a dormant memory back into active retrieval space."""
+        now = datetime.now(_COL_TZ)
+        with get_conn() as conn:
+            row = conn.execute(
+                """
+                UPDATE memories SET
+                    is_dormant = FALSE,
+                    dormant_at = NULL,
+                    reactivation_count = COALESCE(reactivation_count, 0) + 1,
+                    storage_strength = %s,
+                    retrieval_strength = %s,
+                    activation_score = %s,
+                    last_accessed_at = %s,
+                    access_count = access_count + 1,
+                    updated_at = %s
+                WHERE id = %s
+                RETURNING id
+                """,
+                (new_ss, new_rs, new_activation, now, now, memory_id),
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute(
+                """
+                INSERT INTO access_history (memory_id, accessed_at, context)
+                VALUES (%s, %s, %s)
+                """,
+                (memory_id, now, context[:200]),
+            )
+        return True
+
+    def batch_update_dormant(self, memory_ids: list[str]) -> int:
+        """Move active memories into the vault."""
+        if not memory_ids:
+            return 0
+        ids = [str(mid) for mid in memory_ids]
+        with get_conn() as conn:
+            result = conn.execute(
+                """
+                UPDATE memories SET
+                    is_dormant = TRUE,
+                    dormant_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ANY(%s)
+                  AND COALESCE(is_dormant, FALSE) = FALSE
+                """,
+                (ids,),
+            )
+            return result.rowcount or 0
 
     # -----------------------------------------------------------------------
     # BATCH OPERATIONS

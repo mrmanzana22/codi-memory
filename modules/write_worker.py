@@ -167,12 +167,19 @@ def _execute_remember(payload: dict) -> dict:
     if source in ("reflection", "prediction", "consolidation"):
         ms_source = "inferred"
 
-    result_str = add_memory_smart(
-        content=content,
-        category=category,
-        source=ms_source,
-        importance=importance,
-    )
+    # Bug #2 fix: remember() already pushed to WM at call time.
+    # Set flag so _on_memory_stored handler skips the duplicate push.
+    from modules.interface import _remember_ctx
+    _remember_ctx.wm_pushed = True
+    try:
+        result_str = add_memory_smart(
+            content=content,
+            category=category,
+            source=ms_source,
+            importance=importance,
+        )
+    finally:
+        _remember_ctx.wm_pushed = False
 
     result = json.loads(result_str) if isinstance(result_str, str) else result_str
     return {"action": result.get("action", "unknown"), "result": str(result_str)[:200]}

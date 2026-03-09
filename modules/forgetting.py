@@ -151,6 +151,12 @@ RS_BASE_DECAY = 0.01
 # RS power-law scale (matches FADEM_PL_SCALE)
 RS_PL_SCALE = 6.0
 
+# Vault threshold sits just above FadeMem floor so dormant memories stop
+# competing in normal retrieval but remain stored for cue-based reactivation.
+VAULT_RS_THRESHOLD = 0.12
+VAULT_MIN_AGE_DAYS = 7
+VAULT_REACTIVATION_RS = 0.6
+
 
 def compute_fadem_strength_ss_rs(
     ss: float,
@@ -287,6 +293,54 @@ def _get_memory_type(payload: dict) -> str:
     if payload.get("memory_type") == "semantic":
         return "semantic"
     return "episodic"
+
+
+def should_enter_vault(payload: dict) -> bool:
+    """Return True when a weak, old episodic memory should move to the vault."""
+    if not isinstance(payload, dict):
+        return False
+
+    if payload.get("is_dormant"):
+        return False
+
+    if payload.get("importance", payload.get("narrative_importance", "medium")) == "critical":
+        return False
+
+    if payload.get("is_semantic") or _get_memory_type(payload) == "semantic":
+        return False
+
+    if payload.get("causal_links") or payload.get("source_episode_ids") or payload.get("_chain_member"):
+        return False
+
+    hours_since_access = _get_hours_since_access(payload)
+    if hours_since_access is None or hours_since_access < (VAULT_MIN_AGE_DAYS * 24):
+        return False
+
+    rs = float(payload.get("retrieval_strength", payload.get("attention_salience", 0.0)) or 0.0)
+    return rs <= VAULT_RS_THRESHOLD
+
+
+def compute_reactivation_boost(
+    ss: float,
+    hours_dormant: float,
+    reactivation_count: int,
+) -> dict:
+    """Spacing-aware reactivation boost for a dormant memory."""
+    safe_ss = max(0.0, min(1.0, float(ss or 0.0)))
+    safe_hours = max(0.0, float(hours_dormant or 0.0))
+    safe_reactivations = max(0, int(reactivation_count or 0))
+
+    ss_gain = SS_LEARNING_RATE * math.log1p(safe_hours / 168.0) / (1.0 + 0.3 * safe_reactivations)
+    new_ss = min(1.0, safe_ss + ((1.0 - safe_ss) * ss_gain))
+    new_rs = VAULT_REACTIVATION_RS
+    new_activation = min(1.0, new_rs * (0.7 + 0.3 * new_ss))
+
+    return {
+        "new_ss": round(new_ss, 4),
+        "new_rs": round(new_rs, 4),
+        "new_activation": round(new_activation, 4),
+        "ss_gain": round(ss_gain, 4),
+    }
 
 
 # ============================================================

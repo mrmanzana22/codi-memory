@@ -451,8 +451,8 @@ def get_ollama_stats(task_type: Optional[str] = None, days: int = 7) -> dict:
         from modules.config_pg import get_conn
         _ensure_tables()
         with get_conn() as conn:
-            where = "WHERE created_at > NOW() - INTERVAL '%s days'" % days
-            params = []
+            where = "WHERE created_at > NOW() - make_interval(days => %s)"
+            params = [int(days)]
             if task_type:
                 where += " AND task_type = %s"
                 params.append(task_type)

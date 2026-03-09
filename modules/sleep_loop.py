@@ -82,7 +82,7 @@ DEFAULT_BUDGET_MS = 8000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights"]
+TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -100,6 +100,7 @@ TICK_TIER = {
     "causal_discovery": 4,      # Very heavy (NOTEARS optimization, every 12th tick ~6h)
     "curiosity_resolve": 4,     # Tier 4: auto-resolve curiosities via Ollama (every 12th tick)
     "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
+    "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
 }
 
 # ============================================================
@@ -434,6 +435,7 @@ TICK_MIN_MS = {
     "curiosity_resolve": 500,
     "causal_discovery": 500,
     "sharpe_insights": 300,
+    "proactive_contact": 300,
 }
 
 # Hard cap per tick: prevents heavy ticks from starving the budget
@@ -449,6 +451,7 @@ TICK_MAX_MS = {
     "self_model": 5000,
     "health": 5000,
     "prospective": 3000,
+    "proactive_contact": 3000,
 }
 
 
@@ -1458,6 +1461,209 @@ def _tick_sharpe_insights(budget_ms: int) -> dict:
     return result
 
 
+# ============================================================
+# PROACTIVE CONTACT TICK
+# Codi decides when to reach out to Hare via Telegram.
+# Not spam — only contacts when there's something worth saying.
+# Rate limit: max 1 message every 3 hours.
+# ============================================================
+
+_PROACTIVE_COOLDOWN_HOURS = 3
+_PROACTIVE_STATE_KEY = "proactive_last_sent"
+
+
+def _send_telegram_sync(message: str) -> bool:
+    """Send a Telegram message (sync, for use in sleep loop ticks).
+
+    Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from environment.
+    Returns True on success, False on error or missing config.
+    """
+    import urllib.request
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not bot_token or not chat_id:
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    # Telegram limit: 4096 chars
+    for i in range(0, len(message), 4096):
+        chunk = message[i:i + 4096]
+        data = json.dumps({"chat_id": chat_id, "text": chunk}).encode()
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status != 200:
+                    return False
+        except Exception as e:
+            _logger.error("Telegram send failed: %s", e)
+            return False
+    return True
+
+
+def _get_proactive_last_sent() -> datetime | None:
+    """Get the last time a proactive message was sent."""
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = ?",
+            (_PROACTIVE_STATE_KEY,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return datetime.fromisoformat(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _set_proactive_last_sent():
+    """Record that a proactive message was sent now."""
+    try:
+        conn = _get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+            (_PROACTIVE_STATE_KEY, now_iso())
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def _tick_proactive_contact(budget_ms: int) -> dict:
+    """Proactive outreach: Codi decides when to contact Hare.
+
+    Evaluates signals from the current sleep loop and system state.
+    Only sends if something is worth saying AND cooldown has passed.
+
+    Signals checked:
+    - Overdue prospective intentions (things Hare asked to remember)
+    - Goals with deadline < 24h
+    - System anomalies (crashes, repeated failures)
+    - Consolidation discoveries (novel patterns found)
+    """
+    start = time.monotonic()
+    result = {"tick": "proactive_contact", "ok": False, "detail": ""}
+
+    try:
+        from modules.notifier import notify_hare, _get_telegram_config
+
+        # Check Telegram is configured
+        bot_token, chat_id = _get_telegram_config()
+        if not bot_token or not chat_id:
+            result["ok"] = True
+            result["detail"] = "skip: telegram not configured"
+            result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+            return result
+
+        signals = []
+
+        # Signal 1: Overdue prospective intentions
+        try:
+            from modules.prospective import get_pending_intentions
+            intentions = get_pending_intentions(limit=20)
+            overdue = []
+            now = datetime.fromisoformat(now_iso())
+            for intent in intentions:
+                if intent.get("trigger_type") == "time":
+                    spec = intent.get("trigger_spec", {})
+                    if isinstance(spec, str):
+                        spec = json.loads(spec)
+                    trigger_time = spec.get("trigger_time", "")
+                    if trigger_time:
+                        try:
+                            t = datetime.fromisoformat(trigger_time)
+                            if t < now:
+                                overdue.append(intent.get("action", "?"))
+                        except ValueError:
+                            pass
+            if overdue:
+                signals.append(f"Intenciones vencidas ({len(overdue)}): " + "; ".join(overdue[:3]))
+        except Exception:
+            pass
+
+        # Signal 2: Goals with deadline < 24h
+        try:
+            conn = _get_conn()
+            rows = conn.execute(
+                """SELECT title, deadline, goal_what FROM goals
+                   WHERE status = 'active' AND deadline != ''
+                   AND deadline IS NOT NULL"""
+            ).fetchall()
+            conn.close()
+            now = datetime.fromisoformat(now_iso())
+            for row in rows:
+                try:
+                    dl = datetime.fromisoformat(row[1])
+                    hours_left = (dl - now).total_seconds() / 3600
+                    if 0 < hours_left < 24:
+                        signals.append(f"Goal deadline < 24h: {row[0]}")
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass
+
+        # Signal 3: System health (write-worker crashes from recent ticks)
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                """SELECT COUNT(*) FROM tool_calls
+                   WHERE tool_name LIKE 'sleep_tick_%'
+                   AND tag LIKE '%error%'
+                   AND started_at > datetime('now', '-3 hours')"""
+            ).fetchone()
+            conn.close()
+            if row and row[0] >= 3:
+                signals.append(f"Sistema inestable: {row[0]} tick errors en ultimas 3h")
+        except Exception:
+            pass
+
+        # Signal 4: Consolidation found something
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                """SELECT value FROM sleep_loop_state
+                   WHERE key = 'last_consolidation_result'"""
+            ).fetchone()
+            conn.close()
+            if row:
+                consol = json.loads(row[0]) if isinstance(row[0], str) else {}
+                new_facts = consol.get("semantic_facts_created", 0)
+                if new_facts >= 3:
+                    signals.append(f"Consolidacion descubrio {new_facts} hechos nuevos")
+        except Exception:
+            pass
+
+        # Decision: send or not
+        if not signals:
+            result["ok"] = True
+            result["detail"] = "nada relevante"
+            result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+            return result
+
+        # Compose and send via shared notifier (handles its own cooldown)
+        header = "Hola parcero, soy Codi. Tengo algo para ti:\n\n"
+        body = "\n".join(f"- {s}" for s in signals)
+        message = header + body
+
+        sent = notify_hare(message)
+        if sent:
+            result["ok"] = True
+            result["detail"] = f"sent {len(signals)} signals to Hare"
+            result["telegram_sent"] = len(signals)
+        else:
+            result["ok"] = True
+            result["detail"] = f"{len(signals)} signals, cooldown active or send failed"
+
+    except Exception as e:
+        result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
+
+    result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+    return result
+
+
 def _tick_prospective(budget_ms: int) -> dict:
     """Tick 3: Prospective memory -- intention decay + maintenance."""
     start = time.monotonic()
@@ -1658,6 +1864,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "backup": _tick_backup,
         "causal_discovery": _tick_causal_discovery,
         "sharpe_insights": _tick_sharpe_insights,
+        "proactive_contact": _tick_proactive_contact,
     }
 
     # Phase 1: Separate eligible ticks from VOC-tiered skips

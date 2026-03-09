@@ -1236,25 +1236,28 @@ def _compare_prediction(conn, prompt):
         conn.commit()
 
         # Track topic transitions for entropy-based precision (Friston 2010, Bogacz 2017)
+        # Bug #5 PCI fix: only record interactive transitions (sleep_loop inflates codigo→codigo)
         prev_actual_topic = None
-        try:
-            _prev = conn.execute("""
-                SELECT actual_topic FROM prediction_results
-                WHERE id < (SELECT MAX(id) FROM prediction_results)
-                ORDER BY id DESC LIMIT 1
-            """).fetchone()
-            if _prev:
-                prev_actual_topic = _prev[0]
-                conn.execute("""
-                    INSERT INTO transition_stats (from_topic, to_topic, count, last_seen)
-                    VALUES (?, ?, 1, ?)
-                    ON CONFLICT(from_topic, to_topic) DO UPDATE SET
-                        count = count + 1,
-                        last_seen = excluded.last_seen
-                """, (prev_actual_topic, actual_topic, now))
-                conn.commit()
-        except Exception:
-            pass
+        if source == 'interactive':
+            try:
+                _prev = conn.execute("""
+                    SELECT actual_topic FROM prediction_results
+                    WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                      AND id < (SELECT MAX(id) FROM prediction_results)
+                    ORDER BY id DESC LIMIT 1
+                """).fetchone()
+                if _prev:
+                    prev_actual_topic = _prev[0]
+                    conn.execute("""
+                        INSERT INTO transition_stats (from_topic, to_topic, count, last_seen)
+                        VALUES (?, ?, 1, ?)
+                        ON CONFLICT(from_topic, to_topic) DO UPDATE SET
+                            count = count + 1,
+                            last_seen = excluded.last_seen
+                    """, (prev_actual_topic, actual_topic, now))
+                    conn.commit()
+            except Exception:
+                pass
 
         # Check against adaptive threshold
         threshold = _get_adaptive_threshold(conn)

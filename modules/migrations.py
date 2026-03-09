@@ -86,6 +86,12 @@ def discover_migrations(migrations_dir: str) -> List[Tuple[str, str, str, str]]:
     return migrations
 
 
+def _is_sqlite_compatible(sql: str) -> bool:
+    """Return False for migrations explicitly marked as non-SQLite."""
+    header = "\n".join(sql.splitlines()[:5]).lower()
+    return "postgres-only" not in header
+
+
 def get_applied_versions(conn: sqlite3.Connection) -> dict:
     """Get dict of {version: checksum} for already-applied migrations."""
     _ensure_migrations_table(conn)
@@ -143,6 +149,10 @@ def apply_migrations(db_path: str, migrations_dir: str = "migrations") -> dict:
         result = {"applied": [], "skipped": [], "current_version": None}
 
         for version, name, sql, checksum in available:
+            if not _is_sqlite_compatible(sql):
+                result["skipped"].append(version)
+                continue
+
             if version in applied_versions:
                 # Verify checksum hasn't changed
                 stored_checksum = applied_versions[version]

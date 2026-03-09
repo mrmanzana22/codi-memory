@@ -1006,6 +1006,43 @@ def _on_attention_prediction_error(event_name: str, data: dict):
         _logger.error("_on_attention_prediction_error error: %s", redact_secrets(str(e)))
 
 
+def _register_proactive_handlers():
+    """Register event handlers for proactive Telegram notifications.
+
+    Hooks into high-signal events so Codi can reach out to Hare
+    in real-time, not just during sleep loop ticks.
+    """
+    def _on_consolidation_notify(event_name: str, data: dict):
+        """Notify Hare when consolidation discovers significant patterns."""
+        try:
+            new_facts = data.get("semantic_facts_created", 0)
+            if new_facts >= 3:
+                from modules.notifier import notify_hare
+                notify_hare(
+                    f"Parcero, acabo de consolidar memorias y descubri "
+                    f"{new_facts} hechos nuevos. Preguntame si quieres saber."
+                )
+        except Exception as e:
+            _logger.debug("proactive consolidation notify: %s", e)
+
+    def _on_high_prediction_error(event_name: str, data: dict):
+        """Notify on very high prediction errors (something unexpected)."""
+        try:
+            surprise = data.get("surprise_value", 0)
+            if surprise >= 0.8:
+                from modules.notifier import notify_hare
+                topic = data.get("topic", "desconocido")
+                notify_hare(
+                    f"Algo inesperado paso (surprise={surprise:.2f}, "
+                    f"tema={topic}). Puede que quieras revisar."
+                )
+        except Exception as e:
+            _logger.debug("proactive PE notify: %s", e)
+
+    event_bus.on(Events.CONSOLIDATION_COMPLETE, _on_consolidation_notify)
+    event_bus.on(Events.PREDICTION_ERROR, _on_high_prediction_error)
+
+
 def wire_event_bus():
     """Register all event handlers. Called from server.py at startup.
 
@@ -1060,6 +1097,12 @@ def wire_event_bus():
         register_reward_handlers()
     except Exception as e:
         _logger.warning("Reward handlers not loaded: %s", redact_secrets(str(e)))
+
+    # Bloque 5: Proactive notifications to Hare via Telegram
+    try:
+        _register_proactive_handlers()
+    except Exception as e:
+        _logger.warning("Proactive handlers not loaded: %s", redact_secrets(str(e)))
 
     _wired = True
     stats = event_bus.get_stats()
