@@ -14,6 +14,19 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código
 COPY server.py .
 COPY triggers.json .
+COPY mantenimiento.json .
+COPY libros.json .
+
+# Módulos (el cerebro completo)
+COPY modules/ modules/
+
+# Migraciones
+COPY migrations/ migrations/
+COPY migrations_prospective/ migrations_prospective/
+
+# Hooks
+COPY hooks/ hooks/
+
 RUN mkdir -p data
 
 # Variables de entorno

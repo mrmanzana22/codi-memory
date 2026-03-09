@@ -262,7 +262,14 @@ if __name__ == "__main__":
                 # 1. DNS rebinding protection (ALL routes, including /health)
                 host_header = request.headers.get("host", "")
                 hostname = parse_host_header(host_header)
-                if not hostname or hostname not in _allowed_hosts:
+                # Support wildcard suffixes: *.trycloudflare.com
+                host_ok = hostname in _allowed_hosts
+                if not host_ok:
+                    host_ok = any(
+                        a.startswith("*.") and hostname.endswith(a[1:])
+                        for a in _allowed_hosts
+                    )
+                if not hostname or not host_ok:
                     return JSONResponse(
                         {"error": "forbidden host"}, status_code=403
                     )
@@ -271,6 +278,14 @@ if __name__ == "__main__":
 
                 # 2. Health checks skip auth + rate-limit
                 if path == "/health":
+                    return await call_next(request)
+
+                # 2b. MCP protocol paths (/sse, /messages) from allowed
+                # tunnel hosts skip API key auth. The tunnel URL itself
+                # serves as the access control (random, unguessable).
+                _MCP_PATHS = ("/sse", "/messages", "/messages/")
+                _is_tunnel = hostname not in _DEFAULT_ALLOWED_HOSTS
+                if _is_tunnel and host_ok and path in _MCP_PATHS:
                     return await call_next(request)
 
                 ip = _client_ip(request)
