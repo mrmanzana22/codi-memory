@@ -151,7 +151,7 @@ def _hours_since(ts_val) -> float:
 def _effective_score(relevance, last_accessed_at, access_count, created_at):
     """Compute effective score in [0, 1]."""
     relevance = min(1.0, max(0.0, float(relevance or 0)))
-    ref_time = last_accessed_at or created_at
+    ref_time = created_at or last_accessed_at  # Proposal #116: use creation time, not last access (avoids self-reinforcing loop)
     hours = _hours_since(ref_time) if ref_time else 168.0
     recency = min(1.0, max(0.0, 1.0 - (hours / 168.0)))
     frequency = min(1.0, max(0.0, (access_count or 0) / 10.0))
