@@ -105,6 +105,14 @@ try:
 except Exception:
     _check_intentions = None
 
+# #115: Import PG working memory to replace frozen SQLite WM
+try:
+    from modules.working_memory import get_working_memory as _pg_get_working_memory
+    _use_pg_wm = True
+except Exception:
+    _pg_get_working_memory = None
+    _use_pg_wm = False
+
 try:
     from modules.competition import CompetitionCandidate as _CompetitionCandidate
     from modules.competition import run_workspace_competition as _run_workspace_competition
@@ -223,7 +231,20 @@ def search_fts_simple(conn, query, limit=MAX_FTS_RESULTS):
 
 
 def get_working_memory(conn, limit=MAX_WM_RESULTS):
-    """Get top active working memory items by relevance."""
+    """Get top active working memory items by relevance.
+
+    Post-pgvector migration (#115): reads from PostgreSQL via module import.
+    Falls back to SQLite if PG unavailable.
+    """
+    if _use_pg_wm and _pg_get_working_memory:
+        try:
+            import json as _json
+            result = _pg_get_working_memory()
+            items = _json.loads(result).get("items", [])[:limit]
+            return [(it["content"], it["topic"], it["relevance"]) for it in items]
+        except Exception:
+            pass  # Fall through to SQLite
+    # Fallback: SQLite (pre-migration data, frozen)
     try:
         cursor = conn.execute("""
             SELECT content, topic, relevance
