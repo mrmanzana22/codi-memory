@@ -57,6 +57,10 @@ m95_knowledge_import.json
 
 # Session trackers (hooks)
 hooks/.trackers/
+hooks/.pending_nuances/
+
+# Journal entries (runtime-generated markdown)
+markdown/journal/
 
 # Generated reports (not source)
 *_report.txt
