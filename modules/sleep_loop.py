@@ -852,27 +852,67 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
     return result
 
 
+def _dispatch_full_consolidation() -> str:
+    """Launch full consolidation as a background subprocess.
+
+    Returns a status string for the tick report.
+    Full consolidation runs outside the tick budget (~20-30 min)
+    with its own lockfile lifecycle.
+    """
+    import subprocess
+    from pathlib import Path
+
+    log_dir = Path.home() / ".codi-daemon" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stdout_log = log_dir / "full-consolidation.stdout.log"
+    stderr_log = log_dir / "full-consolidation.stderr.log"
+
+    # Pre-check: is another full consolidation already running?
+    from modules.consolidation_runner import acquire_lock, _read_lock
+    existing = _read_lock()
+    if existing:
+        from modules.consolidation_runner import _is_process_alive
+        pid = existing.get("pid", -1)
+        dispatched = existing.get("dispatched_at", "")
+        if _is_process_alive(pid, dispatched):
+            return f"full already running (pid={pid}, since {dispatched})"
+
+    # Launch subprocess
+    with open(stdout_log, "a") as out, open(stderr_log, "a") as err:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "modules.consolidation_runner", "--lookback", "24"],
+            stdout=out,
+            stderr=err,
+            cwd=BASE_DIR,
+            env={**os.environ, "CODI_USE_OLLAMA": os.environ.get("CODI_USE_OLLAMA", "true")},
+            start_new_session=True,  # detach from parent
+        )
+    return f"full dispatched (pid={proc.pid})"
+
+
 def _tick_consolidation(budget_ms: int) -> dict:
-    """Tick: Consolidation. Light every tick, full once per day at night."""
+    """Tick: Consolidation. Light runs inline; full dispatched as background job."""
     start = time.monotonic()
     result = {"tick": "consolidation", "ok": False, "detail": ""}
 
     try:
-        from modules.consolidation import run_consolidation
-
         if _should_run_full_consolidation():
-            scope = "full"
-            lookback = 24
+            # Full consolidation: dispatch as background subprocess
+            detail = _dispatch_full_consolidation()
+            elapsed = (time.monotonic() - start) * 1000
+            result["ok"] = True
+            result["scope"] = "full"
+            result["detail"] = detail
+            result["elapsed_ms"] = round(elapsed)
         else:
-            scope = "light"
-            lookback = 6
-
-        report = run_consolidation(scope=scope, lookback_hours=lookback)
-        elapsed = (time.monotonic() - start) * 1000
-        result["ok"] = True
-        result["scope"] = scope
-        result["detail"] = report[:200] if report else "no output"
-        result["elapsed_ms"] = round(elapsed)
+            # Light consolidation: run inline within budget
+            from modules.consolidation import run_consolidation
+            report = run_consolidation(scope="light", lookback_hours=6)
+            elapsed = (time.monotonic() - start) * 1000
+            result["ok"] = True
+            result["scope"] = "light"
+            result["detail"] = report[:200] if report else "no output"
+            result["elapsed_ms"] = round(elapsed)
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)

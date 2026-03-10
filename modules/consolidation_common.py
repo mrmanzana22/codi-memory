@@ -70,40 +70,6 @@ def _cosine_similarity(a: list, b: list) -> float:
         return 0.0
     return dot / (na * nb)
 
-
-# ============================================================
-# CODEX CLI (GPT-5.4 via ChatGPT Plus — free, best quality)
-# ============================================================
-
-import os as _os
-import subprocess as _sp
-import shutil as _shutil
-
-_CODEX_BIN = _shutil.which("codex")
-
-
-def _try_codex(prompt: str, timeout: int = 60) -> str | None:
-    """Try calling Codex CLI (GPT-5.4) for consolidation tasks.
-
-    Free with ChatGPT Plus subscription. Best instruction-following.
-    Returns response text on success, None if unavailable/failed.
-    """
-    if not _CODEX_BIN:
-        return None
-    try:
-        result = _sp.run(
-            [_CODEX_BIN, "exec", "-q", prompt],
-            capture_output=True, text=True, timeout=timeout,
-            env={**_os.environ, "CODEX_QUIET_MODE": "1"},
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        return None
-    except Exception as e:
-        _logger.debug("Codex CLI unavailable: %s", e)
-        return None
-
-
 # ============================================================
 # OLLAMA ROUTING (opt-in via CODI_USE_OLLAMA=true)
 # ============================================================

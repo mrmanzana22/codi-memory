@@ -643,13 +643,10 @@ def _llm_classify_edges(ids: list, texts: list) -> tuple:
     _DEFAULT_CONF = {"causes": 0.8, "enables": 0.7, "prevents": 0.8, "co_occurs": 0.5}
 
     try:
-        from modules.consolidation_common import _get_oai, _try_codex, _try_ollama
+        from modules.consolidation_common import _get_oai, _try_ollama
 
-        # Try Codex (GPT-5.4, free) → Ollama → OpenAI
-        codex_result = _try_codex(prompt)
-        if codex_result is not None:
-            raw = codex_result
-        elif (ollama_result := _try_ollama("edge_classify", prompt)) is not None:
+        # Ollama → OpenAI mini fallback
+        if (ollama_result := _try_ollama("edge_classify", prompt)) is not None:
             raw = ollama_result
         else:
             response = _get_oai().chat.completions.create(
@@ -1104,13 +1101,10 @@ def _phase_extraction(clusters: list) -> list:
         prompt = _build_extraction_prompt(topic, episodes_block, len(texts))
 
         try:
-            from modules.consolidation_common import _get_oai, _try_codex, _try_ollama
+            from modules.consolidation_common import _get_oai, _try_ollama
 
-            # Try Codex (GPT-5.4, free) → Ollama → OpenAI
-            codex_result = _try_codex(prompt)
-            if codex_result is not None:
-                raw = codex_result
-            elif (ollama_result := _try_ollama("semantic_extract", prompt)) is not None:
+            # Ollama → OpenAI mini fallback
+            if (ollama_result := _try_ollama("semantic_extract", prompt)) is not None:
                 raw = ollama_result
             else:
                 response = _get_oai().chat.completions.create(
@@ -1211,13 +1205,10 @@ Episodes:
 {episodes_block}"""
 
     try:
-        from modules.consolidation_common import _get_oai, _try_codex, _try_ollama
+        from modules.consolidation_common import _get_oai, _try_ollama
 
-        # Try Codex (GPT-5.4, free) → Ollama → OpenAI
-        codex_result = _try_codex(prompt)
-        if codex_result is not None:
-            raw = codex_result
-        elif (ollama_result := _try_ollama("self_extract", prompt)) is not None:
+        # Ollama → OpenAI mini fallback
+        if (ollama_result := _try_ollama("self_extract", prompt)) is not None:
             raw = ollama_result
         else:
             response = _get_oai().chat.completions.create(
@@ -1563,11 +1554,8 @@ def _phase_compression(scope: str = "full") -> dict:
         prompt = COMPRESSION_PROMPT.format(n=len(members), episodes=episodes_block)
 
         try:
-            # Try Codex (GPT-5.4, free) → Ollama → OpenAI
-            codex_result = _try_codex(prompt)
-            if codex_result is not None:
-                summary = codex_result
-            elif (ollama_result := _try_ollama("compress_episodes", prompt)) is not None:
+            # Ollama → OpenAI mini fallback
+            if (ollama_result := _try_ollama("compress_episodes", prompt)) is not None:
                 summary = ollama_result
             else:
                 response = _get_oai().chat.completions.create(
@@ -1858,11 +1846,8 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
         )
 
         try:
-            # Try Codex (GPT-5.4, free) → Ollama → OpenAI
-            codex_result = _try_codex(prompt)
-            if codex_result is not None:
-                summary_text = codex_result
-            elif (ollama_result := _try_ollama("compress_checkpoints", prompt)) is not None:
+            # Ollama → OpenAI mini fallback
+            if (ollama_result := _try_ollama("compress_checkpoints", prompt)) is not None:
                 summary_text = ollama_result
             else:
                 resp = oai.chat.completions.create(
