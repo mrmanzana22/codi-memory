@@ -1965,8 +1965,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
             tick_results.append(result)
 
-            # S4-05: Record tick timestamp + learn from observation
-            _record_tick_timestamp(name)
+            # S4-05: Learn from observation (only on success)
             if state_before and result.get("ok"):
                 try:
                     state_after = world_model.read_state()
@@ -1983,6 +1982,11 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
             })
             _log_tick_metric(name, 0, budget_ms, int(remaining_ms),
                              "error", type(e).__name__)
+
+        finally:
+            # Always record attempt timestamp (success, timeout, OR error)
+            # Prevents timestamps from freezing when ticks throw exceptions (#118)
+            _record_tick_timestamp(name)
 
     # S4-05: Persist learned effects for next run
     try:
