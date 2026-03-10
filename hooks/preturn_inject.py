@@ -1359,6 +1359,12 @@ def _generate_prediction(conn, prompt, wm_topics=None, backward_msg=None):
         fwd_total = sum(forward_counts.values()) or 1
         forward_dist = {t: forward_counts.get(t, LAPLACE_ALPHA) / fwd_total for t in all_topics}
 
+        # Entropy regularization: mix with uniform prior to prevent absorbing-state dominance.
+        # Without this, 'general' (62.5% base rate) collapses forward_dist → 80%,
+        # making predictions uninformative. Bayesian mixing (Rao & Ballard 1999).
+        _uniform = 1.0 / len(all_topics)
+        forward_dist = {t: 0.70 * forward_dist[t] + 0.30 * _uniform for t in all_topics}
+
         # === MESSAGE 2: BACKWARD (L1 session goal → L0 topic prior) ===
         # P(topic | session_goal) from L1, modulated by L2 meta-confidence
         backward_dist = {}

@@ -989,13 +989,26 @@ def detect_self_discrepancies() -> dict:
             pass
 
         # Record discrepancies to SQLite for trend analysis
+        # Dedup: skip if same domain+type recorded in last 8h (persistent gaps fire every tick)
+        try:
+            recent_rows = conn.execute(
+                "SELECT domain || '|' || discrepancy_type FROM self_discrepancies "
+                "WHERE created_at > datetime('now', '-8 hours')"
+            ).fetchall()
+            _recent_keys = {r[0] for r in recent_rows}
+        except Exception:
+            _recent_keys = set()
         ts = now_iso()
         for d in discrepancies:
+            _key = f"{d['domain']}|{d['discrepancy_type']}"
+            if _key in _recent_keys:
+                continue  # Already recorded recently — skip to avoid noise
             try:
                 conn.execute(
                     "INSERT INTO self_discrepancies (domain, expected, actual, discrepancy_type, magnitude, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                     (d["domain"], d["expected"], d["actual"], d["discrepancy_type"], d["magnitude"], ts)
                 )
+                _recent_keys.add(_key)  # Track within this batch
             except Exception:
                 pass
         conn.commit()
