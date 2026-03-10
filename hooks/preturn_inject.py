@@ -2080,7 +2080,7 @@ def _metacognitive_cycle(conn, turn_number):
                 f"Prediction accuracy degrading in these areas."
             )
             conn.execute("""
-                INSERT INTO working_memory (content, topic, relevance, active, created_at)
+                INSERT INTO working_memory (content, topic, relevance, active, added_at)
                 VALUES (?, 'metacognition', 0.9, 1, ?)
             """, (alert_content, now))
             wm_alert_pushed = True

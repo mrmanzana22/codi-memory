@@ -101,7 +101,8 @@ def check_reward(retrieved_ids: list) -> dict:
     from modules.config import FTS_DB_PATH, now_iso
 
     ts = now_iso()
-    cutoff = (datetime.now() - timedelta(seconds=REWARD_WINDOW_SEC)).isoformat()
+    from modules.config import now_col
+    cutoff = (now_col() - timedelta(seconds=REWARD_WINDOW_SEC)).isoformat()
 
     try:
         conn = get_conn(FTS_DB_PATH)
@@ -134,9 +135,9 @@ def expire_pending(max_rows: int = EXPIRE_BATCH_SIZE) -> int:
         Number of expired entries
     """
     from modules.db_pool import get_conn
-    from modules.config import FTS_DB_PATH
+    from modules.config import FTS_DB_PATH, now_col
 
-    cutoff = (datetime.now() - timedelta(seconds=REWARD_WINDOW_SEC)).isoformat()
+    cutoff = (now_col() - timedelta(seconds=REWARD_WINDOW_SEC)).isoformat()
 
     try:
         conn = get_conn(FTS_DB_PATH)
@@ -176,9 +177,9 @@ def get_channel_stats(lookback_hours: int = 24, topic: str = None) -> dict:
         {channel: {"successes": int, "failures": int, "total": int}}
     """
     from modules.db_pool import get_conn
-    from modules.config import FTS_DB_PATH
+    from modules.config import FTS_DB_PATH, now_col
 
-    cutoff = (datetime.now() - timedelta(hours=lookback_hours)).isoformat()
+    cutoff = (now_col() - timedelta(hours=lookback_hours)).isoformat()
 
     try:
         conn = get_conn(FTS_DB_PATH)
