@@ -726,7 +726,7 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
         accessibility = estimate_accessibility(query, fts_db_path)
         _acc_ms = (_time.monotonic() - _t_start) * 1000
 
-        if _acc_ms < 60:  # Only blend if accessibility completed in time budget
+        if _acc_ms < 3500:  # Proposal #111: pgvector p99 ~3022ms (was 60ms for local Qdrant)
             dual_alpha = _get_fok_dual_alpha(fts_db_path)
             fok = dual_alpha * familiarity + (1.0 - dual_alpha) * accessibility
             fok_process = "dual_process"
