@@ -1377,7 +1377,7 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
         try:
             # Sprint 9: BMR verification before pruning
             # Check that episode's information exists in semantic layer
-            episode_pts = pg.get_by_ids([eid])
+            episode_pts = pg.get_by_ids([eid], with_vectors=True)
             if not episode_pts:
                 pg.update_payload(eid, consolidation_payload)
                 marked += 1
@@ -1390,8 +1390,8 @@ def _phase_pruning(consolidated_episode_ids: list) -> dict:
                 marked += 1
                 continue
 
-            # Check if semantic layer has this information
-            ep_embedding = _embed_text(ep_text[:500])
+            # Reuse stored PG vector instead of regenerating embedding
+            ep_embedding = episode_pts[0].vector or _embed_text(ep_text[:500])
             if ep_embedding:
                 sem_pts = pg.query_vector(ep_embedding, limit=1, is_semantic=True)
                 if sem_pts:
