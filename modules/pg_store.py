@@ -193,7 +193,7 @@ def _row_to_point(row: dict, with_vectors: bool = False) -> Point:
     return Point(
         id=str(row.get("id", "")),
         payload=payload,
-        vector=list(row["embedding"]) if with_vectors and row.get("embedding") else None,
+        vector=list(row["embedding"]) if with_vectors and row.get("embedding") is not None else None,
         score=row.get("score", 0.0),
     )
 

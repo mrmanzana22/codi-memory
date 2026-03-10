@@ -456,7 +456,7 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
     member_ids = [m["id"] for m in members]
     try:
         pts = pg.get_by_ids(member_ids, with_vectors=True)
-        vec_map = {str(p.id): p.vector for p in pts if p.vector}
+        vec_map = {str(p.id): p.vector for p in pts if p.vector is not None}
     except Exception as e:
         _logger.error("Subcluster vector fetch failed for '%s': %s", topic, redact_secrets(str(e)))
         return [{
@@ -473,7 +473,7 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
     while len(unassigned) >= CONSOLIDATION_CLUSTER_MIN_SIZE:
         seed_id = next(iter(unassigned))
         seed_vec = vec_map.get(seed_id)
-        if not seed_vec:
+        if seed_vec is None:
             unassigned.discard(seed_id)
             continue
 
@@ -482,7 +482,7 @@ def _subcluster_by_vector(topic: str, members: list) -> list:
             if other_id == seed_id:
                 continue
             other_vec = vec_map.get(other_id)
-            if not other_vec:
+            if other_vec is None:
                 continue
             sim = _cosine_similarity(seed_vec, other_vec)
             if sim >= CONSOLIDATION_SIMILARITY_THRESHOLD:

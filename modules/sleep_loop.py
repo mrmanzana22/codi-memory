@@ -78,7 +78,7 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
 # ============================================================
 
 LOCK_FILE = os.path.join(DATA_DIR, "sleep_loop.lock")
-DEFAULT_BUDGET_MS = 8000
+DEFAULT_BUDGET_MS = 15000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
@@ -440,18 +440,18 @@ TICK_MIN_MS = {
 
 # Hard cap per tick: prevents heavy ticks from starving the budget
 TICK_MAX_MS = {
-    "consolidation": 30000,
-    "causal_discovery": 15000,
-    "curiosity": 10000,
-    "curiosity_resolve": 15000,
-    "backup": 10000,
-    "sharpe_insights": 8000,
-    "reconsolidation": 5000,
-    "homeostasis": 5000,
-    "self_model": 5000,
-    "health": 5000,
-    "prospective": 3000,
-    "proactive_contact": 3000,
+    "consolidation": 6000,       # was 30000 — must leave room for other ticks
+    "causal_discovery": 5000,    # was 15000
+    "curiosity": 3000,           # was 10000
+    "curiosity_resolve": 5000,   # was 15000
+    "backup": 5000,              # was 10000
+    "sharpe_insights": 3000,     # was 8000
+    "reconsolidation": 3000,     # was 5000
+    "homeostasis": 2000,         # was 5000
+    "self_model": 2000,          # was 5000
+    "health": 2000,              # was 5000
+    "prospective": 2000,         # was 3000
+    "proactive_contact": 2000,   # was 3000
 }
 
 

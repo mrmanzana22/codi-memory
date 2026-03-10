@@ -48,41 +48,27 @@ def _use_ollama() -> bool:
 # Task → Model mapping
 # ---------------------------------------------------------------------------
 TASK_MODEL_MAP = {
-    # Consolidation tasks
+    # Consolidation tasks (all use qwen3.5:4b — 9b was removed 2026-03-09)
     "edge_classify":        "qwen3.5:4b",
-    "semantic_extract":     "qwen3.5:9b",
-    "self_extract":         "qwen3.5:9b",
-    "compress_episodes":    "qwen3.5:9b",
+    "semantic_extract":     "qwen3.5:4b",
+    "self_extract":         "qwen3.5:4b",
+    "compress_episodes":    "qwen3.5:4b",
     "compress_checkpoints": "qwen3.5:4b",
     # Learning tasks
-    "resolve_curiosity":    "deepseek-r1:7b",
+    "resolve_curiosity":    "qwen3.5:4b",
     "mine_tool_patterns":   "qwen3.5:4b",
-    "study_simple":         "qwen3.5:9b",
-    "study_complex":        "deepseek-r1:7b",
-    "schema_extract":       "qwen3.5:9b",
+    "study_simple":         "qwen3.5:4b",
+    "study_complex":        "qwen3.5:4b",
+    "schema_extract":       "qwen3.5:4b",
 }
 
 # Model-specific options
 MODEL_OPTIONS = {
-    "qwen3.5:9b": {
+    "qwen3.5:4b": {
         "num_ctx": 8192,
         "num_predict": 2048,
         "top_k": 40,
         "top_p": 0.9,
-        "repeat_penalty": 1.0,
-    },
-    "qwen3.5:4b": {
-        "num_ctx": 4096,
-        "num_predict": 512,
-        "top_k": 40,
-        "top_p": 0.9,
-        "repeat_penalty": 1.0,
-    },
-    "deepseek-r1:7b": {
-        "num_ctx": 8192,
-        "num_predict": 4096,
-        "top_k": 40,
-        "top_p": 0.95,
         "repeat_penalty": 1.0,
     },
 }
