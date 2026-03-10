@@ -461,14 +461,15 @@ def compute_efe(
 ) -> float:
     """Compute Expected Free Energy G(a) for a single action.
 
-    G(a) = -pragmatic(a) + epistemic(a) + cost(a)
+    G(a) = -pragmatic(a) - epistemic(a) + cost(a)
 
     Lower G = better action. Active inference selects policies that
     minimize expected free energy (Friston 2017, Parr & Friston 2019).
 
     Components:
         pragmatic: alignment with preferred outcomes (exploit)
-        epistemic: expected information gain (explore)
+        epistemic: H[P(s'|s,a)] — transition entropy drives exploration.
+                   Higher entropy = more to learn = lower G (explore).
         cost: computational cost penalty
 
     Returns:
@@ -477,15 +478,15 @@ def compute_efe(
     # Pragmatic value: how close predicted outcomes are to preferences
     pragmatic = _compute_pragmatic_value(state, action, model)
 
-    # Epistemic value: expected uncertainty reduction (information gain)
+    # Epistemic value: transition entropy — higher = more informative action
     epistemic = _compute_epistemic_value(state, action, model)
 
     # Cost penalty (normalized 0-1)
     cost = action.cost
 
-    # G = -pragmatic + epistemic_uncertainty + cost
-    # Lower G = more pragmatic, less uncertain, less costly
-    return -pragmatic + epistemic + cost
+    # G = -pragmatic - epistemic + cost  (Friston 2017)
+    # Lower G = more pragmatic, more exploratory, less costly
+    return -pragmatic - epistemic + cost
 
 
 def select_action(
@@ -600,13 +601,13 @@ def _compute_epistemic_value(
     action: Action,
     model: GenerativeModel,
 ) -> float:
-    """Epistemic value: expected uncertainty after action.
+    """Epistemic value: expected information gain from action.
 
-    H[P(s'|s,a)] — entropy of predicted next state.
-    Higher entropy = more uncertainty = higher epistemic cost.
+    H[P(s'|s,a)] — entropy of predicted next state distribution.
+    Higher entropy = more uncertain transitions = more to learn.
 
-    Friston 2017: Epistemic value drives curiosity — actions that
-    reduce uncertainty have negative epistemic value (good).
+    Subtracted in EFE (Friston 2017): actions with uncertain outcomes
+    are preferred for exploration (curiosity-driven behavior).
     """
     return model.get_expected_uncertainty(state, action)
 
