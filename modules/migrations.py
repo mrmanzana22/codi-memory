@@ -9,7 +9,7 @@ Design:
   - Checksum (SHA256) detects modified migration files
   - Schema fingerprint detects drift in sqlite_master
   - One transaction per migration (rollback on failure)
-  - BEGIN IMMEDIATE for multi-process safety
+  - INSERT OR IGNORE for multi-process safety (BEGIN IMMEDIATE removed, see #108)
 
 Usage:
   from modules.migrations import apply_migrations
@@ -193,7 +193,9 @@ def apply_migrations(db_path: str, migrations_dir: str = "migrations") -> dict:
 
             try:
                 fingerprint = _compute_fingerprint(conn)
-                conn.execute("BEGIN IMMEDIATE")
+                # Proposal #108: removed BEGIN IMMEDIATE — executescript() auto-commits,
+                # so BEGIN IMMEDIATE can fail on SHARED locks (sleep_loop SELECTs)
+                # leaving migration applied but unregistered. INSERT OR IGNORE handles dupes.
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations "
                     "(version, name, checksum, schema_fingerprint) "
