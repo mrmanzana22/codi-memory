@@ -1817,6 +1817,20 @@ def _tick_health(budget_ms: int) -> dict:
     except Exception as e:
         parts.append(f"neuro: error {str(e)[:40]}")
 
+    # Operational health monitoring (v1: 3 rules, alerts only)
+    try:
+        from modules.health_monitor import run_health_check
+        hc_conn = connect_fts(os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db'))
+        now_iso = datetime.now(TZ_COL).isoformat()
+        hc = run_health_check(hc_conn, now_iso)
+        hc_conn.close()
+        if hc["alerts_fired"]:
+            parts.append(f"health_monitor: {hc['alerts_fired']} alerts fired")
+        else:
+            parts.append("health_monitor: all clear")
+    except Exception as e:
+        parts.append(f"health_monitor: error {redact_secrets(str(e))[:50]}")
+
     elapsed = (time.monotonic() - start) * 1000
     result["ok"] = True
     result["detail"] = "; ".join(parts)
