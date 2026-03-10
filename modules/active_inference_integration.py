@@ -208,7 +208,7 @@ _PERSIST_INTERVAL = 20
 _transitions_since_persist = 0
 
 
-def _on_memory_stored(payload: dict):
+def _on_memory_stored(event_name: str, payload: dict):
     """Handler: learn that a STORE action happened."""
     global _transitions_since_persist
     observe_and_record("store")
@@ -216,7 +216,7 @@ def _on_memory_stored(payload: dict):
     _maybe_persist()
 
 
-def _on_memory_retrieved(payload: dict):
+def _on_memory_retrieved(event_name: str, payload: dict):
     """Handler: learn that a RETRIEVE action happened."""
     global _transitions_since_persist
     observe_and_record("retrieve")
@@ -224,7 +224,7 @@ def _on_memory_retrieved(payload: dict):
     _maybe_persist()
 
 
-def _on_consolidation_complete(payload: dict):
+def _on_consolidation_complete(event_name: str, payload: dict):
     """Handler: learn that CONSOLIDATE happened."""
     global _transitions_since_persist
     observe_and_record("consolidate")
@@ -232,7 +232,7 @@ def _on_consolidation_complete(payload: dict):
     _maybe_persist()
 
 
-def _on_prediction_error(payload: dict):
+def _on_prediction_error(event_name: str, payload: dict):
     """Handler: PE signals exploration was happening.
 
     High PE = the system was exploring/attending to something uncertain.
