@@ -550,6 +550,15 @@ def cli_main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    # Register active inference event handlers so transitions are learned
+    # from memory operations processed by this worker (async write mode).
+    # Da Costa et al. 2020: parameter learning from ALL transitions.
+    try:
+        from modules.active_inference_integration import register_event_handlers
+        register_event_handlers()
+    except Exception:
+        pass  # AI integration is optional, never block worker startup
+
     if args.once:
         did_work = process_one_job()
         _logger.info("%s", "Processed 1 job" if did_work else "Queue empty")
