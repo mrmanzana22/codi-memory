@@ -11,6 +11,7 @@ Field: attention_salience (float, default 0.5, clamped to [FLOOR..CAP]).
 """
 
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -24,6 +25,8 @@ from modules.config import (
 from modules.pg_store import pg
 from modules.utils import resolve_memory_id
 from modules.secret_redact import redact_secrets
+
+_logger = logging.getLogger(__name__)
 
 # SQLite edge index for bidirectional lookup
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -145,8 +148,13 @@ def is_causal_chain_member(point_id: str, fts_db_path: str = None) -> bool:
 
         conn.close()
         return bool(has_incoming)
-    except Exception:
-        return False
+    except sqlite3.Error as exc:
+        _logger.exception(
+            "Failed causal chain membership lookup for point_id=%s db=%s",
+            point_id,
+            fts_db_path,
+        )
+        raise
 
 
 def get_chain_member_ids(fts_db_path: str = None) -> set:
@@ -180,8 +188,12 @@ def get_chain_member_ids(fts_db_path: str = None) -> set:
         conn.close()
         # Chain members = intersection (have both in and out)
         return outgoing & incoming
-    except Exception:
-        return set()
+    except sqlite3.Error as exc:
+        _logger.exception(
+            "Failed batch causal chain member lookup for db=%s",
+            fts_db_path,
+        )
+        raise
 
 
 def _get_incoming_neighbors(conn, point_id: str, limit: int = None) -> list:

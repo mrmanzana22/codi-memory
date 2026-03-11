@@ -940,8 +940,8 @@ def _on_perf_budget_violation(event_name: str, data: dict):
     """S3-04: Performance budget exceeded — log warning, push to WM."""
     try:
         from modules.working_memory import push_to_working_memory
-        tool = data.get("tool", "unknown")
-        elapsed_ms = data.get("elapsed_ms", 0)
+        tool = data.get("tool_name", "unknown")
+        elapsed_ms = data.get("duration_ms", 0)
         budget_ms = data.get("budget_ms", 0)
         push_to_working_memory(
             content=f"[PERF ALERT] {tool} took {elapsed_ms}ms (budget: {budget_ms}ms)",

@@ -76,10 +76,19 @@ atexit.register(drain_sync_compares)
 def _get_write_mode() -> str:
     mode = os.environ.get("CODI_WRITE_MODE", "").strip().lower()
     if mode:
-        return mode
+        if mode in VALID_WRITE_MODES:
+            return mode
+        _logger.warning("Invalid CODI_WRITE_MODE=%r; defaulting to 'sync'", mode)
+        return "sync"
     try:
         with open(_WRITE_MODE_FILE) as f:
-            return f.read().strip().lower() or "sync"
+            fmode = f.read().strip().lower()
+            if not fmode:
+                return "sync"
+            if fmode in VALID_WRITE_MODES:
+                return fmode
+            _logger.warning("Invalid write mode in %s: %r; defaulting to 'sync'", _WRITE_MODE_FILE, fmode)
+            return "sync"
     except FileNotFoundError:
         return "sync"
 
@@ -242,6 +251,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
 
     results: List[Dict[str, Any]] = []
     pretty_lines: List[str] = [f"# RECALL\n\n**Query:** {query}\n**Mode:** {mode}\n"]
+    partial_sources: List[str] = []
 
     # Heuristic routing
     q = (query or "").strip()
@@ -258,7 +268,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         proj = q
         if ":" in q:
             proj = q.split(":", 1)[1].strip()
-        out = get_project_timeline(proj, limit=max(20, limit))
+        out = get_project_timeline(proj, limit=limit)
         add_result("get_project_timeline", out, {"project": proj})
         pretty_lines.append("## Timeline\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
@@ -267,7 +277,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         theme = q
         if q_low.startswith("tema:") or q_low.startswith("theme:"):
             theme = q.split(":", 1)[1].strip()
-        out = search_by_theme(theme, limit=max(10, limit))
+        out = search_by_theme(theme, limit=limit)
         add_result("search_by_theme", out, {"theme": theme})
         pretty_lines.append("## Por tema\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
@@ -289,7 +299,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
                 min_conf = float(m_conf.group(1))
             except Exception:
                 min_conf = 0.0
-        out = search_by_ownership(source=src, min_confidence=min_conf, importance=imp, limit=max(10, limit))
+        out = search_by_ownership(source=src, min_confidence=min_conf, importance=imp, limit=limit)
         add_result("search_by_ownership", out, {"source": src, "importance": imp, "min_confidence": min_conf})
         pretty_lines.append("## Por ownership\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
@@ -322,7 +332,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         emo = q_low.strip()
         if ":" in q_low:
             emo = q_low.split(":", 1)[1].strip()
-        out = search_by_emotion(emo, threshold=0.3, limit=max(10, limit))
+        out = search_by_emotion(emo, threshold=0.3, limit=limit)
         add_result("search_by_emotion", out, {"emotion": emo})
         pretty_lines.append("## Por emocion\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
@@ -342,8 +352,15 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         if hits:
             add_result("working_memory_hits", json.dumps(hits, ensure_ascii=False), {"hits": len(hits)})
             pretty_lines.append("## Working Memory (matches)\n" + "\n".join([f"- {h.get('content','')}" for h in hits[:10]]))
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError, TypeError, AttributeError) as exc:
+        _logger.warning("recall() working memory scan failed: %s", exc)
+        partial_sources.append("working_memory")
+        add_result(
+            "working_memory_error",
+            "Working memory unavailable during recall; results are partial.",
+            {"error_type": type(exc).__name__},
+        )
+        pretty_lines.append("## Working Memory\nUnavailable during recall (partial results).")
 
     # 2) General hybrid memory search (safe default)
     out = search_memory(q, limit=limit)
@@ -356,7 +373,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         if any(k in q_low for k in ["tema:", "theme:", "proyecto", "fase ", "roadmap", "feature"]):
             try:
                 theme = q.split(":", 1)[1].strip() if ":" in q else q
-                out2 = search_by_theme(theme, limit=max(10, limit))
+                out2 = search_by_theme(theme, limit=limit)
                 add_result("search_by_theme", out2, {"theme": theme})
                 pretty_lines.append("\n## (Auto) Por tema\n" + out2)
             except Exception:
@@ -364,7 +381,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         # ownership cues
         if any(k in q_low for k in ["experienced", "told", "learned", "inferred", "source="]):
             try:
-                out3 = search_by_ownership(limit=max(10, limit))
+                out3 = search_by_ownership(limit=limit)
                 add_result("search_by_ownership", out3, {})
                 pretty_lines.append("\n## (Auto) Ownership\n" + out3)
             except Exception:
@@ -373,7 +390,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         if any(k in q_low for k in ["anxious", "hostile", "relaxed", "bored", "exuberant", "dependent", "docile", "disdainful", "emocion:"]):
             try:
                 emo = q_low.split(":", 1)[1].strip() if "emocion:" in q_low else q_low
-                out4 = search_by_emotion(emo, threshold=0.3, limit=max(10, limit))
+                out4 = search_by_emotion(emo, threshold=0.3, limit=limit)
                 add_result("search_by_emotion", out4, {"emotion": emo})
                 pretty_lines.append("\n## (Auto) Emocion\n" + out4)
             except Exception:
@@ -389,7 +406,13 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
     except Exception:
         pass
 
-    return _json_response("\n".join(pretty_lines), results=results, count=len(results))
+    return _json_response(
+        "\n".join(pretty_lines),
+        results=results,
+        count=len(results),
+        partial=bool(partial_sources),
+        partial_sources=partial_sources,
+    )
 
 
 def remember(content: str, importance: str = "auto", topic: str = "general",

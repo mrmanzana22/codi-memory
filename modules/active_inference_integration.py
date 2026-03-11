@@ -51,6 +51,7 @@ _logger = logging.getLogger(__name__)
 _model: Optional[GenerativeModel] = None
 _prev_state: Optional[SystemState] = None
 _prev_action: Optional[Action] = None
+_last_persist_error: Optional[str] = None
 
 # Sprint 4, item 4.1: AC state tracking
 _prior_policy: Optional[Dict[str, float]] = None  # Policy BEFORE observation
@@ -87,17 +88,26 @@ def get_model() -> GenerativeModel:
     """
     global _model
     if _model is None:
+        conn = None
         try:
             conn = _get_conn()
             _model = GenerativeModel.load(conn)
-            conn.close()
             _logger.info(
                 "Loaded generative model: %d observations",
                 _model.observation_count,
             )
-        except Exception as e:
-            _logger.warning("Could not load generative model: %s", e)
+        except sqlite3.OperationalError as e:
+            if "no such table" not in str(e).lower():
+                _logger.exception("Failed to load generative model")
+                raise
+            _logger.info("Generative model table missing; initializing empty model")
             _model = GenerativeModel()
+        except Exception:
+            _logger.exception("Failed to load generative model")
+            raise
+        finally:
+            if conn is not None:
+                conn.close()
     return _model
 
 
@@ -125,6 +135,8 @@ def observe_and_record(action_name: str) -> Optional[SystemState]:
     if action is None:
         _logger.warning("Unknown action: %s", action_name)
         _prev_state = current
+        _prev_action = None  # Clear stale action to prevent corrupt transitions
+        _prior_policy = None  # Clear stale policy so next AC is not computed across an unknown action
         return current
 
     model = get_model()
@@ -153,14 +165,18 @@ def observe_and_record(action_name: str) -> Optional[SystemState]:
         # Emit AC event for emotion module
         try:
             from modules.events import event_bus, Events
-            event_bus.emit(Events.AFFECTIVE_CHARGE_COMPUTED, {
-                "ac": round(ac, 4),
-                "action": action_name,
-                "state_topic": current.topic,
-                "pe_magnitude": current.pe_magnitude,
-            })
-        except Exception:
-            pass
+        except ImportError:
+            _logger.warning("Affective charge computed but event bus is unavailable")
+        else:
+            try:
+                event_bus.emit(Events.AFFECTIVE_CHARGE_COMPUTED, {
+                    "ac": round(ac, 4),
+                    "action": action_name,
+                    "state_topic": current.topic,
+                    "pe_magnitude": current.pe_magnitude,
+                })
+            except Exception:
+                _logger.exception("Failed to emit affective charge event")
 
     # Store current policy as prior for NEXT observation
     _prior_policy = posterior_policy
@@ -181,22 +197,33 @@ def get_ac_history() -> list:
     return list(_ac_history)
 
 
+def get_last_persist_error() -> Optional[str]:
+    """Return the last persistence error, if any."""
+    return _last_persist_error
+
+
 def persist_model() -> int:
     """Save the current model to SQLite.
 
     Called periodically (e.g., after N transitions or at session end).
     Returns number of rows written.
     """
+    global _last_persist_error
     model = get_model()
+    conn = None
     try:
         conn = _get_conn()
         rows = model.persist(conn)
-        conn.close()
+        _last_persist_error = None
         _logger.info("Persisted generative model: %d rows", rows)
         return rows
     except Exception as e:
-        _logger.error("Failed to persist model: %s", e)
-        return 0
+        _last_persist_error = f"{type(e).__name__}: {e}"
+        _logger.exception("Failed to persist model")
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 # ============================================================
@@ -238,7 +265,12 @@ def _on_prediction_error(event_name: str, payload: dict):
     High PE = the system was exploring/attending to something uncertain.
     """
     global _transitions_since_persist
-    pe = payload.get("surprise", 0.0)
+    # Use explicit None checks — 0.0 is a valid PE value, not falsy
+    pe = payload.get("error_magnitude")
+    if pe is None:
+        pe = payload.get("confidence")
+    if pe is None:
+        pe = payload.get("surprise", 0.0)
     if pe > 0.5:
         observe_and_record("explore")
     else:
@@ -251,8 +283,38 @@ def _maybe_persist():
     """Persist model to SQLite every N transitions."""
     global _transitions_since_persist
     if _transitions_since_persist >= _PERSIST_INTERVAL:
-        persist_model()
-        _transitions_since_persist = 0
+        try:
+            rows = persist_model()
+        except Exception:
+            _logger.error(
+                "Generative model persistence failed; learned transitions remain in memory only"
+            )
+            return
+        if rows > 0:
+            _transitions_since_persist = 0
+
+
+def _ensure_ai_table_exists() -> None:
+    """Create generative_model_transitions proactively so health_monitor can detect it."""
+    conn = None
+    try:
+        conn = _get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS generative_model_transitions (
+                state_key TEXT NOT NULL,
+                action TEXT NOT NULL,
+                next_state TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (state_key, action, next_state)
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        _logger.warning("Could not ensure AI table: %s", e)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def register_event_handlers():
@@ -260,15 +322,30 @@ def register_event_handlers():
 
     Call this once at startup (e.g., from server.py or despertar).
     """
-    try:
-        from modules.events import event_bus, Events
-        event_bus.on(Events.MEMORY_STORED, _on_memory_stored)
-        event_bus.on(Events.MEMORY_RETRIEVED, _on_memory_retrieved)
-        event_bus.on(Events.CONSOLIDATION_COMPLETE, _on_consolidation_complete)
-        event_bus.on(Events.PREDICTION_ERROR, _on_prediction_error)
-        _logger.info("Active inference event handlers registered")
-    except Exception as e:
-        _logger.warning("Could not register AI event handlers: %s", e)
+    from modules.events import event_bus, Events
+
+    failures = []
+    required_handlers = [
+        (Events.MEMORY_STORED, _on_memory_stored),
+        (Events.MEMORY_RETRIEVED, _on_memory_retrieved),
+        (Events.CONSOLIDATION_COMPLETE, _on_consolidation_complete),
+        (Events.PREDICTION_ERROR, _on_prediction_error),
+    ]
+
+    for event_name, handler in required_handlers:
+        try:
+            event_bus.on(event_name, handler)
+        except Exception as e:
+            failures.append((event_name, str(e)))
+            _logger.exception("Failed to register AI handler for %s", event_name)
+
+    if failures:
+        raise RuntimeError(
+            f"Could not register required AI event handlers: {failures}"
+        )
+
+    _ensure_ai_table_exists()
+    _logger.info("Active inference event handlers registered")
 
 
 # ============================================================

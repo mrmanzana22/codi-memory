@@ -419,7 +419,7 @@ def _count_new_transitions(fts_db_path: str, since_ts: str) -> int:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
         count = conn.execute(
-            "SELECT COUNT(*) FROM attention_transitions WHERE last_seen > ?",
+            "SELECT COUNT(*) FROM attention_transitions WHERE created_at > ?",
             (since_ts,)
         ).fetchone()[0]
         conn.close()

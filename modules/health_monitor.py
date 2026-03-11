@@ -134,11 +134,13 @@ def _rule_wm_stalled(metrics: dict, now_iso: str) -> dict | None:
     return None
 
 
+_AI_MIN_WRITES_TO_CHECK = 20  # same as _PERSIST_INTERVAL; AI won't persist below this
+
+
 def _rule_ai_disconnected(metrics: dict, now_iso: str) -> dict | None:
-    events = metrics["global"]["events_24h"]
     writes = metrics["global"]["writes_24h"]
     observations = metrics["active_inference"]["total_observations"]
-    enough_activity = events >= 50 or writes >= 20
+    enough_activity = writes >= _AI_MIN_WRITES_TO_CHECK
     if enough_activity and observations == 0:
         return {
             "alert_key": "ai_disconnected",

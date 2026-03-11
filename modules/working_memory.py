@@ -255,6 +255,14 @@ def _load_working_memory_context() -> str:
         if not rows:
             return ""
 
+        # Filter noise patterns from wake-up display (data stays in DB)
+        _WAKE_NOISE = ["[PROACTIVE MSG SENT]", "[PROACTIVE_EVAL]"]
+        rows = [r for r in rows
+                if not any(pat in (r["content"] or "") for pat in _WAKE_NOISE)]
+
+        if not rows:
+            return ""
+
         scored = []
         for r in rows:
             s = _effective_score(r["relevance"], r["last_accessed_at"],
@@ -781,12 +789,12 @@ def link_narrative_trace(
 def wm_noche_cleanup():
     """Archive low-relevance, old items. NULL last_accessed_at safe (uses created_at)."""
     try:
-        cutoff = (now_col() - timedelta(days=7)).isoformat()
+        cutoff = now_col() - timedelta(days=7)
         with _get_conn() as conn:
             cursor = conn.execute(
                 """UPDATE working_memory SET active = FALSE
                    WHERE active = TRUE AND relevance < 0.2
-                     AND COALESCE(last_accessed_at, created_at) < %s""",
+                     AND COALESCE(last_accessed_at, created_at) < %s::timestamptz""",
                 (cutoff,)
             )
             return cursor.rowcount

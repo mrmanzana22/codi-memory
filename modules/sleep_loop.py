@@ -88,7 +88,7 @@ DEFAULT_BUDGET_MS = 60000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact"]
+TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -630,11 +630,11 @@ def _normalize_consolidation_timestamp(value):
 
 
 def _sqlite_timestamp_cutoff(value):
-    """Format normalized consolidation timestamp for SQLite text comparison."""
+    """Format consolidation timestamp in Colombia local time for SQLite text comparison."""
     dt = _normalize_consolidation_timestamp(value)
     if not dt:
         return None
-    return dt.replace(tzinfo=None).isoformat()
+    return dt.astimezone(TZ_COL).replace(tzinfo=None).isoformat()
 
 
 # ============================================================
@@ -1025,6 +1025,7 @@ def _tick_homeostasis(budget_ms: int) -> dict:
     result = {"tick": "homeostasis", "ok": False, "detail": ""}
 
     parts = []
+    failed = False
 
     # Salience decay
     try:
@@ -1032,6 +1033,7 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         sal_report = apply_salience_decay(decay_rate=0.05)
         parts.append(f"salience: {sal_report[:80]}")
     except Exception as e:
+        failed = True
         parts.append(f"salience: error {redact_secrets(str(e))[:50]}")
 
     # Emotional decay (PAD toward baseline)
@@ -1040,6 +1042,7 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         emo_report = apply_emotional_decay()
         parts.append(f"emotional: {emo_report[:80]}")
     except Exception as e:
+        failed = True
         parts.append(f"emotional: error {redact_secrets(str(e))[:50]}")
 
     # Proposal #61 Fix 2: Importance recalibration (Craik & Lockhart 1972)
@@ -1051,10 +1054,11 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         if "Downgraded: 0" not in recal_report:
             parts.append(f"importance: {recal_report[:80]}")
     except Exception as e:
+        failed = True
         parts.append(f"importance: error {redact_secrets(str(e))[:50]}")
 
     elapsed = (time.monotonic() - start) * 1000
-    result["ok"] = True
+    result["ok"] = not failed
     result["detail"] = "; ".join(parts)
     result["elapsed_ms"] = round(elapsed)
     return result
@@ -1517,8 +1521,9 @@ def _tick_causal_discovery(budget_ms: int) -> dict:
         # Run discovery
         disc_result = run_causal_discovery(FTS_DB_PATH)
 
-        # Record timestamp
-        _record_tick_timestamp(last_ts_key.replace("last_", ""))
+        # Record timestamp only if discovery actually ran
+        if disc_result.get("ran", False):
+            _record_tick_timestamp(last_ts_key.replace("last_", ""))
 
         elapsed = (time.monotonic() - start) * 1000
         result["ok"] = disc_result.get("ran", False)
@@ -1643,11 +1648,19 @@ def _cache_last_consolidation_result():
                 """SELECT batch_id, scope, facts_created, facts_updated,
                           contradictions_found, duration_ms, created_at
                    FROM consolidation_log
+                   WHERE created_at >= NOW() - INTERVAL '30 minutes'
                    ORDER BY created_at DESC
                    LIMIT 1"""
             ).fetchone()
 
         if not row:
+            conn = _get_conn()
+            conn.execute(
+                "DELETE FROM sleep_loop_state WHERE key = ?",
+                ("last_consolidation_result",)
+            )
+            conn.commit()
+            conn.close()
             return
 
         payload = {
@@ -1698,6 +1711,7 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             return result
 
         signals = []
+        consolidation_batch_to_mark = None
 
         # Signal 1: Overdue prospective intentions
         try:
@@ -1776,11 +1790,20 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 """SELECT value FROM sleep_loop_state
                    WHERE key = 'last_consolidation_result'"""
             ).fetchone()
+            last_notified = conn.execute(
+                """SELECT value FROM sleep_loop_state
+                   WHERE key = 'last_notified_consolidation_batch_id'"""
+            ).fetchone()
             conn.close()
             if row:
                 consol = json.loads(row[0]) if isinstance(row[0], str) else {}
                 new_facts = consol.get("facts_created", 0)
-                if new_facts >= 3:
+                batch_id = str(consol.get("batch_id") or "")
+                already_notified = (
+                    str(last_notified[0]) == batch_id if last_notified and batch_id else False
+                )
+                if new_facts >= 3 and not already_notified:
+                    consolidation_batch_to_mark = batch_id or None
                     signals.append(f"Consolidacion descubrio {new_facts} hechos nuevos")
         except Exception:
             pass
@@ -1802,6 +1825,14 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             result["ok"] = True
             result["detail"] = f"sent {len(signals)} signals to Hare"
             result["telegram_sent"] = len(signals)
+            if consolidation_batch_to_mark:
+                conn = _get_conn()
+                conn.execute(
+                    "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                    ("last_notified_consolidation_batch_id", consolidation_batch_to_mark)
+                )
+                conn.commit()
+                conn.close()
         else:
             result["ok"] = True
             result["detail"] = f"{len(signals)} signals, cooldown active or send failed"
@@ -1869,14 +1900,13 @@ def _tick_health(budget_ms: int) -> dict:
         fts_db_path = FTS_DB_PATH
         fts_conn = connect_fts(fts_db_path)
 
-        # Get IDs already in FTS
-        fts_ids = set(
-            row[0] for row in
-            fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
-        )
+        # Count shortcut: skip full scan when counts match
+        fts_count = fts_conn.execute(
+            "SELECT COUNT(*) FROM memories_text"
+        ).fetchone()[0]
+        pg_count = _pg.count(is_semantic=False).points_count
 
         # Persist canonical episodic count for world-model fts_gap (#132)
-        pg_count = _pg.count(is_semantic=False).points_count
         try:
             state_conn = _get_conn()
             state_conn.execute(
@@ -1888,42 +1918,52 @@ def _tick_health(budget_ms: int) -> dict:
         except Exception:
             pass
 
-        # Paginated scroll through ALL pg_store memories (always scan, no count shortcut)
-        synced = 0
-        scroll_offset = None
-        while True:
-            scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
-            if scroll_offset is not None:
-                scroll_kwargs["offset"] = scroll_offset
-            points, scroll_offset = _pg.scroll(**scroll_kwargs)
-
-            for p in points:
-                mid = str(p.id)
-                if mid not in fts_ids:
-                    content = p.payload.get('data', '')
-                    if not content:
-                        continue
-                    category = p.payload.get('category', 'general')
-                    source = p.payload.get('ownership_source', 'experienced')
-                    importance = p.payload.get('narrative_importance', 'medium')
-                    fts_conn.execute("""
-                        INSERT OR REPLACE INTO memories_text
-                        (memory_id, content, category, source, importance, created_at)
-                        VALUES (?, ?, ?, ?, ?, datetime('now'))
-                    """, (mid, content, category, source, importance))
-                    synced += 1
-
-            if scroll_offset is None:
-                break
-
-        if synced > 0:
-            fts_conn.commit()
-        fts_conn.close()
-
-        if synced > 0:
-            parts.append(f"fts_sync: {synced} new (total: {len(fts_ids) + synced})")
+        if fts_count >= pg_count:
+            # Already in sync — no need for expensive full scan
+            fts_conn.close()
+            parts.append(f"fts_sync: in sync ({fts_count})")
         else:
-            parts.append(f"fts_sync: in sync ({len(fts_ids)})")
+            # Counts differ — do incremental scan to find missing entries
+            fts_ids = set(
+                row[0] for row in
+                fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
+            )
+
+            synced = 0
+            scroll_offset = None
+            while True:
+                scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
+                if scroll_offset is not None:
+                    scroll_kwargs["offset"] = scroll_offset
+                points, scroll_offset = _pg.scroll(**scroll_kwargs)
+
+                for p in points:
+                    mid = str(p.id)
+                    if mid not in fts_ids:
+                        content = p.payload.get('data', '')
+                        if not content:
+                            continue
+                        category = p.payload.get('category', 'general')
+                        source = p.payload.get('ownership_source', 'experienced')
+                        importance = p.payload.get('narrative_importance', 'medium')
+                        fts_conn.execute("""
+                            INSERT OR REPLACE INTO memories_text
+                            (memory_id, content, category, source, importance, created_at)
+                            VALUES (?, ?, ?, ?, ?, datetime('now'))
+                        """, (mid, content, category, source, importance))
+                        synced += 1
+
+                if scroll_offset is None:
+                    break
+
+            if synced > 0:
+                fts_conn.commit()
+            fts_conn.close()
+
+            if synced > 0:
+                parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
+            else:
+                parts.append(f"fts_sync: in sync ({fts_count})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
 
@@ -1963,6 +2003,7 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
     """Tick: persist operational snapshot to system_health table (P0)."""
     import json as _json
     result = {"tick": "health_snapshot", "ok": False, "detail": ""}
+    start = time.monotonic()
     try:
         conn = connect_fts(FTS_DB_PATH)
         now = datetime.now(TZ_COL)
@@ -1977,7 +2018,10 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         for key, val in tick_rows:
             tick_name = key[5:]  # strip "last_"
             try:
-                age_min = round((now - datetime.fromisoformat(val)).total_seconds() / 60)
+                tick_dt = datetime.fromisoformat(val)
+                if tick_dt.tzinfo is None:
+                    tick_dt = tick_dt.replace(tzinfo=TZ_COL)
+                age_min = round((now - tick_dt).total_seconds() / 60)
             except Exception:
                 age_min = -1
             tick_stats[tick_name] = {"last_at": val, "age_min": age_min}
@@ -1988,7 +2032,7 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             (since_24h,),
         ).fetchone()
         wm_active_row = conn.execute(
-            "SELECT COUNT(*) FROM working_memory WHERE expires_at > ?", (now_str,)
+            "SELECT COUNT(*) FROM working_memory WHERE active = 1",
         ).fetchone()
         wm_json = {
             "active": int(wm_active_row[0] or 0),
@@ -2093,8 +2137,10 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             detail_parts.append(f"pruned={deleted}")
         result["ok"] = True
         result["detail"] = " ".join(detail_parts)
+        result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
     except Exception as e:
         result["detail"] = f"error: {str(e)[:80]}"
+        result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
     return result
 
 
@@ -2128,7 +2174,7 @@ def _record_tick_timestamp(tick_name: str, key_prefix: str = "last"):
         conn.execute("""
             INSERT INTO sleep_loop_state (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """, (f"{key_prefix}_{tick_name}", datetime.now().isoformat()))
+        """, (f"{key_prefix}_{tick_name}", now_iso()))
         conn.commit()
         conn.close()
     except Exception:

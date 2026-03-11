@@ -28,6 +28,7 @@ Created: 2026-02-28 (Sprint 4 - IMPLEMENTATION_PLAYBOOK)
 """
 
 import json
+import logging
 import math
 import random
 import sqlite3
@@ -35,6 +36,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -433,9 +436,11 @@ class GenerativeModel:
                 SELECT state_key, action, next_state, count
                 FROM generative_model_transitions
             """).fetchall()
-        except sqlite3.OperationalError:
-            # Table doesn't exist yet — return empty model
-            return model
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                # Table doesn't exist yet — return empty model
+                return model
+            raise
 
         for state_key_json, action_name, next_state_json, count in rows:
             key = (tuple(json.loads(state_key_json)), action_name)
@@ -712,23 +717,23 @@ def get_current_state() -> SystemState:
         schema = get_attention_schema()
         topic = schema.get("current_focus") or "general"
         pe_magnitude = schema.get("attention_prediction_error", 0.0)
-    except Exception:
-        pass
+    except ImportError as exc:
+        _logger.warning("Active inference state read: attention schema unavailable: %s", exc)
 
     # Read WM load
     try:
         from modules.working_memory import get_active_count
         count = get_active_count()
         wm_load = min(1.0, count / 10.0)  # 10 items = full
-    except Exception:
-        pass
+    except ImportError as exc:
+        _logger.warning("Active inference state read: working memory unavailable: %s", exc)
 
     # Read emotional state
     try:
         from modules.config import _emotional_state
         valence = _emotional_state.get("current", {}).get("pleasure", 0.0)
-    except Exception:
-        pass
+    except ImportError as exc:
+        _logger.warning("Active inference state read: emotional state unavailable: %s", exc)
 
     return SystemState(
         topic=topic,

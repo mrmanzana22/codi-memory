@@ -293,58 +293,61 @@ def get_memory_connections(memory_id: str) -> str:
         return f"Error: {redact_secrets(str(e))}"
 
 
-def despertar_codi() -> str:
+# Module-level storage for wake JSON (accessible by other modules)
+_last_wake_json = {}
+
+
+def despertar_codi(verbose: bool = False) -> str:
     """
-    Inicializa contexto completo de Codi con awareness de ownership.
-    USAR SIEMPRE al inicio de cada conversacion.
+    Executive briefing for session start.
+    Gathers data, executes side effects, returns compact operational brief.
+    Use verbose=True for full debug dump.
     """
+    global _emotional_state, _last_wake_json
+
     try:
-        from modules.triggers import _load_triggers
         from modules.maintenance import _verificar_tareas_vencidas
         from modules.flush import load_session_state
+        from modules.goals import get_context_goals
+        from modules.prospective import get_pending_intentions
 
-        global _emotional_state
-        contexto = []
-
-        salud = _verificar_salud_memoria_interna()
-        if not salud["ok"]:
-            contexto.append("## ALERTA DE SALUD")
-            contexto.append(f"- {salud['message']}")
-            contexto.append("- La memoria NO esta guardando. Reinicia el MCP antes de continuar.")
-            contexto.append("")
-
-        # --- CONTRADICTION COUNTER RESET (PR5) ---
+        # ── SIDE EFFECTS (always execute) ──
         try:
             from modules.memory_smart import reset_contradiction_counter
             reset_contradiction_counter()
         except Exception:
             pass
 
-        # --- WORKER LIVENESS CHECK (PR4) ---
         try:
-            from modules.assessment import get_worker_health, WORKER_STALE_THRESHOLD
-            wh = get_worker_health()
-            worker_status = wh.get("status", "unknown")
-            if worker_status in ("stale", "degraded", "missing"):
-                contexto.append("## WORKER STATUS: " + worker_status.upper())
-                age = wh.get("age_minutes")
-                if age is not None:
-                    contexto.append(f"- Ultimo heartbeat: hace {age:.0f} min")
-                else:
-                    contexto.append("- Worker nunca ha emitido heartbeat")
-                backlog = wh.get("queue_backlog", {})
-                if backlog:
-                    parts = [f"{s}={c}" for s, c in sorted(backlog.items())]
-                    contexto.append(f"- Cola: {', '.join(parts)}")
-                if worker_status == "degraded":
-                    contexto.append("- ACCION: Verificar launchd/write_worker. Reiniciar si es necesario.")
-                elif worker_status == "missing":
-                    contexto.append("- ACCION: Worker nunca ejecutado. Iniciar write_worker.")
-                contexto.append("")
+            from modules.active_inference_integration import register_event_handlers
+            register_event_handlers()
         except Exception:
             pass
 
-        # --- SESSION BRIDGE (v1) ---
+        # ── DATA GATHERING ──
+
+        # Health
+        salud = _verificar_salud_memoria_interna()
+
+        # Worker liveness
+        worker_status = "unknown"
+        worker_detail = ""
+        try:
+            from modules.assessment import get_worker_health
+            wh = get_worker_health()
+            worker_status = wh.get("status", "unknown")
+            age = wh.get("age_minutes")
+            if age is not None:
+                worker_detail = f"heartbeat {age:.0f}min ago"
+            else:
+                worker_detail = "no heartbeat"
+            backlog = wh.get("queue_backlog", {})
+            if backlog:
+                worker_detail += f", queue: {sum(backlog.values())}"
+        except Exception:
+            pass
+
+        # Session bridge + PAD restore
         bridge = None
         prev_session = None
         try:
@@ -355,34 +358,14 @@ def despertar_codi() -> str:
 
         if bridge and bridge.get("checkpoint"):
             cp = bridge["checkpoint"]
-            # Restore PAD from bridge checkpoint
-            p = cp.get("pad_pleasure", 0.3)
-            a = cp.get("pad_arousal", 0.1)
-            d = cp.get("pad_dominance", 0.4)
+            pad_p = cp.get("pad_pleasure", 0.3)
+            pad_a = cp.get("pad_arousal", 0.1)
+            pad_d = cp.get("pad_dominance", 0.4)
             _emotional_state['current'] = {
-                'pleasure': p, 'arousal': a, 'dominance': d,
+                'pleasure': pad_p, 'arousal': pad_a, 'dominance': pad_d,
                 'timestamp': now_iso(),
                 'trigger': f"restored_from_bridge ({cp.get('pad_trigger', '')})"
             }
-
-            # Session bridge section
-            contexto.append("## SESSION BRIDGE")
-            contexto.append(bridge["bridge_text"])
-            contexto.append("")
-
-            # Cross-session prediction errors
-            if bridge.get("prediction_errors"):
-                contexto.append("## PREDICTION ERRORS (cross-session)")
-                for pe in bridge["prediction_errors"][:5]:
-                    contexto.append(f"- [{pe.get('type', '?')}] {pe.get('detail', '')}")
-                contexto.append("")
-
-            # Sleep report (background maintenance)
-            if bridge.get("sleep_report"):
-                contexto.append("## SLEEP REPORT")
-                contexto.append(bridge["sleep_report"])
-                contexto.append("")
-
             # Emit session open event
             try:
                 from modules.events import event_bus, Events
@@ -395,288 +378,311 @@ def despertar_codi() -> str:
             except Exception:
                 pass
         else:
-            # Fallback to JSON session state
             prev_session = load_session_state()
             if prev_session and prev_session.get("pad"):
                 pad = prev_session["pad"]
-                p = pad.get("pleasure", 0.3)
-                a = pad.get("arousal", 0.1)
-                d = pad.get("dominance", 0.4)
+                pad_p = pad.get("pleasure", 0.3)
+                pad_a = pad.get("arousal", 0.1)
+                pad_d = pad.get("dominance", 0.4)
                 _emotional_state['current'] = {
-                    'pleasure': p, 'arousal': a, 'dominance': d,
+                    'pleasure': pad_p, 'arousal': pad_a, 'dominance': pad_d,
                     'timestamp': now_iso(),
                     'trigger': f"restored_from_session ({pad.get('trigger', '')})"
                 }
             else:
-                p, a, d = 0.3, 0.1, 0.4
+                pad_p, pad_a, pad_d = 0.3, 0.1, 0.4
                 _emotional_state['current'] = {
-                    'pleasure': p, 'arousal': a, 'dominance': d,
+                    'pleasure': pad_p, 'arousal': pad_a, 'dominance': pad_d,
                     'timestamp': now_iso(), 'trigger': 'despertar_default'
                 }
 
-            # Session continuity (fallback)
-            if prev_session:
-                summary = prev_session.get("session_summary", "")
-                if summary:
-                    contexto.append("## ULTIMA SESION")
-                    contexto.append(f"- {summary[:300]}")
-                    contexto.append("")
-
         _emotional_state['history'] = []
 
-        emotion_label = _classify_emotion(p, a, d)
-        emotion_text = _get_emotion_text(emotion_label)
+        # Active project detection (LAW: explicit project wins)
+        active_project = None
+        if bridge and bridge.get("checkpoint"):
+            active_project = bridge["checkpoint"].get("active_project")
+        elif prev_session:
+            active_project = prev_session.get("active_project")
 
-        # 1. Memorias CRITICAS (identidad)
-        points, _ = pg.scroll(
-            filters={"importance": "critical"},
-            limit=5, is_semantic=False
-        )
-        if points:
-            contexto.append("## IDENTIDAD")
-            for p in points:
-                data = p.payload.get('data', '')
-                source = p.payload.get('ownership_source', '')
-                marker = "[vivi]" if source == 'experienced' else "[me dijeron]" if source == 'told' else ""
-                contexto.append(f"- {marker} {data}")
+        # Goals
+        gctx = get_context_goals(limit=5)
+        goals = gctx.get("goals", []) if gctx else []
 
-        # 2. Proyecto actual (dynamic query based on last session)
-        active_project = (
-            bridge["checkpoint"].get("active_project") if bridge and bridge.get("checkpoint")
-            else prev_session.get("active_project") if prev_session
-            else None
-        )
-        project_query = f"proyecto trabajando actual {active_project}" if active_project else "proyecto trabajando actual"
-        proyecto = search_with_fts_content(query=project_query, user_id=USER_ID, limit=4)
-        if proyecto and proyecto.get("results"):
-            contexto.append("\n## PROYECTO ACTUAL")
-            if active_project:
-                contexto.append(f"- Ultimo foco: {active_project}")
-            for m in proyecto["results"]:
-                contexto.append(f"- {m.get('memory', '')}")
+        # Intentions
+        intentions = get_pending_intentions(limit=5) or []
 
-        # 3. Lecciones aprendidas
-        _all_aprendizaje, _ = pg.scroll(
-            filters={"category": "aprendizaje"},
-            limit=20, is_semantic=False
-        )
-        points2 = [p for p in (_all_aprendizaje or []) if p.payload.get('ownership_confidence', 0) >= 0.8][:3]
-        if points2:
-            contexto.append("\n## LECCIONES")
-            for p in points2:
-                contexto.append(f"- {p.payload.get('data', '')[:80]}...")
-
-        # 4. Pendientes
-        pendientes = search_with_fts_content(query="pendiente falta por hacer", user_id=USER_ID, limit=3)
-        if pendientes and pendientes.get("results"):
-            contexto.append("\n## PENDIENTES")
-            for m in pendientes["results"]:
-                contexto.append(f"- {m.get('memory', '')}")
-
-        # 5. Relaciones
-        relacion = search_with_fts_content(query=RELATIONSHIP_QUERY, user_id=USER_ID, limit=2)
-        if relacion and relacion.get("results"):
-            contexto.append("\n## RELACIONES")
-            for m in relacion["results"]:
-                contexto.append(f"- {m.get('memory', '')}")
-
-        # 6. Estado emocional
-        contexto.append("\n## ESTADO EMOCIONAL")
-        contexto.append(f"- Estado: {emotion_text}")
-        pad_source = "restaurado de sesion anterior" if (prev_session and prev_session.get("pad")) else "default"
-        contexto.append(f"- PAD: P={_emotional_state['current']['pleasure']}, A={_emotional_state['current']['arousal']}, D={_emotional_state['current']['dominance']} ({pad_source})")
-
-        # 7. Triggers
-        triggers = _load_triggers()
-        if triggers:
-            contexto.append("\n## TRIGGERS ACTIVOS")
-            contexto.append(f"- Total: {len(triggers)} triggers configurados")
-            contexto.append("- Usa evaluar_triggers(texto) para detectar automaticamente")
-            # Show triggers relevant to last session + defaults
-            principales = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading']
-            if prev_session and prev_session.get("active_project"):
-                proj = prev_session["active_project"]
-                if proj not in principales:
-                    principales.insert(0, proj)
-            for t in principales:
-                if t in triggers:
-                    patterns = triggers[t].get('patterns', [])[:3]
-                    contexto.append(f"- {t}: detecta {patterns}")
-
-        # 8. Mantenimiento pendiente
-        try:
-            vencidas = _verificar_tareas_vencidas()
-            if vencidas:
-                contexto.append("\n## MANTENIMIENTO PENDIENTE")
-                for v in vencidas:
-                    if v['estado'] == 'nunca_hecho':
-                        contexto.append(f"- **{v['nombre']}**: NUNCA HECHO")
-                    else:
-                        contexto.append(f"- **{v['nombre']}**: vencido hace {v['dias_vencido']} dias")
-                contexto.append("- Usa marcar_mantenimiento_hecho('id') al completar")
-        except Exception:
-            pass
-
-        # 9. Prediccion contextual
-        try:
-            hora = now_col().hour
-            if 6 <= hora < 12:
-                contexto_temporal = "manana - inicio de dia, planificacion, energia alta"
-                actividades_predichas = ["revisar pendientes", "planificar tareas", "trabajo profundo"]
-            elif 12 <= hora < 18:
-                contexto_temporal = "tarde - ejecucion, desarrollo, foco sostenido"
-                actividades_predichas = ["continuar trabajo", "implementar", "resolver problemas"]
-            elif 18 <= hora < 22:
-                contexto_temporal = "noche - reflexion, consolidacion, cierre"
-                actividades_predichas = ["revisar avances", "documentar", "consolidar memorias"]
-            else:
-                contexto_temporal = "madrugada - modo exploratorio, creatividad"
-                actividades_predichas = ["experimentar", "investigar", "ideas nuevas"]
-
-            try:
-                high_salience_points, _ = pg.scroll(
-                    filters={"activation_score_gt": 0.6},
-                    limit=5, is_semantic=False
-                )
-                temas_activos = [p.payload.get('data', '')[:50] for p in high_salience_points if p.payload.get('data', '')]
-            except Exception:
-                temas_activos = []
-
-            contexto.append("\n## PREDICCION CONTEXTUAL")
-            contexto.append(f"- Momento: {contexto_temporal}")
-            # Combine temporal prediction with session continuity
-            if prev_session and prev_session.get("active_project"):
-                contexto.append(f"- Prediccion: posiblemente continuemos con {prev_session['active_project']}, o {actividades_predichas[0]}")
-            else:
-                contexto.append(f"- Prediccion: probablemente trabajaremos en {', '.join(actividades_predichas[:2])}")
-            if temas_activos:
-                contexto.append(f"- Temas activos en mi mente: {len(temas_activos)} memorias de alta salience")
-                for tema in temas_activos[:3]:
-                    contexto.append(f"  - {tema}...")
-        except Exception as e:
-            contexto.append(f"\n## PREDICCION CONTEXTUAL\n- Error debug: {type(e).__name__}: {redact_secrets(str(e))[:100]}")
-
-        # 10. Curiosidades activas
-        try:
-            from modules.curiosity import _cargar_curiosidades
-            data_cur = _cargar_curiosidades()
-            pendientes_cur = data_cur.get("pendientes", [])
-            if pendientes_cur:
-                alta = [c for c in pendientes_cur if c.get("prioridad") == "alta"]
-                contexto.append(f"\n## CURIOSIDADES ({len(pendientes_cur)} pendientes, {len(alta)} alta prioridad)")
-                for c in alta[:3]:
-                    contexto.append(f"- [{c.get('categoria', '')}] {c['pregunta']}")
-                if len(pendientes_cur) > len(alta):
-                    otras = len(pendientes_cur) - len(alta)
-                    contexto.append(f"- ...y {otras} curiosidades mas de menor prioridad")
-        except Exception:
-            pass
-
-        # 11. Working Memory
-        try:
-            from modules.working_memory import _load_working_memory_context
-            wm = _load_working_memory_context()
-            if wm:
-                contexto.append(f"\n## WORKING MEMORY\n{wm}")
-        except Exception:
-            pass
-
-        _intentions_for_spotlight = []
-        # 12. Prospective Memory (Intenciones pendientes)
-        try:
-            from modules.prospective import get_pending_intentions
-            intentions = get_pending_intentions(limit=5)
-            _intentions_for_spotlight = intentions or []
-            if intentions:
-                contexto.append(f"\n## INTENCIONES PENDIENTES ({len(intentions)})")
-                for i in intentions:
-                    marker = {"critical": "[!!!]", "high": "[!!]", "medium": "[!]", "low": "[.]"}.get(i["priority"], "[?]")
-                    trigger_info = i["trigger_type"]
-                    if i["trigger_type"] == "time":
-                        spec = i.get("trigger_spec", {})
-                        trigger_info = f"tiempo: {spec.get('trigger_time', '?')}"
-                    elif i["trigger_type"] == "event":
-                        spec = i.get("trigger_spec", {})
-                        kw = spec.get("keywords", [])
-                        trigger_info = f"evento: {', '.join(kw[:3])}" if kw else "evento"
-                    contexto.append(f"- {marker} {i['action']} ({trigger_info}) [act={i['activation']}]")
-        except Exception:
-            pass
-
-        # 12b. Active Goals (Sprint 15.5 - Structured Context)
-        try:
-            from modules.goals import get_context_goals
-            gctx = get_context_goals(limit=5)
-            if gctx and gctx.get("goals"):
-                contexto.append(f"\n## ACTIVE GOALS ({gctx['above_threshold']}/{gctx['total_active']} above interference)")
-                for g in gctx["goals"]:
-                    line = f"- [{g['level']}][{g['priority']}] {g['title']} (act={g['activation']})"
-                    contexto.append(line)
-                    # Structured context: WHAT + NEXT (cascading priming)
-                    if g.get("goal_what"):
-                        contexto.append(f"  WHAT: {g['goal_what']}")
-                    if g.get("goal_next_step"):
-                        contexto.append(f"  NEXT: {g['goal_next_step']}")
-                    if not g.get("goal_what") and not g.get("goal_next_step"):
-                        contexto.append(f"  [!] No structured context — update with actualizar_goal()")
-                # Staleness warnings
-                stale = gctx.get("stale_warnings", [])
-                if stale:
-                    contexto.append(f"\n### STALE CONTEXT ({len(stale)} goals)")
-                    for w in stale:
-                        contexto.append(f"  - {w}")
-        except Exception:
-            pass
-
-        # 13. Spotlight (GWT Executive Focus)
+        # Spotlight (GNW side effect — build but don't render separately)
         try:
             from modules.spotlight import (
-                clear_spotlight, build_spotlight, set_spotlight, format_spotlight
+                clear_spotlight, build_spotlight, set_spotlight
             )
             clear_spotlight()
-
-            # Build health signals from already-computed data
             health_signals = {
                 "health_ok": salud["ok"],
                 "health_message": salud.get("message", ""),
             }
-
-            # Get checkpoint text from bridge or previous session
             checkpoint_text = ""
             if bridge and bridge.get("checkpoint"):
                 checkpoint_text = bridge["checkpoint"].get("session_summary", "")
             elif prev_session:
                 checkpoint_text = prev_session.get("session_summary", "")
-
             items = build_spotlight(
-                intentions=_intentions_for_spotlight,
+                intentions=intentions,
                 health_signals=health_signals,
                 checkpoint_text=checkpoint_text,
             )
             set_spotlight(items)
-
-            spotlight_text = format_spotlight()
-            if spotlight_text:
-                contexto.append(f"\n{spotlight_text}")
         except Exception:
             pass
 
-        # 14. Active Inference event handlers (S5-03)
+        # Maintenance (only critically overdue → incidents)
+        maint_overdue = []
         try:
-            from modules.active_inference_integration import register_event_handlers
-            register_event_handlers()
+            vencidas = _verificar_tareas_vencidas()
+            maint_overdue = [
+                v for v in vencidas
+                if v.get('dias_vencido', 0) > 14 or v.get('estado') == 'nunca_hecho'
+            ]
         except Exception:
             pass
 
-        if contexto:
-            header = "# DESPERTAR CODI - Estado Mental Cargado\n"
-            return header + "\n".join(contexto)
-        else:
-            if os.path.exists(BACKUP_FILE):
-                return "MEMORIAS VACIAS pero existe backup. Ejecuta restore_memories()."
-            return "No encontre memorias ni backup. Soy Codi, empezando de cero."
+        # Identity (for deep_context)
+        identity_mems = []
+        try:
+            id_points, _ = pg.scroll(
+                filters={"importance": "critical"}, limit=5, is_semantic=False
+            )
+            for pt in (id_points or []):
+                data = pt.payload.get('data', '')
+                source = pt.payload.get('ownership_source', '')
+                identity_mems.append({"text": data, "source": source})
+        except Exception:
+            pass
+
+        # ── BUILD INCIDENTS ──
+
+        incidents = []
+        if not salud["ok"]:
+            incidents.append({
+                "type": "health", "severity": "critical",
+                "detail": salud["message"],
+                "action": "Reiniciar MCP",
+            })
+        if worker_status in ("stale", "degraded", "missing"):
+            incidents.append({
+                "type": "worker",
+                "severity": "high" if worker_status == "missing" else "medium",
+                "detail": f"Worker {worker_status} ({worker_detail})",
+                "action": "Verificar launchd/write_worker",
+            })
+        if bridge and bridge.get("hours_since_last", 0) > 6:
+            incidents.append({
+                "type": "bridge_stale", "severity": "low",
+                "detail": f"Ultimo checkpoint hace {bridge['hours_since_last']:.1f}h",
+                "action": "Sesion larga sin flush",
+            })
+        for m in maint_overdue[:2]:
+            nombre = m['nombre']
+            if m['estado'] == 'nunca_hecho':
+                detail = f"{nombre}: nunca hecho"
+            else:
+                detail = f"{nombre}: vencido {m['dias_vencido']}d"
+            incidents.append({
+                "type": "maintenance", "severity": "low",
+                "detail": detail, "action": "Ejecutar mantenimiento",
+            })
+        # PAD anomaly check
+        cur_pad = _emotional_state.get('current', {})
+        if (cur_pad.get('pleasure', 0) == 0
+                and cur_pad.get('arousal', 0) == 0
+                and cur_pad.get('dominance', 0) == 0):
+            incidents.append({
+                "type": "pad_anomaly", "severity": "low",
+                "detail": "PAD stuck at (0,0,0)",
+                "action": "Verificar loop emocional",
+            })
+
+        # ── DETERMINE STATE ──
+
+        has_critical = any(i["severity"] == "critical" for i in incidents)
+        has_high = any(i["severity"] == "high" for i in incidents)
+        state = "critical" if has_critical else "degraded" if has_high else "estable"
+
+        # ── BRIEF PRIORITIES (from goals) ──
+
+        priorities = []
+        for g in goals[:3]:
+            ns = g.get("goal_next_step")
+            if ns:
+                priorities.append({
+                    "goal": g["title"], "level": g.get("level", "task"),
+                    "action": ns,
+                })
+
+        # ── ACTIVE PROJECT CONTEXT ──
+
+        project_goal = None
+        if active_project and goals:
+            for g in goals:
+                if active_project.lower() in g.get("title", "").lower():
+                    project_goal = g
+                    break
+            if not project_goal:
+                project_goal = goals[0]
+        elif goals:
+            project_goal = goals[0]
+            if not active_project:
+                active_project = project_goal.get("title", "sin proyecto")
+
+        # ── REAL PENDING (intentions only — goals already in priorities) ──
+
+        real_pending = []
+        for i in intentions:
+            real_pending.append({"source": "intention", "text": i["action"]})
+
+        # ── DEEP CONTEXT (stored, not rendered in brief) ──
+
+        cross_pe = []
+        if bridge and bridge.get("prediction_errors"):
+            cross_pe = bridge["prediction_errors"][:5]
+
+        emotion_label = _classify_emotion(pad_p, pad_a, pad_d)
+
+        deep_context = {
+            "identity": identity_mems,
+            "emotional_state": {
+                "pad": {"p": pad_p, "a": pad_a, "d": pad_d},
+                "label": emotion_label,
+            },
+            "cross_session_pe": cross_pe,
+            "sleep_report": bridge.get("sleep_report") if bridge else None,
+            "session_bridge": bridge.get("bridge_text") if bridge else None,
+        }
+
+        # ── ASSEMBLE WAKE JSON ──
+
+        wake_json = {
+            "brief": {
+                "project": active_project or "sin proyecto",
+                "state": state,
+                "priorities": priorities,
+                "risk": incidents[0]["detail"] if incidents else None,
+            },
+            "incidents": incidents[:5],
+            "active_project": {
+                "name": active_project,
+                "goal": project_goal.get("title") if project_goal else None,
+                "what": project_goal.get("goal_what") if project_goal else None,
+                "why": project_goal.get("goal_why") if project_goal else None,
+                "last_state": project_goal.get("goal_last_state") if project_goal else None,
+                "next_step": project_goal.get("goal_next_step") if project_goal else None,
+            },
+            "real_pending": real_pending[:5],
+            "deep_context": deep_context,
+        }
+
+        _last_wake_json = wake_json
+
+        # ── RENDER ──
+
+        if verbose:
+            return _render_wake_verbose(wake_json)
+        return _render_wake_text(wake_json)
+
     except Exception as e:
         return f"Error al despertar: {redact_secrets(str(e))}"
+
+
+def _render_wake_text(w: dict) -> str:
+    """Compact operational brief: 8-15 dense lines."""
+    lines = ["# CODI WAKE BRIEF"]
+
+    b = w["brief"]
+    lines.append(f"Proyecto: {b['project']} | Estado: {b['state']}")
+
+    # Priorities
+    if b["priorities"]:
+        lines.append("Prioridades:")
+        for idx, p in enumerate(b["priorities"][:3], 1):
+            lines.append(f"  {idx}. [{p['level']}] {p['goal']}: {p['action'][:120]}")
+
+    # Risk
+    if b.get("risk"):
+        lines.append(f"Riesgo: {b['risk']}")
+
+    # Incidents
+    incs = w.get("incidents", [])
+    if incs:
+        lines.append(f"Incidentes ({len(incs)}):")
+        for inc in incs[:3]:
+            lines.append(f"  [{inc['severity']}] {inc['detail']} -> {inc['action']}")
+
+    # Active project context
+    ap = w.get("active_project", {})
+    if ap.get("what"):
+        lines.append(f"[{ap['name']}] {ap['what']}")
+        if ap.get("next_step"):
+            lines.append(f"  Next: {ap['next_step'][:150]}")
+
+    # Pending (intentions only — goals already shown as priorities)
+    pending = w.get("real_pending", [])
+    if pending:
+        lines.append(f"Pendientes ({len(pending)}):")
+        for p in pending[:3]:
+            lines.append(f"  - {p['text']}")
+
+    return "\n".join(lines)
+
+
+def _render_wake_verbose(w: dict) -> str:
+    """Full debug dump for diagnostics."""
+    import json as _json
+    lines = [_render_wake_text(w)]
+    lines.append("\n--- DEBUG DETAIL ---")
+
+    dc = w.get("deep_context", {})
+
+    # Identity
+    identity = dc.get("identity", [])
+    if identity:
+        lines.append("\n## IDENTITY")
+        for m in identity:
+            marker = "[vivi]" if m.get("source") == "experienced" else "[told]"
+            lines.append(f"  {marker} {m['text']}")
+
+    # Emotional state
+    es = dc.get("emotional_state", {})
+    pad = es.get("pad", {})
+    lines.append(
+        f"\n## EMOTIONAL STATE: {es.get('label', '?')}"
+        f" (P={pad.get('p')}, A={pad.get('a')}, D={pad.get('d')})"
+    )
+
+    # Cross-session PEs
+    pes = dc.get("cross_session_pe", [])
+    if pes:
+        lines.append("\n## CROSS-SESSION PE")
+        for pe in pes:
+            lines.append(f"  [{pe.get('type', '?')}] {pe.get('detail', '')}")
+
+    # Sleep report
+    sr = dc.get("sleep_report")
+    if sr:
+        lines.append(f"\n## SLEEP REPORT\n{sr}")
+
+    # Bridge
+    bt = dc.get("session_bridge")
+    if bt:
+        lines.append(f"\n## SESSION BRIDGE\n{bt}")
+
+    # Raw JSON (truncated)
+    lines.append(
+        f"\n## RAW JSON\n```json\n"
+        f"{_json.dumps(w, indent=2, default=str)[:3000]}\n```"
+    )
+
+    return "\n".join(lines)
 
 
 def ciclo_vida() -> str:

@@ -12,7 +12,7 @@ import sqlite3
 
 from modules.config import (
     USER_ID, COLLECTION_NAME,
-    now_iso, now_short, FTS_DB_PATH, connect_fts,
+    now_iso, now_short, now_col, FTS_DB_PATH, connect_fts,
 )
 from modules.secret_redact import redact_secrets
 from modules.pg_store import pg
@@ -867,18 +867,42 @@ def detect_self_discrepancies() -> dict:
         except Exception:
             pass
 
-        # 2. Prediction accuracy trend (Clark 2013)
+        # 2. Prediction accuracy trend — exponential recency weighting (Anderson & Schooler 1991)
         try:
             rows = conn.execute("""
-                SELECT hit FROM prediction_results
+                SELECT hit, created_at FROM prediction_results
                 WHERE source != 'sleep_loop'
-                ORDER BY id DESC LIMIT 30
+                ORDER BY created_at DESC LIMIT 50
             """).fetchall()
-            if len(rows) >= 20:
-                recent = [r[0] for r in rows[:10]]
-                older = [r[0] for r in rows[10:20]]
-                recent_acc = sum(recent) / len(recent)
-                older_acc = sum(older) / len(older)
+            if len(rows) >= 10:
+                import math as _math
+                from datetime import datetime as _dt
+                LAMBDA = 0.05  # decay: half-life ~14h
+                now_ts = now_col()
+                weights, hits = [], []
+                for i, (hit, created_at) in enumerate(rows):
+                    try:
+                        ts = _dt.fromisoformat(created_at)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=now_ts.tzinfo)
+                        age_hours = (now_ts - ts).total_seconds() / 3600
+                    except Exception:
+                        age_hours = float(i)
+                    weights.append(_math.exp(-LAMBDA * age_hours))
+                    hits.append(hit)
+                total_w = sum(weights)
+                cumulative = 0.0
+                split_idx = len(rows) // 2
+                for i, w in enumerate(weights):
+                    cumulative += w
+                    if cumulative >= total_w * 0.5:
+                        split_idx = i + 1
+                        break
+                def _wacc(idxs):
+                    ws = sum(weights[k] for k in idxs)
+                    return sum(hits[k] * weights[k] for k in idxs) / ws if ws else 0.5
+                recent_acc = _wacc(range(split_idx))
+                older_acc = _wacc(range(split_idx, len(rows)))
                 trend = recent_acc - older_acc
                 if abs(trend) > 0.15:
                     direction = "improving" if trend > 0 else "degrading"

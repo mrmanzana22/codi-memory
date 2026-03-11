@@ -440,22 +440,7 @@ def correct_memory(
                 )
 
     # 4. Build new content: REPLACE old trace, don't concatenate (Nader 2000)
-    # Old content is preserved in reconsolidation_log for audit trail
     new_content = correction
-    try:
-        conn = _consolidation_conn()
-        conn.execute("""
-            INSERT INTO reconsolidation_log
-            (memory_id, memory_type, action, prediction_error, memory_strength,
-             old_content, new_content, blend_weight, trigger_context, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
-              old_content[:500], new_content[:500], 0.0,  # 0.0: full replace (Nader 2000), not blend
-              correction[:200], now_iso()))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        _logger.warning("Could not log reconsolidation: %s", redact_secrets(str(e)))
 
     # 5. Adjust confidence proportional to PE (Exton-McGuinness 2015)
     # Higher PE = larger confidence decrement (0.05 base + 0.15 * PE)
@@ -470,15 +455,33 @@ def correct_memory(
 
     # 7. Upsert full record -- destroy and re-synthesize the trace (Nader 2000)
     try:
-        updated_payload = {
+        updated_payload = dict(old_payload)
+        updated_payload.update({
             "data": new_content,
+            "content": new_content,
             "confidence": new_confidence,
             "reconsolidated_at": now_iso(),
             "reconsolidation_count": int(old_payload.get("reconsolidation_count", 0)) + 1,
-        }
-        pg.update_payload(full_id, updated_payload)
+        })
+        pg.upsert(full_id, new_vector, updated_payload)
     except Exception as e:
         return f"[reconsolidation] pg_store upsert error: {redact_secrets(str(e))}"
+
+    # 7b. Log reconsolidation AFTER successful upsert (audit trail)
+    try:
+        conn = _consolidation_conn()
+        conn.execute("""
+            INSERT INTO reconsolidation_log
+            (memory_id, memory_type, action, prediction_error, memory_strength,
+             old_content, new_content, blend_weight, trigger_context, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
+              old_content[:500], new_content[:500], 0.0,
+              correction[:200], now_iso()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        _logger.warning("Could not log reconsolidation: %s", redact_secrets(str(e)))
 
     # 8. Update FTS5 index
     try:

@@ -2015,10 +2015,10 @@ def _metacognitive_cycle(conn, turn_number):
     try:
         pe_rows = conn.execute("""
             SELECT weighted_surprise FROM (
-                SELECT weighted_surprise FROM prediction_results
+                SELECT id, weighted_surprise FROM prediction_results
                 WHERE COALESCE(source, 'interactive') != 'sleep_loop'
                 ORDER BY id DESC LIMIT 10
-            ) ORDER BY rowid
+            ) ORDER BY id
         """).fetchall()
         if len(pe_rows) >= 4:
             values = [r[0] for r in pe_rows]

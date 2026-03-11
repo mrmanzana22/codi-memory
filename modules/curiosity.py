@@ -18,7 +18,7 @@ import math
 import os
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 from modules.config import (
     USER_ID, COLLECTION_NAME,
@@ -125,13 +125,15 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
             timestamp = meta.get("timestamp", "")
             category = meta.get("category", "")
 
-            try:
-                if timestamp:
+            if timestamp:
+                try:
                     mem_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                    if mem_date.replace(tzinfo=None) < fecha_limite:
-                        continue
-            except Exception:
-                continue
+                except ValueError:
+                    continue
+                if mem_date.tzinfo is None:
+                    mem_date = mem_date.replace(tzinfo=fecha_limite.tzinfo or timezone.utc)
+                if mem_date < fecha_limite:
+                    continue
 
             if analyzed_count < 500:
                 acc = int((payload.get('attention_access_count', 0)) or 0)
@@ -196,7 +198,11 @@ def generar_curiosidad() -> str:
             timestamp = meta.get("timestamp", "")
             try:
                 if timestamp:
-                    fecha = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+                    fecha = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    if fecha.tzinfo is None:
+                        fecha = fecha.replace(tzinfo=ahora.tzinfo)
+                    else:
+                        fecha = fecha.astimezone(ahora.tzinfo)
                 else:
                     continue
             except Exception:
@@ -268,11 +274,15 @@ def generar_curiosidad() -> str:
 def _cargar_curiosidades() -> dict:
     """Carga el archivo de curiosidades desde disco."""
     if os.path.exists(CURIOSIDAD_FILE):
-        try:
-            with open(CURIOSIDAD_FILE, 'r', encoding='utf-8') as f:
+        with open(CURIOSIDAD_FILE, 'r', encoding='utf-8') as f:
+            try:
                 return json.load(f)
-        except Exception:
-            pass
+            except json.JSONDecodeError as e:
+                backup_path = f"{CURIOSIDAD_FILE}.corrupt-{now_col().strftime('%Y%m%d%H%M%S')}.bak"
+                os.replace(CURIOSIDAD_FILE, backup_path)
+                raise ValueError(
+                    f"Curiosity file is corrupt and was moved to backup: {backup_path}"
+                ) from e
     return {
         "metadata": {"descripcion": "Preguntas que Codi quiere explorar", "creado": now_short()},
         "pendientes": [], "exploradas": [], "descubrimientos": []

@@ -798,6 +798,7 @@ def apply_intention_maintenance():
             rows = cur.fetchall()
 
         with conn.transaction():
+            updates = []
             for row in rows:
                 int_id = row["id"]
                 activation = row["activation"]
@@ -824,11 +825,16 @@ def apply_intention_maintenance():
                     now=now,
                 )
 
-                conn.execute(
-                    "UPDATE intentions SET activation = %s, last_maintained_at = NOW() "
-                    "WHERE id = %s",
-                    (round(new_act, 4), int_id),
-                )
+                updates.append((round(new_act, 4), int_id))
+
+            # Batch UPDATE: 1 round trip instead of N (psycopg3 executemany)
+            if updates:
+                with conn.cursor() as cur:
+                    cur.executemany(
+                        "UPDATE intentions SET activation = %s, last_maintained_at = NOW() "
+                        "WHERE id = %s",
+                        updates,
+                    )
 
             # Expire stale (using updated activations)
             _expire_stale(conn, now)

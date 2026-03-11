@@ -83,6 +83,16 @@ def _insert(conn: sqlite3.Connection, alert: dict, dedupe: str, run_id: str, now
     return int(cur.lastrowid)
 
 
+def _build_evidence_json(existing_json: str | None, new_evidence: dict) -> str:
+    """Store 1-deep evidence: latest + previous-latest only (no unbounded nesting)."""
+    if existing_json:
+        existing = json.loads(existing_json)
+        prev = existing.get("latest", existing)
+    else:
+        prev = {}
+    return json.dumps({"latest": new_evidence, "previous": prev}, sort_keys=True)
+
+
 def _update(conn: sqlite3.Connection, existing: dict, alert: dict, run_id: str, now: str) -> int:
     count = int(existing["occurrence_count"]) + 1
     severity = "critical" if existing["severity"] == "warning" and count >= 3 else existing["severity"]
@@ -94,8 +104,7 @@ def _update(conn: sqlite3.Connection, existing: dict, alert: dict, run_id: str, 
            WHERE id = ?""",
         (
             severity, now, count,
-            json.dumps({"previous": json.loads(existing.get("evidence_json") or "{}"),
-                        "latest": alert["evidence"]}, sort_keys=True),
+            _build_evidence_json(existing.get("evidence_json"), alert["evidence"]),
             alert.get("recommended_action"),
             run_id, now, existing["id"],
         ),

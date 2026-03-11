@@ -393,13 +393,20 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         # Bjork & Bjork 1992: storage strength != retrieval strength immunity.
         # Range filter (attention_salience > FADEM_FLOOR) applied in Python post-filter.
 
-        # Paginated scroll (same pattern as consolidation.py:208-267)
+        # Sample-based scroll: process ~500 memories per tick instead of full scan.
+        # With tier-2 (~45min), full corpus cycles in ~7.5h — acceptable for
+        # forgetting curves whose timescale is hours/days (Wixted & Ebbesen 1991).
+        import random as _rng
         offset = None
-        MAX_SCROLL = 10000  # Bug #4 fix: was 500, only covered ~14% of memories
+        SAMPLE_LIMIT = 500
         pending_updates = []  # batch updates to avoid N+1 round-trips
         vault_candidates = []
 
-        while total_scanned < MAX_SCROLL:
+        # Random starting page: skip 0-4 pages (0-800 memories) for coverage rotation
+        skip_pages = _rng.randint(0, 4)
+        _skipped = 0
+
+        while total_scanned < SAMPLE_LIMIT:
             batch, next_offset = pg.scroll(
                 filters={"narrative_importance__not": "critical", "is_dormant": False},
                 limit=200,
@@ -408,6 +415,14 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
             )
             if not batch:
                 break
+
+            # Skip pages for rotation
+            if _skipped < skip_pages:
+                _skipped += 1
+                if not next_offset:
+                    break
+                offset = next_offset
+                continue
 
             for point in batch:
                 salience = point.payload.get('attention_salience', 0.5)
@@ -465,12 +480,13 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
             from datetime import datetime as _dt
             _now = _dt.now()
             with _pg_conn() as conn:
-                for mid, sal, ss_val, rs_val in pending_updates:
-                    conn.execute(
+                with conn.transaction():
+                    conn.executemany(
                         "UPDATE memories SET activation_score = %s, "
                         "storage_strength = %s, retrieval_strength = %s, "
                         "updated_at = %s WHERE id = %s",
-                        (sal, ss_val, rs_val, _now, mid),
+                        [(sal, ss_val, rs_val, _now, mid)
+                         for mid, sal, ss_val, rs_val in pending_updates],
                     )
 
         vaulted_count = 0
