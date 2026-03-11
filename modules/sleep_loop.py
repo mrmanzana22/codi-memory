@@ -8,8 +8,8 @@ and health checks.
 Writes a sleep_report to the latest session_checkpoints row.
 
 Design:
-  - CLI + launchd: runs every 30 min via launchd plist
-  - 8s budget: 4 ticks with hard timeouts
+  - CLI + launchd: runs every 15 min via launchd plist
+  - 60s budget: 12 ticks with hard timeouts
   - Lock file: data/sleep_loop.lock prevents double execution
   - Idempotent: only writes report to checkpoints without one
 
@@ -26,11 +26,12 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import signal
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 _logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
                      remaining_ms: int, status: str, reason: str = None):
     """Log 1 row per tick to tool_calls table for perf analysis.
 
-    Status values: ok, over_budget, skipped, error
+    Status values: ok, timeout, over_budget, skipped, error
     Lightweight: 1 INSERT per tick, compact payload.
     """
     try:
@@ -59,12 +60,17 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
         tag = f"sleep_tick:{status}"
         if reason:
             tag += f":{reason}"
+        error_type = (
+            reason or status
+            if status in ("error", "timeout", "over_budget")
+            else None
+        )
         log_tool_call(
             tool_name=f"sleep_tick_{tick_name}",
             started_at=now_iso(),
             duration_ms=int(elapsed_ms),
             success=(status == "ok"),
-            error_type=reason if status == "error" else None,
+            error_type=error_type,
             args_size=0,
             result_size=0,
             session_id=None,
@@ -78,7 +84,7 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
 # ============================================================
 
 LOCK_FILE = os.path.join(DATA_DIR, "sleep_loop.lock")
-DEFAULT_BUDGET_MS = 15000
+DEFAULT_BUDGET_MS = 60000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
@@ -91,6 +97,7 @@ TICK_ORDER = ["prospective", "health", "self_model", "reconsolidation", "consoli
 TICK_TIER = {
     "prospective": 1,    # Fast, high-value (intention maintenance)
     "health": 1,          # Fast, critical (FTS sync, health check)
+    "health_snapshot": 2, # Hourly operational snapshot (P0)
     "self_model": 2,      # Medium (reflection, ~500ms)
     "reconsolidation": 2, # Medium (labile memory processing)
     "homeostasis": 2,     # Medium (salience decay)
@@ -176,17 +183,17 @@ class SleepWorldModel:
             if conn is None:
                 conn = _get_conn()
                 close_conn = True
-            now = datetime.now()
+            now_utc = datetime.now(timezone.utc)
+            now_local = datetime.now()  # For SQLite comparisons stored as local time
 
             # new_memories: count since last full consolidation / 100
             try:
-                row = conn.execute(
-                    "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
-                ).fetchone()
-                if row and row[0]:
+                last_full = _get_last_full_consolidation_at()
+                last_full_sqlite = _sqlite_timestamp_cutoff(last_full)
+                if last_full_sqlite:
                     n = conn.execute(
                         "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
-                        (str(row[0]),)
+                        (last_full_sqlite,)
                     ).fetchone()[0]
                 else:
                     n = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()[0]
@@ -212,7 +219,7 @@ class SleepWorldModel:
             try:
                 labile = conn.execute(
                     "SELECT COUNT(*) FROM labile_memories WHERE window_expires > ?",
-                    (now.isoformat(),)
+                    (now_local.isoformat(),)
                 ).fetchone()[0]
                 state["labile_count"] = min(1.0, labile / 10.0)
             except Exception:
@@ -220,12 +227,10 @@ class SleepWorldModel:
 
             # hours_since_consol: normalized by 48h
             try:
-                row = conn.execute(
-                    "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
-                ).fetchone()
-                if row and row[0]:
-                    last = datetime.fromisoformat(str(row[0]).replace('+00:00', ''))
-                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                last_full = _get_last_full_consolidation_at()
+                if last_full:
+                    last = _normalize_consolidation_timestamp(last_full)
+                    hours = max(0.0, (now_utc - last).total_seconds() / 3600)
                     state["hours_since_consol"] = min(1.0, hours / 48.0)
             except Exception:
                 pass
@@ -243,15 +248,12 @@ class SleepWorldModel:
             except Exception:
                 pass
 
-            # curiosity_pending: from curiosity.json / 20
+            # curiosity_pending: from canonical curiosity store / 20
             try:
-                cpath = os.path.join(DATA_DIR, "curiosity.json")
-                if os.path.exists(cpath):
-                    with open(cpath) as f:
-                        cdata = json.load(f)
-                    pending = len([q for q in cdata.get("questions", [])
-                                   if q.get("status") == "pending"])
-                    state["curiosity_pending"] = min(1.0, pending / 20.0)
+                from modules.curiosity import _cargar_curiosidades
+                cdata = _cargar_curiosidades()
+                pending = len(cdata.get("pendientes", []))
+                state["curiosity_pending"] = min(1.0, pending / 20.0)
             except Exception:
                 pass
 
@@ -262,7 +264,7 @@ class SleepWorldModel:
                 ).fetchone()
                 if row:
                     last = datetime.fromisoformat(row[0])
-                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                    hours = max(0.0, (now_local - last).total_seconds() / 3600)
                     state["decay_debt"] = min(1.0, hours / 12.0)
             except Exception:
                 pass
@@ -274,7 +276,7 @@ class SleepWorldModel:
                 ).fetchone()
                 if row:
                     last = datetime.fromisoformat(row[0])
-                    hours = max(0.0, (now - last).total_seconds() / 3600)
+                    hours = max(0.0, (now_local - last).total_seconds() / 3600)
                     state["intention_staleness"] = min(1.0, hours / 6.0)
             except Exception:
                 pass
@@ -440,18 +442,19 @@ TICK_MIN_MS = {
 
 # Hard cap per tick: prevents heavy ticks from starving the budget
 TICK_MAX_MS = {
-    "consolidation": 6000,       # was 30000 — must leave room for other ticks
-    "causal_discovery": 5000,    # was 15000
-    "curiosity": 3000,           # was 10000
-    "curiosity_resolve": 5000,   # was 15000
-    "backup": 5000,              # was 10000
-    "sharpe_insights": 3000,     # was 8000
-    "reconsolidation": 3000,     # was 5000
-    "homeostasis": 2000,         # was 5000
-    "self_model": 2000,          # was 5000
-    "health": 2000,              # was 5000
-    "prospective": 2000,         # was 3000
-    "proactive_contact": 2000,   # was 3000
+    "consolidation": 30000,      # was 6000 — light takes 13-76s (1.4s/candidate)
+    "causal_discovery": 10000,   # was 5000
+    "curiosity": 5000,           # was 3000
+    "curiosity_resolve": 10000,  # was 5000
+    "backup": 5000,              # unchanged
+    "sharpe_insights": 5000,     # was 3000
+    "reconsolidation": 5000,     # was 3000
+    "homeostasis": 3000,         # was 2000
+    "self_model": 3000,          # was 2000
+    "health": 3000,              # was 2000
+    "health_snapshot": 500,      # SQLite only, no PG
+    "prospective": 3000,         # was 2000
+    "proactive_contact": 3000,   # was 2000
 }
 
 
@@ -541,18 +544,15 @@ def _get_target_checkpoint(max_age_min: int) -> int | None:
     conn = _get_conn()
     try:
         row = conn.execute(
-            "SELECT id, created_at, sleep_report FROM session_checkpoints "
+            "SELECT id, created_at FROM session_checkpoints "
+            "WHERE sleep_report IS NULL OR TRIM(sleep_report) = '' "
             "ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
 
         if not row:
             return None
 
-        cp_id, created_at, sleep_report = row
-
-        # Already has a report?
-        if sleep_report and sleep_report.strip():
-            return None
+        cp_id, created_at = row
 
         # Too old?
         try:
@@ -573,19 +573,68 @@ def _get_target_checkpoint(max_age_min: int) -> int | None:
 def _write_sleep_report(checkpoint_id: int, report_text: str) -> bool:
     """Idempotent write of sleep_report to checkpoint row.
 
-    Only writes if sleep_report is NULL or empty (no clobber).
+    Only writes if sleep_report is NULL or blank after trimming (no clobber).
     """
     conn = _get_conn()
     try:
         cursor = conn.execute(
             "UPDATE session_checkpoints SET sleep_report = ? "
-            "WHERE id = ? AND (sleep_report IS NULL OR sleep_report = '')",
+            "WHERE id = ? AND (sleep_report IS NULL OR TRIM(sleep_report) = '')",
             (report_text, checkpoint_id)
         )
         conn.commit()
         return cursor.rowcount > 0
     finally:
         conn.close()
+
+
+def _get_last_full_consolidation_at():
+    """Read canonical full-consolidation timestamp from PostgreSQL.
+
+    Falls back to SQLite only for legacy rows during migration.
+    """
+    try:
+        from modules.config_pg import get_conn as get_pg_conn
+        with get_pg_conn() as pg_conn:
+            row = pg_conn.execute(
+                "SELECT MAX(created_at) FROM consolidation_log WHERE scope = %s",
+                ("full",)
+            ).fetchone()
+            if row and row[0]:
+                return row[0]
+    except Exception:
+        pass
+
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
+        ).fetchone()
+        conn.close()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
+def _normalize_consolidation_timestamp(value):
+    """Normalize PostgreSQL/SQLite timestamps to UTC-aware datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.fromisoformat(str(value))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _sqlite_timestamp_cutoff(value):
+    """Format normalized consolidation timestamp for SQLite text comparison."""
+    dt = _normalize_consolidation_timestamp(value)
+    if not dt:
+        return None
+    return dt.replace(tzinfo=None).isoformat()
 
 
 # ============================================================
@@ -611,26 +660,20 @@ def _should_run_full_consolidation() -> bool:
         if not (22 <= now.hour or now.hour < 6):
             return False
 
-        conn = _get_conn()
+        last_full = _get_last_full_consolidation_at()
 
-        # Get last full consolidation time
-        row = conn.execute(
-            "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
-        ).fetchone()
-
-        if not row or not row[0]:
-            conn.close()
+        if not last_full:
             return True  # never ran, should run
 
-        last = datetime.fromisoformat(str(row[0]))
-        if last.tzinfo:
-            last = last.replace(tzinfo=None)
-        hours_since = max(0.01, (datetime.now() - last).total_seconds() / 3600)
+        last = _normalize_consolidation_timestamp(last_full)
+        hours_since = max(0.01, (datetime.now(timezone.utc) - last).total_seconds() / 3600)
 
         # Count new memories since last consolidation
+        last_full_sqlite = _sqlite_timestamp_cutoff(last_full)
+        conn = _get_conn()
         new_memories_row = conn.execute(
             "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
-            (str(row[0]),)
+            (last_full_sqlite,)
         ).fetchone()
         conn.close()
 
@@ -908,6 +951,7 @@ def _tick_consolidation(budget_ms: int) -> dict:
             # Light consolidation: run inline within budget
             from modules.consolidation import run_consolidation
             report = run_consolidation(scope="light", lookback_hours=6)
+            _cache_last_consolidation_result()
             elapsed = (time.monotonic() - start) * 1000
             result["ok"] = True
             result["scope"] = "light"
@@ -1227,6 +1271,11 @@ def _tick_backup(budget_ms: int) -> dict:
         return result
 
     parts = []
+    qdrant_ok = True
+    sqlite_ok = True
+    pg_ok = True
+    cloud_required = False
+    cloud_ok = True
     collections = ["codi_memories", "codi_semantic"]
     qdrant_url = "http://localhost:6333"
 
@@ -1266,6 +1315,7 @@ def _tick_backup(budget_ms: int) -> dict:
             )
 
         except Exception as e:
+            qdrant_ok = False
             parts.append(f"{coll}: error {str(e)[:50]}")
 
     # Backup SQLite databases (consciousness state)
@@ -1293,6 +1343,7 @@ def _tick_backup(budget_ms: int) -> dict:
                 while len(existing) > 3:
                     os.remove(existing.pop(0))
             except Exception as e:
+                sqlite_ok = False
                 parts.append(f"{db_name}: error {str(e)[:40]}")
 
     # Backup PostgreSQL memories table (added after 20,859 memory loss on 2026-03-03)
@@ -1333,6 +1384,7 @@ def _tick_backup(budget_ms: int) -> dict:
         else:
             parts.append("pg_memories: 0 rows (EMPTY!)")
     except Exception as e:
+        pg_ok = False
         parts.append(f"pg_memories: error {str(e)[:50]}")
 
     # Upload to Supabase Storage (off-site backup)
@@ -1343,6 +1395,7 @@ def _tick_backup(budget_ms: int) -> dict:
         sb_url = os.environ.get('SUPABASE_URL')
         sb_key = os.environ.get('SUPABASE_KEY')
         if sb_url and sb_key:
+            cloud_required = True
             headers = {
                 'Authorization': f'Bearer {sb_key}',
                 'apikey': sb_key,
@@ -1367,6 +1420,7 @@ def _tick_backup(budget_ms: int) -> dict:
                         sz = round(len(compressed) / 1024 / 1024, 1)
                         parts.append(f"cloud:{fname}={sz}MB")
                     else:
+                        cloud_ok = False
                         parts.append(f"cloud:{fname}=err{resp.status_code}")
 
             # Cleanup old cloud backups: list and delete beyond last 3 per prefix
@@ -1386,7 +1440,8 @@ def _tick_backup(budget_ms: int) -> dict:
                         for f in files:
                             # Extract collection name from filename
                             name = f.get('name', '')
-                            coll_key = name.rsplit('-', 2)[0] if '-' in name else name
+                            match = re.match(r"^(?P<coll>.+?)-\d{4}-\d{2}-\d{2}-\d{2}(?:[._-].*)?$", name)
+                            coll_key = match.group('coll') if match else name
                             groups[coll_key].append(f)
                         for coll_key, group_files in groups.items():
                             while len(group_files) > 3:
@@ -1399,11 +1454,15 @@ def _tick_backup(budget_ms: int) -> dict:
                 except Exception:
                     pass
     except Exception as e:
+        cloud_ok = False
         parts.append(f"cloud: error {str(e)[:50]}")
 
-    # Write marker to prevent re-running this window
-    with open(marker, 'w') as f:
-        f.write(now.isoformat())
+    backup_ok = qdrant_ok and sqlite_ok and pg_ok and (not cloud_required or cloud_ok)
+
+    if backup_ok:
+        # Write marker to prevent re-running this window
+        with open(marker, 'w') as f:
+            f.write(now.isoformat())
 
     # Cleanup old markers (keep last 7 days)
     for old_marker in glob_mod.glob(os.path.join(backup_dir, ".backup-*.done")):
@@ -1416,8 +1475,11 @@ def _tick_backup(budget_ms: int) -> dict:
             pass
 
     elapsed = (time.monotonic() - start) * 1000
-    result["ok"] = True
-    result["detail"] = "; ".join(parts) if parts else "no collections"
+    result["ok"] = backup_ok
+    result["detail"] = (
+        "; ".join(parts) if backup_ok
+        else "; ".join(parts + ["backup incomplete; retry next tick"])
+    ) if parts else "no collections"
     result["elapsed_ms"] = round(elapsed)
     return result
 
@@ -1572,6 +1634,43 @@ def _set_proactive_last_sent():
         pass
 
 
+def _cache_last_consolidation_result():
+    """Cache latest consolidation metrics for proactive signal checks."""
+    try:
+        from modules.config_pg import get_conn as get_pg_conn
+        with get_pg_conn() as pg_conn:
+            row = pg_conn.execute(
+                """SELECT batch_id, scope, facts_created, facts_updated,
+                          contradictions_found, duration_ms, created_at
+                   FROM consolidation_log
+                   ORDER BY created_at DESC
+                   LIMIT 1"""
+            ).fetchone()
+
+        if not row:
+            return
+
+        payload = {
+            "batch_id": row[0],
+            "scope": row[1],
+            "facts_created": row[2] or 0,
+            "facts_updated": row[3] or 0,
+            "contradictions_found": row[4] or 0,
+            "duration_ms": row[5] or 0,
+            "created_at": str(row[6]),
+        }
+
+        conn = _get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+            ("last_consolidation_result", json.dumps(payload))
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def _tick_proactive_contact(budget_ms: int) -> dict:
     """Proactive outreach: Codi decides when to contact Hare.
 
@@ -1605,7 +1704,10 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             from modules.prospective import get_pending_intentions
             intentions = get_pending_intentions(limit=20)
             overdue = []
-            now = datetime.fromisoformat(now_iso())
+            now = datetime.fromisoformat(now_iso().replace("Z", "+00:00"))
+            if now.tzinfo:
+                cot_offset = timezone(timedelta(hours=-5))
+                now = now.astimezone(cot_offset).replace(tzinfo=None)
             for intent in intentions:
                 if intent.get("trigger_type") == "time":
                     spec = intent.get("trigger_spec", {})
@@ -1614,29 +1716,34 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                     trigger_time = spec.get("trigger_time", "")
                     if trigger_time:
                         try:
-                            t = datetime.fromisoformat(trigger_time)
+                            t = datetime.fromisoformat(trigger_time.replace("Z", "+00:00"))
+                            if t.tzinfo:
+                                cot_offset = timezone(timedelta(hours=-5))
+                                t = t.astimezone(cot_offset).replace(tzinfo=None)
                             if t < now:
                                 overdue.append(intent.get("action", "?"))
-                        except ValueError:
+                        except (TypeError, ValueError):
                             pass
             if overdue:
                 signals.append(f"Intenciones vencidas ({len(overdue)}): " + "; ".join(overdue[:3]))
         except Exception:
             pass
 
-        # Signal 2: Goals with deadline < 24h
+        # Signal 2: Goals with deadline < 24h (goals live in PostgreSQL)
         try:
-            conn = _get_conn()
-            rows = conn.execute(
-                """SELECT title, deadline, goal_what FROM goals
-                   WHERE status = 'active' AND deadline != ''
-                   AND deadline IS NOT NULL"""
-            ).fetchall()
-            conn.close()
+            from modules.config_pg import get_conn as _pg_get_conn
+            with _pg_get_conn() as pg_conn:
+                rows = pg_conn.execute(
+                    """SELECT title, deadline, goal_what FROM goals
+                       WHERE status = 'active'
+                       AND deadline IS NOT NULL"""
+                ).fetchall()
             now = datetime.fromisoformat(now_iso())
             for row in rows:
                 try:
-                    dl = datetime.fromisoformat(row[1])
+                    dl = row[1] if isinstance(row[1], datetime) else datetime.fromisoformat(row[1])
+                    if dl.tzinfo is None:
+                        dl = dl.replace(tzinfo=TZ_COL)
                     hours_left = (dl - now).total_seconds() / 3600
                     if 0 < hours_left < 24:
                         signals.append(f"Goal deadline < 24h: {row[0]}")
@@ -1651,8 +1758,9 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             row = conn.execute(
                 """SELECT COUNT(*) FROM tool_calls
                    WHERE tool_name LIKE 'sleep_tick_%'
-                   AND tag LIKE '%error%'
-                   AND started_at > datetime('now', '-3 hours')"""
+                   AND success = 0
+                   AND error_type IS NOT NULL
+                   AND datetime(started_at) > datetime('now', '-3 hours')"""
             ).fetchone()
             conn.close()
             if row and row[0] >= 3:
@@ -1662,6 +1770,7 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
 
         # Signal 4: Consolidation found something
         try:
+            _cache_last_consolidation_result()
             conn = _get_conn()
             row = conn.execute(
                 """SELECT value FROM sleep_loop_state
@@ -1670,7 +1779,7 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             conn.close()
             if row:
                 consol = json.loads(row[0]) if isinstance(row[0], str) else {}
-                new_facts = consol.get("semantic_facts_created", 0)
+                new_facts = consol.get("facts_created", 0)
                 if new_facts >= 3:
                     signals.append(f"Consolidacion descubrio {new_facts} hechos nuevos")
         except Exception:
@@ -1757,7 +1866,7 @@ def _tick_health(budget_ms: int) -> dict:
     try:
         from modules.pg_store import pg as _pg
 
-        fts_db_path = os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db')
+        fts_db_path = FTS_DB_PATH
         fts_conn = connect_fts(fts_db_path)
 
         # Get IDs already in FTS
@@ -1766,20 +1875,28 @@ def _tick_health(budget_ms: int) -> dict:
             fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
         )
 
-        # Quick check: skip if already in sync
+        # Persist canonical episodic count for world-model fts_gap (#132)
         pg_count = _pg.count(is_semantic=False).points_count
-        if len(fts_ids) >= pg_count:
-            parts.append(f"fts_sync: in sync ({len(fts_ids)})")
-            fts_conn.close()
-        else:
-            # Paginated scroll through ALL pg_store memories
-            points, _ = _pg.scroll(
-                filters={},
-                limit=5000,
-                is_semantic=False,
+        try:
+            state_conn = _get_conn()
+            state_conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                ("qdrant_count", str(pg_count))
             )
+            state_conn.commit()
+            state_conn.close()
+        except Exception:
+            pass
 
-            synced = 0
+        # Paginated scroll through ALL pg_store memories (always scan, no count shortcut)
+        synced = 0
+        scroll_offset = None
+        while True:
+            scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
+            if scroll_offset is not None:
+                scroll_kwargs["offset"] = scroll_offset
+            points, scroll_offset = _pg.scroll(**scroll_kwargs)
+
             for p in points:
                 mid = str(p.id)
                 if mid not in fts_ids:
@@ -1796,14 +1913,17 @@ def _tick_health(budget_ms: int) -> dict:
                     """, (mid, content, category, source, importance))
                     synced += 1
 
-            if synced > 0:
-                fts_conn.commit()
-            fts_conn.close()
+            if scroll_offset is None:
+                break
 
-            if synced > 0:
-                parts.append(f"fts_sync: {synced} new (total: {len(fts_ids) + synced})")
-            else:
-                parts.append("fts_sync: 0 new")
+        if synced > 0:
+            fts_conn.commit()
+        fts_conn.close()
+
+        if synced > 0:
+            parts.append(f"fts_sync: {synced} new (total: {len(fts_ids) + synced})")
+        else:
+            parts.append(f"fts_sync: in sync ({len(fts_ids)})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
 
@@ -1820,7 +1940,7 @@ def _tick_health(budget_ms: int) -> dict:
     # Operational health monitoring (v1: 3 rules, alerts only)
     try:
         from modules.health_monitor import run_health_check
-        hc_conn = connect_fts(os.path.join(os.path.dirname(__file__), '..', 'memories_fts.db'))
+        hc_conn = connect_fts(FTS_DB_PATH)
         now_iso = datetime.now(TZ_COL).isoformat()
         hc = run_health_check(hc_conn, now_iso)
         hc_conn.close()
@@ -1832,9 +1952,149 @@ def _tick_health(budget_ms: int) -> dict:
         parts.append(f"health_monitor: error {redact_secrets(str(e))[:50]}")
 
     elapsed = (time.monotonic() - start) * 1000
-    result["ok"] = True
+    has_errors = any("error" in p.lower() for p in parts)
+    result["ok"] = not has_errors
     result["detail"] = "; ".join(parts)
     result["elapsed_ms"] = round(elapsed)
+    return result
+
+
+def _tick_health_snapshot(budget_ms: int) -> dict:
+    """Tick: persist operational snapshot to system_health table (P0)."""
+    import json as _json
+    result = {"tick": "health_snapshot", "ok": False, "detail": ""}
+    try:
+        conn = connect_fts(FTS_DB_PATH)
+        now = datetime.now(TZ_COL)
+        now_str = now.isoformat()
+        since_24h = (now - timedelta(hours=24)).isoformat()
+
+        # --- tick_stats: age of each tick ---
+        tick_rows = conn.execute(
+            "SELECT key, value FROM sleep_loop_state WHERE key LIKE 'last_%'"
+        ).fetchall()
+        tick_stats = {}
+        for key, val in tick_rows:
+            tick_name = key[5:]  # strip "last_"
+            try:
+                age_min = round((now - datetime.fromisoformat(val)).total_seconds() / 60)
+            except Exception:
+                age_min = -1
+            tick_stats[tick_name] = {"last_at": val, "age_min": age_min}
+
+        # --- wm_json ---
+        wm_row = conn.execute(
+            "SELECT COUNT(*) FROM write_queue_log WHERE kind='remember' AND status='done' AND created_at > ?",
+            (since_24h,),
+        ).fetchone()
+        wm_active_row = conn.execute(
+            "SELECT COUNT(*) FROM working_memory WHERE expires_at > ?", (now_str,)
+        ).fetchone()
+        wm_json = {
+            "active": int(wm_active_row[0] or 0),
+            "writes_24h": int(wm_row[0] or 0),
+        }
+
+        # --- predictions_json ---
+        pred_json = {"count_24h": 0, "accuracy_pct": 0.0, "avg_pe": 0.0}
+        try:
+            pred_row = conn.execute(
+                """SELECT COUNT(*), AVG(CASE WHEN outcome='correct' THEN 1.0 ELSE 0.0 END)*100,
+                          AVG(pe_magnitude)
+                   FROM predictions WHERE created_at > ?""",
+                (since_24h,),
+            ).fetchone()
+            if pred_row and pred_row[0]:
+                pred_json = {
+                    "count_24h": int(pred_row[0]),
+                    "accuracy_pct": round(pred_row[1] or 0.0, 1),
+                    "avg_pe": round(pred_row[2] or 0.0, 3),
+                }
+        except Exception:
+            pass  # predictions table may have schema variations
+
+        # --- ai_json ---
+        ai_json = {"total_observations": 0, "table_exists": False}
+        try:
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='generative_model_transitions'"
+            ).fetchone()
+            if exists:
+                obs = conn.execute(
+                    "SELECT COALESCE(SUM(count),0) FROM generative_model_transitions"
+                ).fetchone()[0]
+                ai_json = {"total_observations": int(obs), "table_exists": True}
+        except Exception:
+            pass
+
+        # --- alerts_json ---
+        alerts_json = {"open_count": 0, "critical_count": 0, "by_subsystem": {}}
+        try:
+            alert_rows = conn.execute(
+                """SELECT subsystem, severity, COUNT(*) FROM health_alerts
+                   WHERE status IN ('open','diagnosing') GROUP BY subsystem, severity"""
+            ).fetchall()
+            by_sub = {}
+            total = 0
+            critical = 0
+            for sub, sev, cnt in alert_rows:
+                by_sub[sub] = by_sub.get(sub, 0) + cnt
+                total += cnt
+                if sev == "critical":
+                    critical += cnt
+            alerts_json = {"open_count": total, "critical_count": critical, "by_subsystem": by_sub}
+        except Exception:
+            pass
+
+        # --- global_json ---
+        ev_row = conn.execute(
+            "SELECT COALESCE(SUM(count),0) FROM event_counts WHERE last_seen > ?", (since_24h,)
+        ).fetchone()
+        wr_row = conn.execute(
+            "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)
+        ).fetchone()
+        global_json = {
+            "events_24h": int(ev_row[0] or 0),
+            "writes_24h": int(wr_row[0] or 0),
+        }
+
+        # --- INSERT snapshot ---
+        conn.execute(
+            """INSERT INTO system_health
+               (snapshot_at, tick_stats_json, wm_json, predictions_json,
+                ai_json, alerts_json, global_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now_str,
+                _json.dumps(tick_stats),
+                _json.dumps(wm_json),
+                _json.dumps(pred_json),
+                _json.dumps(ai_json),
+                _json.dumps(alerts_json),
+                _json.dumps(global_json),
+                now_str,
+            ),
+        )
+
+        # --- prune: keep last 30 days ---
+        thirty_days_ago = (now - timedelta(days=30)).isoformat()
+        deleted = conn.execute(
+            "DELETE FROM system_health WHERE snapshot_at < ?", (thirty_days_ago,)
+        ).rowcount
+        conn.commit()
+        conn.close()
+
+        detail_parts = [
+            f"alerts={alerts_json['open_count']}",
+            f"wm={wm_json['active']}",
+            f"obs={ai_json['total_observations']}",
+        ]
+        if deleted:
+            detail_parts.append(f"pruned={deleted}")
+        result["ok"] = True
+        result["detail"] = " ".join(detail_parts)
+    except Exception as e:
+        result["detail"] = f"error: {str(e)[:80]}"
     return result
 
 
@@ -1861,14 +2121,14 @@ def format_sleep_report(tick_results: list, total_ms: int, reason: str) -> str:
 # MAIN SLEEP LOOP
 # ============================================================
 
-def _record_tick_timestamp(tick_name: str):
-    """Record when a tick last ran (for world model state reading)."""
+def _record_tick_timestamp(tick_name: str, key_prefix: str = "last"):
+    """Record tick success/attempt timestamps for world model state reading."""
     try:
         conn = _get_conn()
         conn.execute("""
             INSERT INTO sleep_loop_state (key, value) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """, (f"last_{tick_name}", datetime.now().isoformat()))
+        """, (f"{key_prefix}_{tick_name}", datetime.now().isoformat()))
         conn.commit()
         conn.close()
     except Exception:
@@ -1883,7 +2143,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     Args:
         reason: Why this run was triggered ('launchd', 'idle', 'manual')
-        budget_ms: Total time budget in milliseconds (default 8000)
+        budget_ms: Total time budget in milliseconds (default 60000)
 
     Returns:
         dict with ok, report, checkpoint_id, elapsed_ms
@@ -1909,6 +2169,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
     tick_dispatch = {
         "prospective": _tick_prospective,
         "health": _tick_health,
+        "health_snapshot": _tick_health_snapshot,
         "self_model": _tick_self_model,
         "reconsolidation": _tick_reconsolidation,
         "consolidation": _tick_consolidation,
@@ -2008,16 +2269,16 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
             tick_elapsed = result.get("elapsed_ms", 0)
 
             if result.get("status") != "timeout":
-                if tick_elapsed > remaining_ms:
-                    result["status"] = "over_budget"
-                    _log_tick_metric(name, tick_elapsed, budget_ms,
-                                     int(remaining_ms), "over_budget")
-                else:
-                    result["status"] = "ok"
-                    _log_tick_metric(name, tick_elapsed, budget_ms,
-                                     int(remaining_ms), "ok")
+                status = result.get("status", "ok" if result.get("ok") else "error")
+                if result.get("ok") and tick_elapsed > remaining_ms:
+                    status = "over_budget"
+                result["status"] = status
+                _log_tick_metric(name, tick_elapsed, budget_ms,
+                                 int(remaining_ms), status)
 
             tick_results.append(result)
+            if result.get("ok"):
+                _record_tick_timestamp(name)
 
             # S4-05: Learn from observation (only on success)
             if state_before and result.get("ok"):
@@ -2038,9 +2299,8 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
                              "error", type(e).__name__)
 
         finally:
-            # Always record attempt timestamp (success, timeout, OR error)
-            # Prevents timestamps from freezing when ticks throw exceptions (#118)
-            _record_tick_timestamp(name)
+            # Keep attempt visibility without masking failed freshness.
+            _record_tick_timestamp(name, "last_attempt")
 
     # S4-05: Persist learned effects for next run
     try:
@@ -2055,17 +2315,33 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     # Emit event (best-effort, won't fail if event bus unavailable in CLI)
     try:
+        _ticks_ok = sum(1 for t in tick_results if t.get("ok"))
+        _ticks_completed = sum(
+            1 for t in tick_results
+            if t.get("status") not in {"tiered_skip", "skipped"}
+        )
         event_bus.emit(Events.SLEEP_LOOP_COMPLETE, {
             "reason": reason,
             "elapsed_ms": total_ms,
-            "ticks_ok": sum(1 for t in tick_results if t.get("ok")),
+            "duration_seconds": total_ms / 1000.0,
+            "ticks_ok": _ticks_ok,
+            "ticks_completed": _ticks_completed,
             "ticks_total": len(tick_results),
         })
     except Exception:
         pass
 
+    completed_ticks = [
+        t for t in tick_results
+        if t.get("status") not in {"tiered_skip", "skipped"}
+    ]
+    failed_ticks = [
+        t for t in completed_ticks
+        if t.get("status") in {"error", "timeout", "over_budget"} or not t.get("ok", False)
+    ]
+
     return {
-        "ok": True,
+        "ok": len(failed_ticks) == 0,
         "report": report_text,
         "tick_results": tick_results,
         "elapsed_ms": total_ms,
@@ -2094,11 +2370,6 @@ def cli_main():
         help=f"Total time budget in milliseconds (default {DEFAULT_BUDGET_MS})"
     )
     args = parser.parse_args()
-
-    # Pre-checks
-    if not os.path.exists(FTS_DB_PATH):
-        _logger.error("FTS DB not found: %s", FTS_DB_PATH)
-        sys.exit(0)
 
     # Acquire lock
     if not _acquire_lock():
