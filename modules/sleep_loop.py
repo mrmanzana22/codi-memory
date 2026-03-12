@@ -40,7 +40,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from modules.config import FTS_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso, connect_fts
+from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso, connect_fts
 from modules.events import event_bus, Events
 from modules.secret_redact import redact_secrets
 
@@ -77,7 +77,7 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
             tag=tag,
         )
     except Exception:
-        pass  # Never let logging break the loop
+        _logger.debug("Failed to log sleep tick metric", exc_info=True)
 
 # ============================================================
 # CONSTANTS
@@ -452,7 +452,7 @@ TICK_MAX_MS = {
     "homeostasis": 3000,         # was 2000
     "self_model": 3000,          # was 2000
     "health": 3000,              # was 2000
-    "health_snapshot": 500,      # SQLite only, no PG
+    "health_snapshot": 2000,     # 7+ SQLite queries, 500ms too tight
     "prospective": 3000,         # was 2000
     "proactive_contact": 3000,   # was 2000
 }
@@ -462,35 +462,40 @@ TICK_MAX_MS = {
 # LOCK FILE
 # ============================================================
 
+_lock_fd = None  # kept open so flock persists for process lifetime
+
+
 def _acquire_lock() -> bool:
-    """Acquire PID-based lock file. Returns True if acquired."""
+    """Acquire flock-based lock. Atomic, no TOCTOU, auto-released on exit."""
+    global _lock_fd
+    import fcntl
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE, 'r') as f:
-                old_pid = int(f.read().strip())
-            # Check if old process is still alive
-            os.kill(old_pid, 0)
-            # Process alive -- don't run
-            return False
-        except (ProcessLookupError, ValueError, OSError):
-            # Process dead or invalid PID -- stale lock, safe to remove
-            os.remove(LOCK_FILE)
-
-    with open(LOCK_FILE, 'w') as f:
-        f.write(str(os.getpid()))
-    return True
+    try:
+        _lock_fd = open(LOCK_FILE, 'w')
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+        return True
+    except (OSError, IOError):
+        # Another process holds the lock
+        if _lock_fd:
+            _lock_fd.close()
+            _lock_fd = None
+        return False
 
 
 def _release_lock():
-    """Release lock file."""
+    """Release flock and remove lock file."""
+    global _lock_fd
     try:
+        if _lock_fd:
+            import fcntl
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            _lock_fd.close()
+            _lock_fd = None
         if os.path.exists(LOCK_FILE):
-            with open(LOCK_FILE, 'r') as f:
-                pid = int(f.read().strip())
-            if pid == os.getpid():
-                os.remove(LOCK_FILE)
+            os.remove(LOCK_FILE)
     except Exception:
         pass
 
@@ -588,11 +593,16 @@ def _write_sleep_report(checkpoint_id: int, report_text: str) -> bool:
         conn.close()
 
 
+_CONSOLIDATION_READ_FAILED = object()
+
+
 def _get_last_full_consolidation_at():
     """Read canonical full-consolidation timestamp from PostgreSQL.
 
     Falls back to SQLite only for legacy rows during migration.
+    Returns _CONSOLIDATION_READ_FAILED if both stores fail to read.
     """
+    pg_read_failed = False
     try:
         from modules.config_pg import get_conn as get_pg_conn
         with get_pg_conn() as pg_conn:
@@ -603,7 +613,8 @@ def _get_last_full_consolidation_at():
             if row and row[0]:
                 return row[0]
     except Exception:
-        pass
+        pg_read_failed = True
+        _logger.warning("Failed to read full consolidation timestamp from PostgreSQL", exc_info=True)
 
     try:
         conn = _get_conn()
@@ -611,9 +622,12 @@ def _get_last_full_consolidation_at():
             "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
         ).fetchone()
         conn.close()
-        return row[0] if row and row[0] else None
+        if row and row[0]:
+            return row[0]
+        return _CONSOLIDATION_READ_FAILED if pg_read_failed else None
     except Exception:
-        return None
+        _logger.warning("Failed to read full consolidation timestamp from SQLite fallback", exc_info=True)
+        return _CONSOLIDATION_READ_FAILED
 
 
 def _normalize_consolidation_timestamp(value):
@@ -634,7 +648,7 @@ def _sqlite_timestamp_cutoff(value):
     dt = _normalize_consolidation_timestamp(value)
     if not dt:
         return None
-    return dt.astimezone(TZ_COL).replace(tzinfo=None).isoformat()
+    return dt.astimezone(TZ_COL).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ============================================================
@@ -661,6 +675,10 @@ def _should_run_full_consolidation() -> bool:
             return False
 
         last_full = _get_last_full_consolidation_at()
+
+        if last_full is _CONSOLIDATION_READ_FAILED:
+            _logger.warning("Skipping full consolidation because last-run state could not be read")
+            return False
 
         if not last_full:
             return True  # never ran, should run
@@ -702,9 +720,11 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
         from modules.pg_store import pg
 
         conn = connect_fts()
-        now = datetime.now().isoformat()
+        now = now_iso()
         processed = 0
         expired_count = 0
+        failed = 0
+        failed_ids = []
 
         # Get active (non-expired) labile memories
         rows = conn.execute(
@@ -790,7 +810,9 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 processed += 1
 
             except Exception:
-                pass
+                failed += 1
+                failed_ids.append(str(memory_id))
+                _logger.exception("Reconsolidation failed for memory_id=%s", memory_id)
 
         conn.commit()
 
@@ -817,7 +839,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
 
             if flagged_domains:
                 flagged_count = 0
-                recon_window = (datetime.now() + timedelta(hours=6)).isoformat()
+                recon_window = (datetime.fromisoformat(now) + timedelta(hours=6)).isoformat()
 
                 for domain, avg_pe, sample_count in flagged_domains:
                     if flagged_count >= MAX_FLAG_PER_CYCLE:
@@ -871,12 +893,12 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 if validated > 0:
                     conn.commit()
         except Exception:
-            pass  # L2 table might not exist yet
+            _logger.exception("Closed-loop L2 reconsolidation validation failed")
 
         conn.close()
 
         elapsed = (time.monotonic() - start) * 1000
-        result["ok"] = True
+        result["ok"] = (failed == 0)
         detail_parts = []
         if processed > 0:
             detail_parts.append(f"{processed} reconsolidated")
@@ -884,6 +906,9 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
             detail_parts.append(f"{expired_count} expired")
         if validated > 0:
             detail_parts.append(f"{validated} flagged by L2")
+        if failed > 0:
+            detail_parts.append(f"{failed} failed")
+            detail_parts.append(f"failed_ids={','.join(failed_ids[:3])}")
         if not detail_parts and not rows:
             detail_parts.append("no labiles")
         result["detail"] = ", ".join(detail_parts) if detail_parts else "idle"
@@ -999,7 +1024,7 @@ def _tick_self_model(budget_ms: int) -> dict:
                     ON CONFLICT(event) DO UPDATE SET
                         count = count + 1,
                         last_seen = excluded.last_seen
-                """, (datetime.now().isoformat(),))
+                """, (now_iso(),))
                 conn.commit()
                 conn.close()
             except Exception:
@@ -1225,7 +1250,7 @@ def _tick_curiosity_resolve(budget_ms: int) -> dict:
                 f"{question[:50]}"
             )
         else:
-            result["ok"] = True
+            result["ok"] = False
             result["detail"] = "ollama returned None (quality gate failed or model unavailable)"
 
     except Exception as e:
@@ -1326,11 +1351,13 @@ def _tick_backup(budget_ms: int) -> dict:
     import shutil
     sqlite_dir = os.path.join(backup_dir, '..', 'sqlite')
     os.makedirs(sqlite_dir, exist_ok=True)
-    project_root = os.path.join(os.path.dirname(__file__), '..')
-    for db_name in ['memories_fts.db', 'prospective.db']:
-        src = os.path.join(project_root, db_name)
+    sqlite_sources = [
+        (FTS_DB_PATH, 'memories_fts.db'),
+        (PROSPECTIVE_DB_PATH, 'prospective.db'),
+    ]
+    for src, backup_name in sqlite_sources:
         if os.path.exists(src):
-            dst = os.path.join(sqlite_dir, f"{db_name.replace('.db', '')}-{window}.db")
+            dst = os.path.join(sqlite_dir, f"{backup_name.replace('.db', '')}-{window}.db")
             try:
                 # Use SQLite backup API for consistency (not just file copy)
                 src_conn = sqlite3.connect(src, timeout=10)
@@ -1340,15 +1367,15 @@ def _tick_backup(budget_ms: int) -> dict:
                 dst_conn.close()
                 src_conn.close()
                 size_kb = round(os.path.getsize(dst) / 1024)
-                parts.append(f"{db_name}: {size_kb}KB")
+                parts.append(f"{backup_name}: {size_kb}KB")
                 # Keep only last 3 backups
                 existing = sorted(glob_mod.glob(os.path.join(
-                    sqlite_dir, f"{db_name.replace('.db', '')}-*.db")))
+                    sqlite_dir, f"{backup_name.replace('.db', '')}-*.db")))
                 while len(existing) > 3:
                     os.remove(existing.pop(0))
             except Exception as e:
                 sqlite_ok = False
-                parts.append(f"{db_name}: error {str(e)[:40]}")
+                parts.append(f"{backup_name}: error {str(e)[:40]}")
 
     # Backup PostgreSQL memories table (added after 20,859 memory loss on 2026-03-03)
     pg_dir = os.path.join(backup_dir, '..', 'postgresql')
@@ -1395,7 +1422,7 @@ def _tick_backup(budget_ms: int) -> dict:
     try:
         import gzip
         from dotenv import load_dotenv
-        load_dotenv(os.path.join(project_root, '.env'))
+        load_dotenv(os.path.join(BASE_DIR, '.env'))
         sb_url = os.environ.get('SUPABASE_URL')
         sb_key = os.environ.get('SUPABASE_KEY')
         if sb_url and sb_key:
@@ -1407,7 +1434,8 @@ def _tick_backup(budget_ms: int) -> dict:
             }
             # Upload all local backup files (gzipped)
             for bdir, prefix in [(os.path.join(backup_dir), 'qdrant'),
-                                 (sqlite_dir, 'sqlite')]:
+                                 (sqlite_dir, 'sqlite'),
+                                 (pg_dir, 'postgresql')]:
                 for fpath in glob_mod.glob(os.path.join(bdir, f'*-{window}*')):
                     fname = os.path.basename(fpath)
                     with open(fpath, 'rb') as f:
@@ -1428,7 +1456,7 @@ def _tick_backup(budget_ms: int) -> dict:
                         parts.append(f"cloud:{fname}=err{resp.status_code}")
 
             # Cleanup old cloud backups: list and delete beyond last 3 per prefix
-            for prefix in ['qdrant', 'sqlite']:
+            for prefix in ['qdrant', 'sqlite', 'postgresql']:
                 try:
                     list_resp = requests.post(
                         f"{sb_url}/storage/v1/object/list/codi-backups",
@@ -1726,7 +1754,11 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 if intent.get("trigger_type") == "time":
                     spec = intent.get("trigger_spec", {})
                     if isinstance(spec, str):
-                        spec = json.loads(spec)
+                        try:
+                            spec = json.loads(spec)
+                        except json.JSONDecodeError:
+                            _logger.warning("Malformed trigger_spec JSON, skipping intention: %s", intent.get("action", "?")[:60])
+                            continue
                     trigger_time = spec.get("trigger_time", "")
                     if trigger_time:
                         try:
@@ -1834,7 +1866,7 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 conn.commit()
                 conn.close()
         else:
-            result["ok"] = True
+            result["ok"] = False
             result["detail"] = f"{len(signals)} signals, cooldown active or send failed"
 
     except Exception as e:
@@ -1944,13 +1976,20 @@ def _tick_health(budget_ms: int) -> dict:
                         if not content:
                             continue
                         category = p.payload.get('category', 'general')
-                        source = p.payload.get('ownership_source', 'experienced')
+                        source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
                         importance = p.payload.get('narrative_importance', 'medium')
+                        # Preserve source created_at; fall back to now if missing
+                        src_created = p.payload.get('created_at', '')
+                        if src_created:
+                            # Normalize to SQLite-compatible format
+                            fts_created = str(src_created)[:19].replace('T', ' ')
+                        else:
+                            fts_created = None  # will use datetime('now')
                         fts_conn.execute("""
                             INSERT OR REPLACE INTO memories_text
                             (memory_id, content, category, source, importance, created_at)
-                            VALUES (?, ?, ?, ?, ?, datetime('now'))
-                        """, (mid, content, category, source, importance))
+                            VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                        """, (mid, content, category, source, importance, fts_created))
                         synced += 1
 
                 if scroll_offset is None:
@@ -1978,18 +2017,23 @@ def _tick_health(budget_ms: int) -> dict:
         parts.append(f"neuro: error {str(e)[:40]}")
 
     # Operational health monitoring (v1: 3 rules, alerts only)
+    hc_conn = None
     try:
         from modules.health_monitor import run_health_check
         hc_conn = connect_fts(FTS_DB_PATH)
         now_iso = datetime.now(TZ_COL).isoformat()
         hc = run_health_check(hc_conn, now_iso)
-        hc_conn.close()
         if hc["alerts_fired"]:
             parts.append(f"health_monitor: {hc['alerts_fired']} alerts fired")
         else:
             parts.append("health_monitor: all clear")
     except Exception as e:
-        parts.append(f"health_monitor: error {redact_secrets(str(e))[:50]}")
+        err = f"{type(e).__name__}: {redact_secrets(str(e))[:50]}"
+        _logger.exception("health_monitor tick failed")
+        parts.append(f"health_monitor: error {err}")
+    finally:
+        if hc_conn is not None:
+            hc_conn.close()
 
     elapsed = (time.monotonic() - start) * 1000
     has_errors = any("error" in p.lower() for p in parts)
@@ -2011,11 +2055,14 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         since_24h = (now - timedelta(hours=24)).isoformat()
 
         # --- tick_stats: age of each tick ---
+        _valid_tick_keys = {f"last_{t}" for t in TICK_ORDER}
         tick_rows = conn.execute(
             "SELECT key, value FROM sleep_loop_state WHERE key LIKE 'last_%'"
         ).fetchall()
         tick_stats = {}
         for key, val in tick_rows:
+            if key not in _valid_tick_keys:
+                continue
             tick_name = key[5:]  # strip "last_"
             try:
                 tick_dt = datetime.fromisoformat(val)
@@ -2031,11 +2078,13 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             "SELECT COUNT(*) FROM write_queue_log WHERE kind='remember' AND status='done' AND created_at > ?",
             (since_24h,),
         ).fetchone()
-        wm_active_row = conn.execute(
-            "SELECT COUNT(*) FROM working_memory WHERE active = 1",
-        ).fetchone()
+        try:
+            from modules.working_memory import wm_active_count
+            _wm_active = int(wm_active_count() or 0)
+        except Exception:
+            _wm_active = 0
         wm_json = {
-            "active": int(wm_active_row[0] or 0),
+            "active": _wm_active,
             "writes_24h": int(wm_row[0] or 0),
         }
 
@@ -2043,9 +2092,9 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         pred_json = {"count_24h": 0, "accuracy_pct": 0.0, "avg_pe": 0.0}
         try:
             pred_row = conn.execute(
-                """SELECT COUNT(*), AVG(CASE WHEN outcome='correct' THEN 1.0 ELSE 0.0 END)*100,
-                          AVG(pe_magnitude)
-                   FROM predictions WHERE created_at > ?""",
+                """SELECT COUNT(*), AVG(CASE WHEN hit = 1 THEN 1.0 ELSE 0.0 END)*100,
+                          AVG(COALESCE(weighted_surprise, surprise_score))
+                   FROM prediction_results WHERE created_at > ?""",
                 (since_24h,),
             ).fetchone()
             if pred_row and pred_row[0]:
@@ -2054,8 +2103,8 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
                     "accuracy_pct": round(pred_row[1] or 0.0, 1),
                     "avg_pe": round(pred_row[2] or 0.0, 3),
                 }
-        except Exception:
-            pass  # predictions table may have schema variations
+        except sqlite3.OperationalError:
+            pass  # prediction_results table may not exist yet
 
         # --- ai_json ---
         ai_json = {"total_observations": 0, "table_exists": False}
@@ -2092,13 +2141,13 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
 
         # --- global_json ---
         ev_row = conn.execute(
-            "SELECT COALESCE(SUM(count),0) FROM event_counts WHERE last_seen > ?", (since_24h,)
+            "SELECT COUNT(*) FROM event_counts WHERE datetime(last_seen) > datetime(?)", (since_24h,)
         ).fetchone()
         wr_row = conn.execute(
             "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)
         ).fetchone()
         global_json = {
-            "events_24h": int(ev_row[0] or 0),
+            "active_event_types_24h": int(ev_row[0] or 0),
             "writes_24h": int(wr_row[0] or 0),
         }
 
@@ -2323,7 +2372,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
                                  int(remaining_ms), status)
 
             tick_results.append(result)
-            if result.get("ok"):
+            if result.get("ok") and result.get("status") == "ok":
                 _record_tick_timestamp(name)
 
             # S4-05: Learn from observation (only on success)
@@ -2361,7 +2410,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     # Emit event (best-effort, won't fail if event bus unavailable in CLI)
     try:
-        _ticks_ok = sum(1 for t in tick_results if t.get("ok"))
+        _ticks_ok = sum(1 for t in tick_results if t.get("ok") and t.get("status") not in {"tiered_skip", "skipped"})
         _ticks_completed = sum(
             1 for t in tick_results
             if t.get("status") not in {"tiered_skip", "skipped"}
