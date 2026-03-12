@@ -196,7 +196,7 @@ def _resolve_chain_id(conn, topic: str, occurred_at) -> str:
         )
         row = cur.fetchone()
 
-    if row:
+    if row and row["chain_id"]:
         return row["chain_id"]
 
     # New chain
@@ -443,8 +443,8 @@ def get_working_memory() -> str:
                     "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
                     "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
                     "related_memory_id": r["related_memory_id"],
-                    "access_count": r["access_count"],
-                    "last_accessed_at": r["last_accessed_at"].isoformat() if r["last_accessed_at"] and hasattr(r["last_accessed_at"], "isoformat") else r["last_accessed_at"],
+                    "access_count": (r["access_count"] or 0) + 1,
+                    "last_accessed_at": now,
                     "effective_score": round(s, 4),
                 })
 
@@ -504,7 +504,6 @@ def push_to_working_memory(
                 "topic": topic, "relevance": relevance,
                 "pretty": f"# WORKING MEMORY\nDeduped: {content[:60]}... (same content pushed <{_DEDUP_WINDOW_S}s ago)",
             }, ensure_ascii=False)
-        _push_dedup[content_hash] = _now
         # Periodic cleanup of stale entries
         if len(_push_dedup) > 100:
             cutoff = _now - _DEDUP_WINDOW_S
@@ -545,6 +544,9 @@ def push_to_working_memory(
                     new_id = cur.fetchone()[0]
 
                 _auto_curate_buffer(conn)
+
+            # Cache dedup AFTER successful transaction (Bug #009)
+            _push_dedup[content_hash] = _now
 
             return json.dumps({
                 "id": new_id,

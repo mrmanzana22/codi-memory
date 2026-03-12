@@ -276,7 +276,16 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
         conn.close()
 
         # Sort by creation time
-        factual_chain.sort(key=lambda x: x.get("created_at", ""))
+        from modules.config import parse_timestamp
+
+        def _ts_sort_key(x):
+            raw = x.get("created_at", "")
+            try:
+                return (0, parse_timestamp(raw))
+            except Exception:
+                return (1, raw)
+
+        factual_chain.sort(key=_ts_sort_key)
 
     except Exception as e:
         _logger.error("Abduction step error: %s", e)
@@ -306,9 +315,19 @@ def intervention_step(factual_chain: List[Dict], parsed: Dict,
     if not target or not factual_chain:
         return factual_chain
 
-    # Positive interventions preserve the factual chain instead of removing target evidence
+    # Positive do(X): search for memories mentioning target and build intervention chain
     if not negated:
-        return factual_chain
+        target_memories = [m for m in factual_chain if target.lower() in str(m.get("memory", "")).lower()]
+        if target_memories:
+            # Amplify target evidence in chain
+            intervention_chain = list(factual_chain)
+            for m in target_memories:
+                amplified = dict(m)
+                amplified["source"] = "alternative"
+                amplified["intervention"] = f"do({target})"
+                intervention_chain.append(amplified)
+            return intervention_chain
+        return factual_chain  # fallback if no target mentions found
 
     # Partition: keep memories not about target, remove target memories
     kept = []
@@ -521,7 +540,7 @@ def _compute_confidence(factual_chain: List[Dict], alt_chain: List[Dict]) -> flo
     alt_score = min(1.0, len([m for m in alt_chain if m.get("source") == "alternative"]) / 2.0)
 
     # Weight factual evidence more heavily
-    return 0.6 * factual_score + 0.4 * (1.0 if alt_chain else 0.0)
+    return 0.6 * factual_score + 0.4 * alt_score
 
 
 def _compose_narrative(target: str, factual_chain: List[Dict],

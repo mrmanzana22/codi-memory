@@ -524,7 +524,17 @@ def get_high_salience_memories(limit: int = 10) -> str:
         limit: Cuantas memorias obtener
     """
     try:
-        all_points, _ = pg.scroll(filters={}, limit=200, is_semantic=False)
+        # Bug #144/#004: paginate through ALL memories, not just first 200
+        all_points = []
+        offset = 0
+        while True:
+            batch, next_offset = pg.scroll(filters={}, limit=200, is_semantic=False, offset=offset)
+            if not batch:
+                break
+            all_points.extend(batch)
+            if next_offset is None:
+                break
+            offset = next_offset
         if not all_points:
             return "No hay memorias."
 
