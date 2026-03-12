@@ -92,6 +92,10 @@ def normalize_sync_result(kind: str, raw_output) -> dict:
         try:
             data = json.loads(raw_output)
         except (json.JSONDecodeError, TypeError):
+            # Detect plain-text errors before normalizing as data (#011)
+            lower = raw_output.lower().strip()
+            if lower.startswith(("error:", "exception:", "traceback")):
+                return {"action": "error", "detail": raw_output[:200]}
             data = {"raw": raw_output}
     elif isinstance(raw_output, dict):
         data = raw_output
@@ -442,8 +446,8 @@ def record_async_intent(
             "(request_fingerprint, trace_id, kind, sync_completed_at, "
             " async_job_id, async_status_at_record, write_mode, compare_status, "
             " created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'queued', ?, 'pending', ?)",
-            (fingerprint, trace_id, kind, now, async_job_id, write_mode, now),
+            "VALUES (?, ?, ?, NULL, ?, 'queued', ?, 'pending', ?)",
+            (fingerprint, trace_id, kind, async_job_id, write_mode, now),
         )
         conn.commit()
     finally:
@@ -595,7 +599,17 @@ def compute_comparison_for_job(job_id: str, db_path: str = None) -> Optional[dic
 
         return result
 
-    except Exception:
+    except Exception as exc:
+        _logger.warning("Comparison failed for job %s: %s", job_id, exc)
+        try:
+            conn.execute(
+                "UPDATE dual_compare_log SET compare_status = 'error', "
+                "diff_summary = ? WHERE async_job_id = ?",
+                (f"comparison_error: {str(exc)[:200]}", job_id),
+            )
+            conn.commit()
+        except Exception:
+            pass
         return None
     finally:
         conn.close()

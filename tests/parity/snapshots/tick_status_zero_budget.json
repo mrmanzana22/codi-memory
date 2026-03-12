@@ -12,6 +12,11 @@
   {
     "ok": false,
     "status": "skipped",
+    "tick": "health_snapshot"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "self_model"
   },
   {
@@ -37,6 +42,11 @@
   {
     "ok": false,
     "status": "skipped",
+    "tick": "curiosity_resolve"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "backup"
   },
   {
@@ -48,5 +58,10 @@
     "ok": false,
     "status": "skipped",
     "tick": "sharpe_insights"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "proactive_contact"
   }
 ]

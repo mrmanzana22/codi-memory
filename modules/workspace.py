@@ -9,7 +9,7 @@ import json
 
 from modules.config import (
     USER_ID,
-    _emotional_state, now_iso,
+    _emotional_state, now_iso, now_col, parse_timestamp,
 )
 from modules.pg_store import pg
 from modules.secret_redact import redact_secrets
@@ -676,9 +676,9 @@ def recalibrate_importance(
         downgraded_crit = 0
         downgraded_high = 0
         scanned = 0
-        now = datetime.now()
-        critical_cutoff = (now - timedelta(days=critical_decay_days)).isoformat()
-        high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
+        now = now_col()
+        critical_cutoff = now - timedelta(days=critical_decay_days)
+        high_cutoff = now - timedelta(days=high_decay_days)
 
         # Collect batch updates to avoid N+1 round-trips to remote PG
         downgrade_to_high = []
@@ -716,9 +716,17 @@ def recalibrate_importance(
                 if ss < 2.0:
                     # Low SS: halve the grace period (degrade sooner)
                     half_days = critical_decay_days // 2
-                    effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+                    effective_cutoff = now - timedelta(days=half_days)
 
-                if last_access and last_access < effective_cutoff:
+                # Compare as datetimes, not strings (#005)
+                if last_access:
+                    try:
+                        last_dt = parse_timestamp(last_access)
+                    except Exception:
+                        last_dt = None
+                else:
+                    last_dt = None
+                if last_dt and last_dt < effective_cutoff:
                     downgrade_to_high.append(str(point.id))
                     downgraded_crit += 1
 
@@ -758,9 +766,17 @@ def recalibrate_importance(
                 effective_cutoff = high_cutoff
                 if ss < 2.0:
                     half_days = high_decay_days // 2
-                    effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+                    effective_cutoff = now - timedelta(days=half_days)
 
-                if last_access and last_access < effective_cutoff:
+                # Compare as datetimes, not strings (#005)
+                if last_access:
+                    try:
+                        last_dt = parse_timestamp(last_access)
+                    except Exception:
+                        last_dt = None
+                else:
+                    last_dt = None
+                if last_dt and last_dt < effective_cutoff:
                     downgrade_to_medium.append(str(point.id))
                     downgraded_high += 1
 

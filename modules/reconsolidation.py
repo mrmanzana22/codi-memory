@@ -291,15 +291,16 @@ def mark_as_labile(memory_id: str, prediction_error: float = 0.0,
         now = now_col()
         expires = now + timedelta(hours=RECONSOLIDATION_WINDOW_HOURS)
 
-        conn.execute("""
-            INSERT OR REPLACE INTO labile_memories
+        cur = conn.execute("""
+            INSERT OR IGNORE INTO labile_memories
             (memory_id, marked_at, window_expires, prediction_error, trigger_context)
             VALUES (?, ?, ?, ?, ?)
         """, (memory_id, now.isoformat(), expires.isoformat(),
               prediction_error, trigger_context))
         conn.commit()
+        inserted = cur.rowcount > 0
         conn.close()
-        return True
+        return inserted
     except Exception as e:
         _logger.warning("Could not mark labile: %s", redact_secrets(str(e)))
         return False
@@ -484,7 +485,8 @@ def correct_memory(
     except Exception as e:
         _logger.warning("Could not log reconsolidation: %s", redact_secrets(str(e)))
 
-    # 8. Update FTS5 index
+    # 8. Update FTS5 index (#016: track success for honest reporting)
+    fts_updated = False
     try:
         from modules.memory_smart import delete_memory_fts, index_memory_fts
         delete_memory_fts(full_id)
@@ -494,10 +496,11 @@ def correct_memory(
             source=old_payload.get("source", "experienced"),
             importance=old_payload.get("narrative_importance", "medium"),
         )
+        fts_updated = True
     except Exception as e:
         _logger.warning("FTS update failed: %s", redact_secrets(str(e)))
 
-    # 9. Emit event
+    # 9. Emit event (#015: log failure instead of silent pass)
     try:
         from modules.events import event_bus, Events
         event_bus.emit(Events.RECONSOLIDATION_TRIGGERED, {
@@ -507,13 +510,14 @@ def correct_memory(
             "new_confidence": new_confidence,
             "re_embedded": True,
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.warning("Reconsolidation event emission failed: %s", redact_secrets(str(e)))
 
+    fts_status = "FTS updated" if fts_updated else "FTS update FAILED"
     return (
         f"[reconsolidation] Memory {full_id[:8]} corrected. "
         f"Confidence: {old_confidence:.2f} -> {new_confidence:.2f}. "
-        f"Vector re-embedded and FTS updated."
+        f"Vector re-embedded and {fts_status}."
     )
 
 

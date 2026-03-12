@@ -829,12 +829,19 @@ class PGMemoryStore:
             "last_accessed_at", "updated_at",
             "is_dormant", "dormant_at", "reactivation_count",
         }
+        # Alias → canonical mapping (workspace writes attention_* keys)
+        _ALIAS_MAP = {
+            "attention_salience": "activation_score",
+            "attention_access_count": "access_count",
+            "attention_last_accessed": "last_accessed_at",
+        }
 
         set_parts = []
         params = []
         metadata_updates = {}
 
         for key, value in updates.items():
+            key = _ALIAS_MAP.get(key, key)
             if key in _COLUMN_FIELDS:
                 set_parts.append(f"{key} = %s")
                 params.append(value)

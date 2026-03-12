@@ -772,7 +772,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 confidence_reduction = min(0.2, pe * 0.3)
                 new_confidence = max(0.1, old_confidence - confidence_reduction)
 
-                # Update payload in pg_store
+                # Update payload in pg_store (irreversible)
                 pg.update_payload(memory_id, {
                     "confidence": new_confidence,
                     "reconsolidated_at": now,
@@ -780,7 +780,14 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     "last_pe_context": context[:200],
                 })
 
-                # Log to reconsolidation_log
+                # Remove from labile IMMEDIATELY after PG update (#001)
+                # Prevents retry from reapplying confidence decay on partial failure
+                conn.execute(
+                    "DELETE FROM labile_memories WHERE memory_id = ?",
+                    (memory_id,)
+                )
+
+                # Log to reconsolidation_log (best-effort after idempotent point)
                 conn.execute("""
                     INSERT INTO reconsolidation_log
                     (memory_id, memory_type, action, prediction_error,
@@ -797,12 +804,6 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     context[:200],
                     now,
                 ))
-
-                # Remove from labile
-                conn.execute(
-                    "DELETE FROM labile_memories WHERE memory_id = ?",
-                    (memory_id,)
-                )
 
                 # Emit event (direct SQLite)
                 conn.execute("""
@@ -1872,8 +1873,20 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 conn.commit()
                 conn.close()
         else:
-            result["ok"] = True
-            result["detail"] = f"{len(signals)} signals, cooldown active"
+            # Distinguish cooldown from send failure (#009)
+            from modules.notifier import _get_last_notification_time, COOLDOWN_HOURS
+            last_notif = _get_last_notification_time()
+            if last_notif:
+                hours_since = (now_col() - last_notif).total_seconds() / 3600
+                in_cooldown = hours_since < COOLDOWN_HOURS
+            else:
+                in_cooldown = False
+            if in_cooldown:
+                result["ok"] = True
+                result["detail"] = f"{len(signals)} signals, cooldown active"
+            else:
+                result["ok"] = False
+                result["detail"] = f"{len(signals)} signals, send FAILED"
 
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
@@ -1907,6 +1920,7 @@ def _tick_health(budget_ms: int) -> dict:
     result = {"tick": "health", "ok": False, "detail": ""}
 
     parts = []
+    has_failure = False  # explicit boolean, not text scan (#010)
 
     # FTS retry queue
     try:
@@ -1919,6 +1933,7 @@ def _tick_health(budget_ms: int) -> dict:
             parts.append("fts: queue empty")
     except Exception as e:
         parts.append(f"fts: error {redact_secrets(str(e))[:50]}")
+        has_failure = True
 
     # Health check
     try:
@@ -1928,8 +1943,10 @@ def _tick_health(budget_ms: int) -> dict:
             parts.append(f"health: OK ({health.get('total_memories', '?')} mems)")
         else:
             parts.append(f"health: {health.get('message', 'unknown')[:60]}")
+            has_failure = True
     except Exception as e:
         parts.append(f"health: error {redact_secrets(str(e))[:50]}")
+        has_failure = True
 
     # Incremental FTS sync: index pg_store memories not yet in FTS
     try:
@@ -1982,8 +1999,8 @@ def _tick_health(budget_ms: int) -> dict:
                     # Preserve source created_at; fall back to now if missing
                     src_created = p.payload.get('created_at', '')
                     if src_created:
-                        # Normalize to SQLite-compatible format
-                        fts_created = str(src_created)[:19].replace('T', ' ')
+                        # Normalize to SQLite-compatible UTC format (#002)
+                        fts_created = to_sqlite_utc(src_created)
                     else:
                         fts_created = None  # will use datetime('now')
                     fts_conn.execute("""
@@ -2037,8 +2054,7 @@ def _tick_health(budget_ms: int) -> dict:
             hc_conn.close()
 
     elapsed = (time.monotonic() - start) * 1000
-    has_errors = any("error" in p.lower() for p in parts)
-    result["ok"] = not has_errors
+    result["ok"] = not has_failure
     result["detail"] = "; ".join(parts)
     result["elapsed_ms"] = round(elapsed)
     return result
@@ -2144,9 +2160,9 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             pass
 
         # --- global_json ---
-        # event_counts.last_seen written by datetime.now().isoformat() = naive local (F2)
+        # event_counts.last_seen written by now_iso() = aware ISO (#008)
         ev_row = conn.execute(
-            "SELECT COUNT(*) FROM event_counts WHERE last_seen > ?", (since_24h_local,)
+            "SELECT COUNT(*) FROM event_counts WHERE last_seen > ?", (since_24h,)
         ).fetchone()
         wr_row = conn.execute(
             "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)

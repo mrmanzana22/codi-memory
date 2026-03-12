@@ -55,7 +55,8 @@ class TestAggregation:
         })
 
         with at._lock:
-            entry = at._pending[("coll_a", "id1")]
+            # _pending is keyed by str(point_id), not (collection, point_id)
+            entry = at._pending["id1"]
 
         assert entry["attention_access_count"] == 6
         assert entry["attention_last_accessed"] == "t2"
@@ -71,10 +72,10 @@ class TestAggregation:
         at.record_access("coll_b", "id1", {"count": 3})
 
         with at._lock:
-            assert len(at._pending) == 3
-            assert at._pending[("coll_a", "id1")]["count"] == 1
-            assert at._pending[("coll_a", "id2")]["count"] == 2
-            assert at._pending[("coll_b", "id1")]["count"] == 3
+            # pg_store is collection-agnostic: keyed by point_id only
+            assert len(at._pending) == 2  # id1 (merged), id2
+            assert at._pending["id1"]["count"] == 3  # last-writer-wins: coll_b overwrites coll_a
+            assert at._pending["id2"]["count"] == 2
 
 
 class TestFlush:

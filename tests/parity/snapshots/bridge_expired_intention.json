@@ -1,5 +1,5 @@
 {
-  "bridge_text": "Ultima sesion: Session with expiring intention\nHan pasado ELAPSED horas\n[PE] Intencion expirada: Submit report to client\nPendiente [high]: Submit report to client",
+  "bridge_text": "Ultima sesion: Session with expiring intention\nProyecto activo: consciencia\nHan pasado ELAPSED horas\n[PE] Intencion expirada: Submit report to client\nPendiente [high]: Submit report to client",
   "has_sleep_report": false,
   "hours_since_last": 0.0,
   "prediction_errors": [

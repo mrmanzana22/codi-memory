@@ -12,6 +12,11 @@
   {
     "ok": true,
     "status": "ok",
+    "tick": "health_snapshot"
+  },
+  {
+    "ok": true,
+    "status": "ok",
     "tick": "self_model"
   },
   {
@@ -37,6 +42,11 @@
   {
     "ok": true,
     "status": "ok",
+    "tick": "curiosity_resolve"
+  },
+  {
+    "ok": true,
+    "status": "ok",
     "tick": "backup"
   },
   {
@@ -45,8 +55,13 @@
     "tick": "causal_discovery"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "timeout",
     "tick": "sharpe_insights"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "proactive_contact"
   }
 ]

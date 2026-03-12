@@ -257,7 +257,7 @@ def compute_option_efe(
     total_efe = 0.0
     survival_prob = 1.0  # P(still running at step i)
 
-    # Simulate option's intra-policy steps
+    # Simulate option's intra-policy steps with state rollout (#007)
     sim_state = state
     for step in range(n):
         action = option.policy_fn(sim_state, step)
@@ -269,6 +269,19 @@ def compute_option_efe(
         survival_prob *= (1.0 - p_term)
         if survival_prob < 0.01:
             break
+
+        # Advance sim_state to MAP predicted next state
+        next_dist = model.predict_next_state(sim_state, action)
+        if next_dist:
+            map_tuple = max(next_dist, key=next_dist.get)
+            _disc_to_val = {"low": 0.17, "mid": 0.5, "high": 0.83}
+            sim_state = SystemState(
+                topic=map_tuple[0] if len(map_tuple) > 0 else sim_state.topic,
+                uncertainty=_disc_to_val.get(map_tuple[1], sim_state.uncertainty) if len(map_tuple) > 1 else sim_state.uncertainty,
+                wm_load=_disc_to_val.get(map_tuple[2], sim_state.wm_load) if len(map_tuple) > 2 else sim_state.wm_load,
+                pe_magnitude=sim_state.pe_magnitude,
+                emotional_valence=sim_state.emotional_valence,
+            )
 
     # Add option overhead cost
     total_efe += option.cost
@@ -731,8 +744,8 @@ def get_current_state() -> SystemState:
 
     # Read WM load
     try:
-        from modules.working_memory import get_active_count
-        count = get_active_count()
+        from modules.working_memory import wm_get_active_count
+        count = wm_get_active_count()
         wm_load = min(1.0, count / 10.0)  # 10 items = full
     except ImportError as exc:
         _logger.warning("Active inference state read: working memory unavailable: %s", exc)
