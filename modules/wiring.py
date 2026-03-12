@@ -940,7 +940,7 @@ def _on_sleep_loop_complete(event_name: str, data: dict):
     """S3-04: Sleep loop finished — push maintenance summary to WM."""
     try:
         from modules.working_memory import push_to_working_memory
-        ticks = data.get("ticks_completed", 0)
+        ticks = data.get("ticks_executed", 0)
         duration = data.get("duration_seconds", 0)
         push_to_working_memory(
             content=f"[SLEEP LOOP] {ticks} ticks completed in {duration:.0f}s",

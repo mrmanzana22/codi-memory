@@ -1307,11 +1307,20 @@ def clear_all_memories(dry_run: bool = False, confirm_token: str = "",
 
 def _track_scroll_access(points):
     """
-    Update access_count for scroll results (pgvector).
+    Update access_count, timestamps, and strength fields for scroll results.
+
+    Mirrors the access tracking logic in search_memory() so that all
+    retrieval paths consistently update:
+      - attention_access_count (increment)
+      - attention_last_accessed (timestamp)
+      - access_timestamps (append, cap at 20)
+      - storage_strength (Bjork & Bjork 1992: SS += 1/sqrt(n+1))
+      - retrieval_strength (reset to 1.0 on access)
     """
     if not points:
         return
     try:
+        import math
         ts = now_iso()
         for p in points:
             mid = str(p.id)
@@ -1322,10 +1331,18 @@ def _track_scroll_access(points):
                 access_ts = []
             access_ts.append(ts)
             access_ts = access_ts[-20:]
+
+            # S1-03: Storage Strength (Bjork & Bjork 1992)
+            # SS is monotonically non-decreasing: +1/sqrt(n) diminishing returns
+            old_ss = float(payload.get('storage_strength', 1.0) or 1.0)
+            new_ss = old_ss + 1.0 / math.sqrt(max(1, access_count + 1))
+
             pg.update_payload(mid, {
                 'attention_access_count': access_count + 1,
                 'attention_last_accessed': ts,
                 'access_timestamps': access_ts,
+                'storage_strength': round(new_ss, 4),
+                'retrieval_strength': 1.0,  # RS resets to max on access
             })
     except Exception:
         pass
