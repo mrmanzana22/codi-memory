@@ -224,6 +224,12 @@ def create_intention(
 ) -> dict:
     """Create a new prospective memory intention."""
     _ensure_tables()
+
+    # ── GUARD: reject generic/garbage actions from autonomous agents ──
+    _BLOCKED_ACTIONS = {"one-time task", "daily check", "wm push test", "test task", "low activation test"}
+    if action.strip().lower() in _BLOCKED_ACTIONS:
+        return {"error": f"Blocked: action '{action}' is too generic. Use a specific, actionable description."}
+
     int_id = str(uuid.uuid4())
 
     # Parse and validate trigger_spec

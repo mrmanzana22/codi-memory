@@ -512,16 +512,9 @@ def despertar_codi(verbose: bool = False) -> str:
                 "type": "maintenance", "severity": "low",
                 "detail": detail, "action": "Ejecutar mantenimiento",
             })
-        # PAD anomaly check
-        cur_pad = _emotional_state.get('current', {})
-        if (cur_pad.get('pleasure', 0) == 0
-                and cur_pad.get('arousal', 0) == 0
-                and cur_pad.get('dominance', 0) == 0):
-            incidents.append({
-                "type": "pad_anomaly", "severity": "low",
-                "detail": "PAD stuck at (0,0,0)",
-                "action": "Verificar loop emocional",
-            })
+        # PAD (0,0,0) is normal when daemon has no active emotional loop.
+        # Defaults are (0.3, 0.1, 0.4). Only flag if restored from bridge
+        # and then zeroed — unlikely in practice. Removed as noise.
 
         # ── DETERMINE STATE ──
 

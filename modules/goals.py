@@ -262,6 +262,12 @@ def create_goal(
         dict with goal details + warnings if structured fields missing.
     """
     _ensure_tables()
+
+    # ── GUARD: reject generic/garbage titles from autonomous agents ──
+    _BLOCKED_TITLES = {"reprioritize", "one-time task", "test goal", "untitled"}
+    if title.strip().lower() in _BLOCKED_TITLES:
+        return {"error": f"Blocked: title '{title}' is too generic. Use a specific, actionable title."}
+
     if level not in GOAL_LEVELS:
         return {"error": f"Invalid level '{level}'. Must be one of {GOAL_LEVELS}"}
     if priority not in GOAL_PRIORITIES:
