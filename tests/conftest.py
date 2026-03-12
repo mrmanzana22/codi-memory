@@ -46,6 +46,13 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.config.FTS_DB_PATH", db_path, raising=False)
     monkeypatch.setattr("modules.config.PROSPECTIVE_DB_PATH", prosp_path, raising=False)
 
+    # Run migrations BEFORE triggering module imports via monkeypatch.setattr.
+    # consolidation_common.py validates tables at import time — tables must exist
+    # before any monkeypatch.setattr triggers its import chain.
+    from modules.migrations import apply_migrations
+    apply_migrations(db_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations"))
+    apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
+
     # Patch FTS_DB_PATH in modules that import it directly (import aliasing fix)
     for mod in ["modules.memory_smart", "modules.memory_core",
                 "modules.dual_compare", "modules.write_queue",
@@ -97,11 +104,6 @@ def _isolate_sqlite(tmp_path, monkeypatch):
         str(tmp_path / ".write_mode"),
         raising=False,
     )
-
-    # Run migrations on isolated DBs
-    from modules.migrations import apply_migrations
-    apply_migrations(db_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations"))
-    apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
 
     yield
 

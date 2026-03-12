@@ -1,8 +1,15 @@
 """
 P0 Regression Tests — Prerequisite bugs for Sebastian prototype.
 ================================================================
-Tests for bugs #2, #4, #5, #40.
-Bugs #3 and #6 were resolved by prior work (Memory Vault + threshold fix).
+Tests for bugs #1-#6.
+
+Status (2026-03-12):
+  #1 (WM duplication) — FIXED (Proposal #57)
+  #2 (EventBus DB path) — NOT A BUG
+  #3 (FadeMem critical decay) — FIXED (hard skip for critical)
+  #4 (Consolidation pagination) — FIXED (scroll loop)
+  #5 (PCI contamination) — IMPROVED (topic-agnostic + env var)
+  #6 (Daemon short query filter) — FIXED (threshold < 4 -> < 2)
 
 Exit criteria: all tests pass → `pytest tests/test_p0_regressions.py` exits 0.
 """
@@ -85,26 +92,80 @@ class TestBug2WMDuplication:
 
 
 # ============================================================
+# Bug #3: FadeMem must NOT decay critical memories
+# Fix: early return in compute_fadem_strength when importance == "critical"
+# ============================================================
+
+class TestBug3FadeMemCritical:
+    """Verify critical memories skip decay entirely."""
+
+    def test_critical_memory_no_decay(self):
+        """Critical importance must return current_salience unchanged."""
+        # Source-level check: verify early return exists for critical
+        source_path = os.path.join(
+            os.path.dirname(__file__), "..", "modules", "forgetting.py"
+        )
+        with open(source_path) as f:
+            source = f.read()
+        assert 'importance == "critical"' in source, \
+            "Must check for critical importance"
+        assert "return current_salience" in source, \
+            "Must return current_salience for critical"
+
+    def test_critical_skip_is_early_return(self):
+        """The critical check must come BEFORE the decay computation."""
+        import inspect
+        from modules.forgetting import compute_fadem_strength
+        source = inspect.getsource(compute_fadem_strength)
+        idx_critical = source.find('importance == "critical"')
+        idx_lambda = source.find("FADEM_LAMBDA_BASE")
+        assert idx_critical > 0 and idx_lambda > 0, \
+            "Both critical check and FADEM_LAMBDA_BASE must exist in function"
+        assert idx_critical < idx_lambda, \
+            "Critical check must come before decay computation (early return)"
+
+    def test_high_not_exempt(self):
+        """Source must NOT exempt 'high' importance — only critical."""
+        source_path = os.path.join(
+            os.path.dirname(__file__), "..", "modules", "forgetting.py"
+        )
+        with open(source_path) as f:
+            source = f.read()
+        # Find the early return block
+        idx_critical = source.find('importance == "critical"')
+        block = source[idx_critical:idx_critical + 100]
+        assert '"high"' not in block, \
+            "Only critical should be exempt, not high"
+
+
+# ============================================================
 # Bug #4: apply_salience_decay pagination cap
 # MAX_SCROLL was 500, only covering ~14% of memories.
 # Fix: MAX_SCROLL = 10000.
 # ============================================================
 
 class TestBug4PaginationCap:
-    """Verify MAX_SCROLL is sufficient for full memory coverage."""
+    """Verify decay pagination covers full memory corpus.
 
-    def test_max_scroll_at_least_10000(self):
-        """MAX_SCROLL must be >= 10000 to cover realistic memory stores."""
-        import modules.workspace as ws
-        # Read from source — the constant is local to apply_salience_decay,
-        # so we verify by reading the source file.
+    Original bug: MAX_SCROLL=500 capped at ~14% of memories.
+    Fix: replaced with sample-based pg.scroll() pagination (no hard cap).
+    """
+
+    def test_no_hard_scroll_cap(self):
+        """apply_salience_decay must NOT have a low hard cap (old MAX_SCROLL=500)."""
         import inspect
+        import modules.workspace as ws
         source = inspect.getsource(ws.apply_salience_decay)
-        assert "MAX_SCROLL = 10000" in source or "MAX_SCROLL = 1" in source, \
-            "MAX_SCROLL must be at least 10000"
-        # Strict check
-        assert "MAX_SCROLL = 10000" in source, \
-            f"MAX_SCROLL should be exactly 10000, got something else"
+        assert "MAX_SCROLL = 500" not in source, \
+            "Old MAX_SCROLL=500 cap must be removed"
+
+    def test_uses_scroll_pagination(self):
+        """Must use pg.scroll() pagination for full corpus coverage."""
+        import inspect
+        import modules.workspace as ws
+        source = inspect.getsource(ws.apply_salience_decay)
+        assert "pg.scroll(" in source, \
+            "Must use pg.scroll() for paginated memory access"
 
 
 # ============================================================
@@ -180,6 +241,34 @@ class TestBug5PCI:
         assert "sleep_loop" in select_block, \
             "prev_actual_topic query must filter out sleep_loop records"
 
+    def test_source_detection_not_topic_restricted(self):
+        """PCI detection must NOT require topic=='codigo' (P0 fix)."""
+        import inspect
+        import hooks.preturn_inject as pi
+        source = inspect.getsource(pi)
+
+        # Find the source detection block
+        idx_source = source.find("CODI_SOURCE")
+        assert idx_source > 0, "Must support CODI_SOURCE env var"
+
+        # The old bug: detection only fired when predicted==actual=='codigo'
+        # After fix: no topic restriction near the timing heuristic
+        idx_gap = source.find("gap_min")
+        assert idx_gap > 0, "Timing heuristic must exist"
+        # Get surrounding context (200 chars before gap_min)
+        context = source[max(0, idx_gap - 200):idx_gap + 100]
+        assert "predicted_topic == actual_topic == 'codigo'" not in context, \
+            "PCI detection must not be restricted to topic=='codigo'"
+
+    def test_codi_source_env_var_support(self):
+        """CODI_SOURCE env var must be checked for explicit source tagging."""
+        import inspect
+        import hooks.preturn_inject as pi
+        source = inspect.getsource(pi)
+        assert "os.environ.get('CODI_SOURCE'" in source or \
+               'os.environ.get("CODI_SOURCE"' in source, \
+            "Must check CODI_SOURCE env var for explicit source override"
+
     def test_curiosity_prediction_results_filters_sleep_loop(self):
         """curiosity.py must filter sleep_loop from prediction_results queries."""
         import inspect
@@ -223,3 +312,34 @@ class TestBug40EventBusPath:
         eb_path = EventBus._get_db_path()
         assert eb_path == FTS_DB_PATH or os.environ.get("FTS_DB_PATH") == eb_path, \
             f"EventBus path ({eb_path}) must match FTS_DB_PATH ({FTS_DB_PATH})"
+
+
+# ============================================================
+# Bug #6: Daemon short query filter
+# Was < 4 chars, blocking "ok", "si", "WM?".
+# Fix: lowered to < 2 chars (only block empty/single-char).
+# ============================================================
+
+class TestBug6DaemonShortQuery:
+    """Verify daemon context_builder allows short but meaningful queries."""
+
+    def test_threshold_is_2_not_4(self):
+        """Short query filter must use < 2, not < 4."""
+        import inspect
+        import importlib
+        spec = importlib.util.spec_from_file_location(
+            "context_builder",
+            os.path.expanduser("~/codi-daemon/context_builder.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        # Read source directly to avoid import side effects
+        source_path = os.path.expanduser("~/codi-daemon/context_builder.py")
+        with open(source_path) as f:
+            source = f.read()
+
+        # Must NOT contain the old threshold
+        assert "strip()) < 4" not in source, \
+            "Short query filter must NOT use < 4 (old threshold)"
+        # Must contain the new threshold
+        assert "strip()) < 2" in source, \
+            "Short query filter must use < 2"
