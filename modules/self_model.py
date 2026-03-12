@@ -240,14 +240,6 @@ def identify_knowledge_gaps() -> str:
             try:
                 points, _ = pg.scroll(filters={"narrative_themes": theme}, limit=500, is_semantic=False)
                 if points:
-                    ts = now_iso()
-                    for p in points:
-                        payload_p = p.payload or {}
-                        acc = int(payload_p.get('attention_access_count', 0) or 0)
-                        pg.update_payload(p.id, {
-                            'attention_access_count': acc + 1,
-                            'attention_last_accessed': ts,
-                        })
                     experienced = sum(1 for p in points if p.payload.get('ownership_source') == 'experienced')
                     high_conf = sum(1 for p in points if p.payload.get('ownership_confidence', 0) >= 0.8)
                     theme_stats[theme] = {
@@ -927,7 +919,7 @@ def detect_self_discrepancies() -> dict:
             """).fetchall()
             for domain, pred_acc, actual_acc, n in l2_rows:
                 divergence = abs(pred_acc - actual_acc)
-                if divergence > 0.15:
+                if divergence > 0.10:
                     direction = "overconfident" if pred_acc > actual_acc else "underconfident"
                     discrepancies.append({
                         "domain": f"L2:{domain}",

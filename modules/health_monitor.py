@@ -194,7 +194,7 @@ def _rule_tick_dead(metrics: dict, now_iso: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 def run_health_check(conn: sqlite3.Connection, now_iso: str) -> dict[str, Any]:
     """Collect metrics, evaluate rules, persist alerts. Returns summary."""
-    from modules.health_alerts import fetch_open_alerts, upsert_health_alerts
+    from modules.health_alerts import fetch_open_alerts, upsert_health_alerts, auto_resolve_cleared
 
     metrics = collect_metrics(conn, now_iso)
     candidates = evaluate_rules(metrics, now_iso)
@@ -202,12 +202,14 @@ def run_health_check(conn: sqlite3.Connection, now_iso: str) -> dict[str, Any]:
 
     open_alerts = fetch_open_alerts(conn)
     alert_ids = upsert_health_alerts(conn, candidates, run_id, now_iso)
+    resolved = auto_resolve_cleared(conn, candidates, now_iso)
 
     return {
         "metrics_collected": len(metrics),
         "alerts_fired": len(candidates),
         "alert_ids": alert_ids,
-        "open_alerts": len(open_alerts),
+        "open_alerts": len(open_alerts) - resolved,
+        "auto_resolved": resolved,
     }
 
 

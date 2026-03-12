@@ -112,6 +112,35 @@ def _update(conn: sqlite3.Connection, existing: dict, alert: dict, run_id: str, 
     return int(existing["id"])
 
 
+def auto_resolve_cleared(
+    conn: sqlite3.Connection,
+    active_candidates: list[dict[str, Any]],
+    now_iso: str,
+) -> int:
+    """Resolve open alerts whose conditions no longer fire.
+
+    Any open alert whose alert_key is NOT in the current candidate set
+    is considered cleared and gets auto-resolved.
+
+    Returns number of alerts resolved.
+    """
+    active_keys = {a["alert_key"] for a in active_candidates}
+    open_alerts = fetch_open_alerts(conn)
+    resolved = 0
+    for alert in open_alerts:
+        if alert["alert_key"] not in active_keys:
+            conn.execute(
+                """UPDATE health_alerts
+                   SET status = 'resolved', resolved_at = ?, updated_at = ?
+                   WHERE id = ?""",
+                (now_iso, now_iso, alert["id"]),
+            )
+            resolved += 1
+    if resolved:
+        conn.commit()
+    return resolved
+
+
 _KEYS = (
     "id", "alert_key", "subsystem", "status", "severity", "title", "description",
     "evidence_json", "recommended_action", "first_seen_at", "last_seen_at",

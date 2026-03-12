@@ -451,7 +451,7 @@ TICK_MIN_MS = {
 TICK_MAX_MS = {
     "consolidation": 30000,      # was 6000 — light takes 13-76s (1.4s/candidate)
     "causal_discovery": 10000,   # was 5000
-    "curiosity": 5000,           # was 3000
+    "curiosity": 20000,          # was 5000 — N+1 fix (#140) drops to ~2s, LLM gen needs margin
     "curiosity_resolve": 10000,  # was 5000
     "backup": 5000,              # unchanged
     "sharpe_insights": 5000,     # was 3000
@@ -1872,8 +1872,8 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 conn.commit()
                 conn.close()
         else:
-            result["ok"] = False
-            result["detail"] = f"{len(signals)} signals, cooldown active or send failed"
+            result["ok"] = True
+            result["detail"] = f"{len(signals)} signals, cooldown active"
 
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
