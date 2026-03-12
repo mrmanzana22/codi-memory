@@ -61,13 +61,33 @@ _ac_history: list = []  # Recent AC values (for variance = Arousal in 4.2)
 # Sprint 6: Active option tracking (step counter)
 _active_option: Optional[Option] = None
 _active_option_step: int = 0
+_pending_recommended: Optional[str] = None  # Track 2: what was recommended, cleared on observe
+_v2_cutover_marked: bool = False  # Track 2: one-time marker for v2 semantics
 
 
 def reset_active_option():
     """Sprint 6: Reset active option state. Useful for tests and session resets."""
-    global _active_option, _active_option_step
+    global _active_option, _active_option_step, _pending_recommended
     _active_option = None
     _active_option_step = 0
+    _pending_recommended = None
+
+
+def _mark_v2_cutover():
+    """Write cutover timestamp on first option step under v2 semantics."""
+    global _v2_cutover_marked
+    try:
+        conn = _get_conn()
+        from modules.config import now_iso
+        conn.execute(
+            "INSERT OR IGNORE INTO sleep_loop_state (key, value) VALUES ('ai_semantics_v2_at', ?)",
+            (now_iso(),),
+        )
+        conn.commit()
+        conn.close()
+        _v2_cutover_marked = True
+    except Exception:
+        pass  # Non-critical, will retry next step
 
 
 # ============================================================
@@ -111,6 +131,78 @@ def get_model() -> GenerativeModel:
     return _model
 
 
+def _bootstrap_prior_policy():
+    """Initialize _prior_policy from persisted state or model distribution.
+
+    Without this, AC cannot be computed until the 2nd observation in a
+    process, which means most short-lived processes (daemon ticks, Claude
+    sessions) never compute AC at all.
+    """
+    global _prior_policy, _last_ac
+    if _prior_policy is not None:
+        return
+
+    # Step 1: Try loading from SQLite (persisted by _persist_ac_state)
+    conn = None
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT policy_json, last_ac FROM ac_state ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            import json
+            _prior_policy = json.loads(row[0])
+            _last_ac = float(row[1])
+            _logger.info("Loaded prior_policy from SQLite (AC=%.4f)", _last_ac)
+            return
+    except Exception:
+        pass  # Table may not exist yet
+    finally:
+        if conn is not None:
+            conn.close()
+
+    # Step 2: Fallback — compute uniform distribution from model
+    try:
+        model = get_model()
+        state = get_current_state()
+        _prior_policy = get_policy_distribution(state, model)
+        _logger.info("Bootstrapped prior_policy from model distribution")
+    except Exception:
+        _logger.debug("Could not bootstrap prior_policy")
+
+
+def _persist_ac_state():
+    """Save _prior_policy and _last_ac to SQLite for cross-process continuity."""
+    if _prior_policy is None:
+        return
+    conn = None
+    try:
+        import json
+        conn = _get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ac_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                policy_json TEXT NOT NULL,
+                last_ac REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO ac_state (id, policy_json, last_ac, updated_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                policy_json = excluded.policy_json,
+                last_ac = excluded.last_ac,
+                updated_at = excluded.updated_at
+        """, (json.dumps(_prior_policy), _last_ac, datetime.now().isoformat()))
+        conn.commit()
+    except Exception:
+        _logger.debug("Failed to persist AC state", exc_info=True)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def observe_and_record(action_name: str) -> Optional[SystemState]:
     """Observe current state and record the transition from previous state.
 
@@ -128,15 +220,19 @@ def observe_and_record(action_name: str) -> Optional[SystemState]:
         The observed state, or None if recording failed.
     """
     global _prev_state, _prev_action, _prior_policy, _last_ac, _ac_history
+    global _active_option, _active_option_step, _pending_recommended
+
+    # Bootstrap prior policy on first call (cross-process continuity)
+    _bootstrap_prior_policy()
 
     current = get_current_state()
     action = ACTION_MAP.get(action_name)
 
     if action is None:
         _logger.warning("Unknown action: %s", action_name)
-        _prev_state = current
-        _prev_action = None  # Clear stale action to prevent corrupt transitions
-        _prior_policy = None  # Clear stale policy so next AC is not computed across an unknown action
+        _prev_state = None  # Clear fully to prevent corrupt transitions
+        _prev_action = None
+        _prior_policy = None
         return current
 
     model = get_model()
@@ -180,10 +276,36 @@ def observe_and_record(action_name: str) -> Optional[SystemState]:
 
     # Store current policy as prior for NEXT observation
     _prior_policy = posterior_policy
+    _persist_ac_state()  # Cross-process continuity (Loop 4 fix)
 
     # Update state for next transition
     _prev_state = current
     _prev_action = action
+
+    # Track 2: Advance option step on execution, not recommendation.
+    # Contract: step advances because an action was executed while an option is active,
+    # NOT because the action matches the recommendation. Mismatch is logged but
+    # does not block progression or trigger termination — no enforcement in v1.
+    if _active_option is not None:
+        if _pending_recommended and action_name != _pending_recommended:
+            _logger.info(
+                "Option mismatch: recommended '%s', executed '%s'",
+                _pending_recommended, action_name,
+            )
+        _active_option_step += 1
+        _pending_recommended = None
+        if not _v2_cutover_marked:
+            _mark_v2_cutover()
+        # Post-execution termination check (normal lifecycle, not mismatch-driven)
+        p_term = _active_option.termination_fn(current, _active_option_step)
+        if p_term >= 1.0 or _active_option_step >= _active_option.expected_duration * 2:
+            _logger.info(
+                "Option '%s' terminated at step %d",
+                _active_option.name, _active_option_step,
+            )
+            _active_option = None
+            _active_option_step = 0
+
     return current
 
 
@@ -284,13 +406,12 @@ def _maybe_persist():
     global _transitions_since_persist
     if _transitions_since_persist >= _PERSIST_INTERVAL:
         try:
-            rows = persist_model()
+            persist_model()
         except Exception:
             _logger.error(
                 "Generative model persistence failed; learned transitions remain in memory only"
             )
-            return
-        if rows > 0:
+        finally:
             _transitions_since_persist = 0
 
 
@@ -352,7 +473,7 @@ def register_event_handlers():
 # S5-04: ACTION RECOMMENDER (MCP-callable)
 # ============================================================
 
-def recommend_action() -> Dict:
+def recommend_action(deterministic: bool = True) -> Dict:
     """Recommend the best action (or option) given current system state.
 
     This is the MCP-facing function: reads live state, evaluates EFE
@@ -360,6 +481,9 @@ def recommend_action() -> Dict:
 
     Sprint 6: Options compete with primitive actions via EFE. If an option
     is active, continues its intra-option policy until termination.
+
+    Track 2: Step counter no longer mutates here — advances in observe_and_record().
+    deterministic=True (default for MCP) uses argmin(EFE) instead of softmax sampling.
 
     Returns dict with:
         recommended: action/option name
@@ -370,7 +494,7 @@ def recommend_action() -> Dict:
         is_option: True if a multi-step option was selected
         option_step: current step within active option (if any)
     """
-    global _active_option, _active_option_step
+    global _active_option, _active_option_step, _pending_recommended
 
     state = get_current_state()
     model = get_model()
@@ -394,9 +518,9 @@ def recommend_action() -> Dict:
             _active_option = None
             _active_option_step = 0
         else:
-            # Continue active option
+            # Continue active option — step advances in observe_and_record(), not here
             next_action = _active_option.policy_fn(state, _active_option_step)
-            _active_option_step += 1
+            _pending_recommended = next_action.name
             is_option = True
             return {
                 "recommended": next_action.name,
@@ -419,16 +543,16 @@ def recommend_action() -> Dict:
     # No active option — select from primitives + new options
     # Sprint 6: Only include options when we have sufficient learned data
     _use_options = model.observation_count >= 10
-    selected, efes = select_action(state, model, temperature=temperature, include_options=_use_options)
+    selected, efes = select_action(state, model, temperature=temperature, include_options=_use_options, deterministic=deterministic)
 
     # If an option was selected, activate it
     if isinstance(selected, Option):
         _active_option = selected
         _active_option_step = 0
         is_option = True
-        # Execute step 0 immediately
+        # Recommend step 0 — step advances in observe_and_record(), not here
         first_action = _active_option.policy_fn(state, 0)
-        _active_option_step = 1
+        _pending_recommended = first_action.name
         return {
             "recommended": first_action.name,
             "description": f"[Starting option: {selected.name}] {first_action.description}",
@@ -443,7 +567,7 @@ def recommend_action() -> Dict:
             "model_observations": model.observation_count,
             "rationale": f"Option '{selected.name}' selected. Expected {selected.expected_duration} steps.",
             "is_option": True,
-            "option_step": 1,
+            "option_step": 0,
             "active_option": selected.name,
         }
 
