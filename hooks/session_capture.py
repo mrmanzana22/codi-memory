@@ -158,6 +158,12 @@ def parse_transcript(transcript_path, after_uuid=None):
                     'timestamp': entry.get('timestamp', ''),
                 })
 
+    # Bug #030: If after_uuid was provided but never found in the transcript
+    # (stale UUID aged out of JSONL), fall back to processing ALL entries
+    # so the tracker doesn't get permanently stuck.
+    if after_uuid and not found_marker:
+        return parse_transcript(transcript_path, after_uuid=None)
+
     return entries, last_uuid
 
 
@@ -170,6 +176,12 @@ def group_into_turns(entries):
         if entry['role'] == 'user':
             # Start new turn if we already have user content
             if current_turn['user']:
+                turns.append(current_turn)
+                current_turn = {'user': '', 'assistant': '', 'timestamp': '', 'uuid': ''}
+            # Bug #031: If current_turn has assistant but no user (assistant-first
+            # incremental slice), flush it as an assistant-only turn before
+            # starting the new user turn.
+            elif current_turn['assistant']:
                 turns.append(current_turn)
                 current_turn = {'user': '', 'assistant': '', 'timestamp': '', 'uuid': ''}
             current_turn['user'] = entry['text']
@@ -371,9 +383,13 @@ def _session_bridge_checkpoint(session_id: str):
 
     # --- DEDUPE CHECK ---
     try:
+        # Bug #032: Filter by session_id so session A's recent checkpoint
+        # doesn't suppress an unrelated session B's checkpoint.
         existing = conn.execute(
             "SELECT id, source, created_at FROM session_checkpoints "
-            "ORDER BY created_at DESC LIMIT 1"
+            "WHERE session_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (session_id or "",)
         ).fetchone()
         if existing:
             try:

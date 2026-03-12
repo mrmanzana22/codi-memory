@@ -407,12 +407,11 @@ def _maybe_persist():
     if _transitions_since_persist >= _PERSIST_INTERVAL:
         try:
             persist_model()
+            _transitions_since_persist = 0
         except Exception:
             _logger.error(
                 "Generative model persistence failed; learned transitions remain in memory only"
             )
-        finally:
-            _transitions_since_persist = 0
 
 
 def _ensure_ai_table_exists() -> None:

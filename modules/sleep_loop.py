@@ -828,6 +828,7 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
         # high meta_pe, memories in that domain may need reconsolidation.
         # Rationale: Nader 2000 + Clark 2013 (predictive processing).
         validated = 0
+        l2_failed = False
         try:
             L2_PE_THRESHOLD = 0.5    # Domains with avg meta_pe above this are flagged
             L2_MIN_SAMPLES = 5       # Need enough L2 data to trust the signal
@@ -901,11 +902,12 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     conn.commit()
         except Exception:
             _logger.exception("Closed-loop L2 reconsolidation validation failed")
+            l2_failed = True
 
         conn.close()
 
         elapsed = (time.monotonic() - start) * 1000
-        result["ok"] = (failed == 0)
+        result["ok"] = (failed == 0) and not l2_failed
         detail_parts = []
         if processed > 0:
             detail_parts.append(f"{processed} reconsolidated")
@@ -1859,8 +1861,19 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
         body = "\n".join(f"- {s}" for s in signals)
         message = header + body
 
+        # Enforce 3-hour proactive cooldown (#018)
+        last_proactive = _get_proactive_last_sent()
+        if last_proactive:
+            elapsed_proactive = (now_col() - last_proactive).total_seconds()
+            if elapsed_proactive < 3 * 3600:
+                result["ok"] = True
+                result["detail"] = f"{len(signals)} signals, proactive cooldown active ({elapsed_proactive/3600:.1f}h)"
+                result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+                return result
+
         sent = notify_hare(message)
         if sent:
+            _set_proactive_last_sent()
             result["ok"] = True
             result["detail"] = f"sent {len(signals)} signals to Hare"
             result["telegram_sent"] = len(signals)
@@ -2023,6 +2036,7 @@ def _tick_health(budget_ms: int) -> dict:
             parts.append(f"fts_sync: in sync ({fts_count})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
+        has_failure = True
 
     # Neuro invariant check (Feb 26 audit)
     try:
@@ -2162,13 +2176,13 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         # --- global_json ---
         # event_counts.last_seen written by now_iso() = aware ISO (#008)
         ev_row = conn.execute(
-            "SELECT COUNT(*) FROM event_counts WHERE last_seen > ?", (since_24h,)
+            "SELECT SUM(count) FROM event_counts WHERE last_seen > ?", (since_24h,)
         ).fetchone()
         wr_row = conn.execute(
             "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)
         ).fetchone()
         global_json = {
-            "active_event_types_24h": int(ev_row[0] or 0),
+            "events_24h": int(ev_row[0] or 0),
             "writes_24h": int(wr_row[0] or 0),
         }
 

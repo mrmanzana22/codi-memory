@@ -113,10 +113,10 @@ def enqueue_write_job(
     conn.execute(
         "INSERT INTO write_queue "
         "(job_id, kind, payload_json, status, priority, attempts, max_attempts, "
-        " dedupe_key, created_at, updated_at) "
-        "VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?)",
+        " dedupe_key, session_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?)",
         (job_id, kind, payload_json, priority, max_attempts,
-         effective_dedupe_key, now, now),
+         effective_dedupe_key, session_id, now, now),
     )
     conn.commit()
 
@@ -260,7 +260,7 @@ def claim_next_job(
 
     # Find and claim next job atomically
     row = conn.execute(
-        "SELECT id, job_id, kind, payload_json, attempts "
+        "SELECT id, job_id, kind, payload_json, attempts, session_id "
         "FROM write_queue "
         "WHERE status = 'queued' "
         "ORDER BY priority ASC, created_at ASC "
@@ -290,6 +290,7 @@ def claim_next_job(
         "kind": row["kind"],
         "payload": payload,
         "attempts": row["attempts"] + 1,  # already incremented
+        "session_id": row["session_id"],
     }
 
 
@@ -357,7 +358,8 @@ def mark_job_failed(
     conn.execute(
         "UPDATE write_queue "
         "SET status = ?, last_error = ?, failure_reason = ?, "
-        "    updated_at = ?, lease_until = NULL "
+        "    updated_at = ?, lease_until = NULL, "
+        "    claimed_at = NULL, started_at = NULL "
         "WHERE job_id = ? AND status = 'running'",
         (final_status, error[:500], failure_reason, now, job_id)
     )
@@ -593,7 +595,7 @@ def _log_reap_action(
 ) -> None:
     """Log a reap action to write_queue_log for observability."""
     now = now_iso()
-    status = "dead" if action == "dead" else "requeued"
+    status = "dead" if action.startswith("dead") else "requeued"
     reason = "timeout_dead" if action == "dead" else "timeout_requeued"
     try:
         conn.execute(
