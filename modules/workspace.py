@@ -380,12 +380,9 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         # Map decay_rate to FadeMem multiplier (0.05 = 1.0x, 0.03 = 0.6x)
         decay_multiplier = decay_rate / 0.05
 
-        # Canon v2, S1-5: Load causal chain members for reduced decay
-        try:
-            from modules.spreading import get_chain_member_ids
-            _chain_members = get_chain_member_ids()
-        except Exception:
-            _chain_members = set()
+        # Chain members lookup removed: was ~600ms remote PG call for
+        # a 0.5x decay reduction. Causal protection handled at vault level.
+        _chain_members: set = set()
 
         # Pre-filter: only scroll memories that can actually be decayed
         # (salience above floor, not critical importance)
@@ -398,7 +395,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
         # forgetting curves whose timescale is hours/days (Wixted & Ebbesen 1991).
         import random as _rng
         offset = None
-        SAMPLE_LIMIT = 500
+        SAMPLE_LIMIT = 200
         pending_updates = []  # batch updates to avoid N+1 round-trips
         vault_candidates = []
 
@@ -672,130 +669,134 @@ def recalibrate_importance(
     import logging
 
     logger = logging.getLogger(__name__)
-    downgraded_crit = 0
-    downgraded_high = 0
-    scanned = 0
-    now = datetime.now()
-    critical_cutoff = (now - timedelta(days=critical_decay_days)).isoformat()
-    high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
+    try:
+        downgraded_crit = 0
+        downgraded_high = 0
+        scanned = 0
+        now = datetime.now()
+        critical_cutoff = (now - timedelta(days=critical_decay_days)).isoformat()
+        high_cutoff = (now - timedelta(days=high_decay_days)).isoformat()
 
-    # Collect batch updates to avoid N+1 round-trips to remote PG
-    downgrade_to_high = []
-    downgrade_to_medium = []
+        # Collect batch updates to avoid N+1 round-trips to remote PG
+        downgrade_to_high = []
+        downgrade_to_medium = []
 
-    # --- Scan critical memories ---
-    offset = None
-    while scanned < max_scan:
-        batch, next_offset = pg.scroll(
-            filters={"importance": "critical"},
-            limit=100,
-            is_semantic=False,
-            offset=offset,
-        )
-        if not batch:
-            break
+        # --- Scan critical memories ---
+        offset = None
+        while scanned < max_scan:
+            batch, next_offset = pg.scroll(
+                filters={"importance": "critical"},
+                limit=100,
+                is_semantic=False,
+                offset=offset,
+            )
+            if not batch:
+                break
 
-        for point in batch:
-            scanned += 1
-            payload = point.payload
+            for point in batch:
+                scanned += 1
+                payload = point.payload
 
-            # Protected: legitimate critical content (personal moments)
-            meta = payload.get('metadata', {})
-            if meta.get('tipo_momento') == 'momento_personal':
-                continue
-
-            # S1-02: Bayesian importance uses SS + access pattern
-            # Low SS = low real importance regardless of LLM label
-            ss = float(payload.get('storage_strength', 1.0) or 1.0)
-            timestamps = payload.get('access_timestamps', [])
-            last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
-
-            # Effective decay threshold: SS < 2.0 means barely accessed, decay sooner
-            effective_cutoff = critical_cutoff
-            if ss < 2.0:
-                # Low SS: halve the grace period (degrade sooner)
-                half_days = critical_decay_days // 2
-                effective_cutoff = (now - timedelta(days=half_days)).isoformat()
-
-            if last_access and last_access < effective_cutoff:
-                downgrade_to_high.append(str(point.id))
-                downgraded_crit += 1
-
-        if next_offset is None:
-            break
-        offset = next_offset
-
-    # --- Scan high memories ---
-    offset = None
-    while scanned < max_scan:
-        batch, next_offset = pg.scroll(
-            filters={"importance": "high"},
-            limit=100,
-            is_semantic=False,
-            offset=offset,
-        )
-        if not batch:
-            break
-
-        for point in batch:
-            scanned += 1
-            payload = point.payload
-
-            # Protected: emotionally weighted memories
-            ew = payload.get('experiential_emotional_weight', 0)
-            try:
-                if ew and float(ew) >= 0.8:
+                # Protected: legitimate critical content (personal moments)
+                meta = payload.get('metadata', {})
+                if meta.get('tipo_momento') == 'momento_personal':
                     continue
-            except (ValueError, TypeError):
-                pass
 
-            # S1-02: Same SS-aware decay for high->medium
-            ss = float(payload.get('storage_strength', 1.0) or 1.0)
-            timestamps = payload.get('access_timestamps', [])
-            last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
+                # S1-02: Bayesian importance uses SS + access pattern
+                # Low SS = low real importance regardless of LLM label
+                ss = float(payload.get('storage_strength', 1.0) or 1.0)
+                timestamps = payload.get('access_timestamps', [])
+                last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
 
-            effective_cutoff = high_cutoff
-            if ss < 2.0:
-                half_days = high_decay_days // 2
-                effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+                # Effective decay threshold: SS < 2.0 means barely accessed, decay sooner
+                effective_cutoff = critical_cutoff
+                if ss < 2.0:
+                    # Low SS: halve the grace period (degrade sooner)
+                    half_days = critical_decay_days // 2
+                    effective_cutoff = (now - timedelta(days=half_days)).isoformat()
 
-            if last_access and last_access < effective_cutoff:
-                downgrade_to_medium.append(str(point.id))
-                downgraded_high += 1
+                if last_access and last_access < effective_cutoff:
+                    downgrade_to_high.append(str(point.id))
+                    downgraded_crit += 1
 
-        if next_offset is None:
-            break
-        offset = next_offset
+            if next_offset is None:
+                break
+            offset = next_offset
 
-    # Batch update downgrades in one transaction
-    if downgrade_to_high or downgrade_to_medium:
-        from modules.config_pg import get_conn as _pg_conn
-        with _pg_conn() as conn:
-            if downgrade_to_high:
-                conn.execute(
-                    "UPDATE memories SET importance = 'high', updated_at = NOW() "
-                    "WHERE id = ANY(%s::uuid[])",
-                    (downgrade_to_high,),
-                )
-            if downgrade_to_medium:
-                conn.execute(
-                    "UPDATE memories SET importance = 'medium', updated_at = NOW() "
-                    "WHERE id = ANY(%s::uuid[])",
-                    (downgrade_to_medium,),
-                )
+        # --- Scan high memories ---
+        offset = None
+        while scanned < max_scan:
+            batch, next_offset = pg.scroll(
+                filters={"importance": "high"},
+                limit=100,
+                is_semantic=False,
+                offset=offset,
+            )
+            if not batch:
+                break
 
-    total_downgraded = downgraded_crit + downgraded_high
-    if total_downgraded > 0:
-        logger.info(f"[importance_recal] {downgraded_crit} critical→high, {downgraded_high} high→medium")
+            for point in batch:
+                scanned += 1
+                payload = point.payload
 
-    return (
-        f"# Importance Recalibration\n\n"
-        f"**Scanned:** {scanned}\n"
-        f"**Downgraded:** {total_downgraded} "
-        f"({downgraded_crit} critical→high, {downgraded_high} high→medium)\n"
-        f"**Criteria:** critical→high after {critical_decay_days}d, "
-        f"high→medium after {high_decay_days}d without access"
-    )
+                # Protected: emotionally weighted memories
+                ew = payload.get('experiential_emotional_weight', 0)
+                try:
+                    if ew and float(ew) >= 0.8:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+                # S1-02: Same SS-aware decay for high->medium
+                ss = float(payload.get('storage_strength', 1.0) or 1.0)
+                timestamps = payload.get('access_timestamps', [])
+                last_access = timestamps[-1] if timestamps else payload.get('created_at', '')
+
+                effective_cutoff = high_cutoff
+                if ss < 2.0:
+                    half_days = high_decay_days // 2
+                    effective_cutoff = (now - timedelta(days=half_days)).isoformat()
+
+                if last_access and last_access < effective_cutoff:
+                    downgrade_to_medium.append(str(point.id))
+                    downgraded_high += 1
+
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        # Batch update downgrades in one transaction
+        if downgrade_to_high or downgrade_to_medium:
+            from modules.config_pg import get_conn as _pg_conn
+            with _pg_conn() as conn:
+                if downgrade_to_high:
+                    conn.execute(
+                        "UPDATE memories SET importance = 'high', updated_at = NOW() "
+                        "WHERE id = ANY(%s::uuid[])",
+                        (downgrade_to_high,),
+                    )
+                if downgrade_to_medium:
+                    conn.execute(
+                        "UPDATE memories SET importance = 'medium', updated_at = NOW() "
+                        "WHERE id = ANY(%s::uuid[])",
+                        (downgrade_to_medium,),
+                    )
+
+        total_downgraded = downgraded_crit + downgraded_high
+        if total_downgraded > 0:
+            logger.info(f"[importance_recal] {downgraded_crit} critical→high, {downgraded_high} high→medium")
+
+        return (
+            f"# Importance Recalibration\n\n"
+            f"**Scanned:** {scanned}\n"
+            f"**Downgraded:** {total_downgraded} "
+            f"({downgraded_crit} critical→high, {downgraded_high} high→medium)\n"
+            f"**Criteria:** critical→high after {critical_decay_days}d, "
+            f"high→medium after {high_decay_days}d without access"
+        )
+    except Exception as e:
+        logger.warning("[recalibrate_importance] error: %s", str(e)[:100])
+        return f"Error en recalibración de importancia: {str(e)[:80]}"
 
 
 def register_tools(mcp):

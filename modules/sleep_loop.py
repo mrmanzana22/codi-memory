@@ -40,7 +40,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from modules.config import FTS_DB_PATH, PROSPECTIVE_DB_PATH, DATA_DIR, TZ_COL, now_col, now_iso, connect_fts
+from modules.config import (
+    FTS_DB_PATH, PROSPECTIVE_DB_PATH, DATA_DIR, TZ_COL,
+    now_col, now_iso, connect_fts, parse_timestamp, to_sqlite_utc, to_sqlite_local,
+)
 from modules.events import event_bus, Events
 from modules.secret_redact import redact_secrets
 
@@ -184,16 +187,17 @@ class SleepWorldModel:
                 conn = _get_conn()
                 close_conn = True
             now_utc = datetime.now(timezone.utc)
-            now_local = datetime.now()  # For SQLite comparisons stored as local time
+            # now_local removed — use now_col()/parse_timestamp for tz-safe comparisons
 
             # new_memories: count since last full consolidation / 100
             try:
                 last_full = _get_last_full_consolidation_at()
-                last_full_sqlite = _sqlite_timestamp_cutoff(last_full)
-                if last_full_sqlite:
+                # memories_text.created_at is written by datetime('now') = naive UTC
+                last_full_utc = to_sqlite_utc(last_full) if last_full else None
+                if last_full_utc:
                     n = conn.execute(
                         "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
-                        (last_full_sqlite,)
+                        (last_full_utc,)
                     ).fetchone()[0]
                 else:
                     n = conn.execute("SELECT COUNT(*) FROM memories_text").fetchone()[0]
@@ -217,9 +221,10 @@ class SleepWorldModel:
 
             # labile_count: pending reconsolidations / 10
             try:
+                # labile_memories.window_expires written by now_col().isoformat() = aware Colombia
                 labile = conn.execute(
                     "SELECT COUNT(*) FROM labile_memories WHERE window_expires > ?",
-                    (now_local.isoformat(),)
+                    (now_iso(),)
                 ).fetchone()[0]
                 state["labile_count"] = min(1.0, labile / 10.0)
             except Exception:
@@ -263,8 +268,9 @@ class SleepWorldModel:
                     "SELECT value FROM sleep_loop_state WHERE key = 'last_homeostasis'"
                 ).fetchone()
                 if row:
-                    last = datetime.fromisoformat(row[0])
-                    hours = max(0.0, (now_local - last).total_seconds() / 3600)
+                    # stored as now_iso() = aware Colombia; parse_timestamp handles all formats
+                    last = parse_timestamp(row[0])
+                    hours = max(0.0, (now_col() - last).total_seconds() / 3600)
                     state["decay_debt"] = min(1.0, hours / 12.0)
             except Exception:
                 pass
@@ -275,8 +281,9 @@ class SleepWorldModel:
                     "SELECT value FROM sleep_loop_state WHERE key = 'last_prospective'"
                 ).fetchone()
                 if row:
-                    last = datetime.fromisoformat(row[0])
-                    hours = max(0.0, (now_local - last).total_seconds() / 3600)
+                    # stored as now_iso() = aware Colombia
+                    last = parse_timestamp(row[0])
+                    hours = max(0.0, (now_col() - last).total_seconds() / 3600)
                     state["intention_staleness"] = min(1.0, hours / 6.0)
             except Exception:
                 pass
@@ -379,7 +386,7 @@ class SleepWorldModel:
                     PRIMARY KEY (tick_name, dimension)
                 )
             """)
-            now_str = datetime.now().isoformat()
+            now_str = now_iso()
             for tick_name, effects in self._learned_effects.items():
                 count = self._learn_counts.get(tick_name, 0)
                 for dim, effect in effects.items():
@@ -449,7 +456,7 @@ TICK_MAX_MS = {
     "backup": 5000,              # unchanged
     "sharpe_insights": 5000,     # was 3000
     "reconsolidation": 5000,     # was 3000
-    "homeostasis": 3000,         # was 2000
+    "homeostasis": 5000,         # remote PG cold connection ~2s + scroll + decay
     "self_model": 3000,          # was 2000
     "health": 3000,              # was 2000
     "health_snapshot": 2000,     # 7+ SQLite queries, 500ms too tight
@@ -687,11 +694,12 @@ def _should_run_full_consolidation() -> bool:
         hours_since = max(0.01, (datetime.now(timezone.utc) - last).total_seconds() / 3600)
 
         # Count new memories since last consolidation
-        last_full_sqlite = _sqlite_timestamp_cutoff(last_full)
+        # memories_text.created_at written by datetime('now') = naive UTC
+        last_full_utc = to_sqlite_utc(last_full)
         conn = _get_conn()
         new_memories_row = conn.execute(
             "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
-            (last_full_sqlite,)
+            (last_full_utc,)
         ).fetchone()
         conn.close()
 
@@ -1950,59 +1958,54 @@ def _tick_health(budget_ms: int) -> dict:
         except Exception:
             pass
 
-        if fts_count >= pg_count:
-            # Already in sync — no need for expensive full scan
-            fts_conn.close()
-            parts.append(f"fts_sync: in sync ({fts_count})")
+        # Always verify by ID membership — count equality does NOT prove sync.
+        fts_ids = set(
+            row[0] for row in
+            fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
+        )
+
+        synced = 0
+        scroll_offset = None
+        while True:
+            scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
+            if scroll_offset is not None:
+                scroll_kwargs["offset"] = scroll_offset
+            points, scroll_offset = _pg.scroll(**scroll_kwargs)
+
+            for p in points:
+                mid = str(p.id)
+                if mid not in fts_ids:
+                    content = p.payload.get('data', '')
+                    if not content:
+                        continue
+                    category = p.payload.get('category', 'general')
+                    source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
+                    importance = p.payload.get('narrative_importance', 'medium')
+                    # Preserve source created_at; fall back to now if missing
+                    src_created = p.payload.get('created_at', '')
+                    if src_created:
+                        # Normalize to SQLite-compatible format
+                        fts_created = str(src_created)[:19].replace('T', ' ')
+                    else:
+                        fts_created = None  # will use datetime('now')
+                    fts_conn.execute("""
+                        INSERT OR REPLACE INTO memories_text
+                        (memory_id, content, category, source, importance, created_at)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                    """, (mid, content, category, source, importance, fts_created))
+                    synced += 1
+
+            if scroll_offset is None:
+                break
+
+        if synced > 0:
+            fts_conn.commit()
+        fts_conn.close()
+
+        if synced > 0:
+            parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
         else:
-            # Counts differ — do incremental scan to find missing entries
-            fts_ids = set(
-                row[0] for row in
-                fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
-            )
-
-            synced = 0
-            scroll_offset = None
-            while True:
-                scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
-                if scroll_offset is not None:
-                    scroll_kwargs["offset"] = scroll_offset
-                points, scroll_offset = _pg.scroll(**scroll_kwargs)
-
-                for p in points:
-                    mid = str(p.id)
-                    if mid not in fts_ids:
-                        content = p.payload.get('data', '')
-                        if not content:
-                            continue
-                        category = p.payload.get('category', 'general')
-                        source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
-                        importance = p.payload.get('narrative_importance', 'medium')
-                        # Preserve source created_at; fall back to now if missing
-                        src_created = p.payload.get('created_at', '')
-                        if src_created:
-                            # Normalize to SQLite-compatible format
-                            fts_created = str(src_created)[:19].replace('T', ' ')
-                        else:
-                            fts_created = None  # will use datetime('now')
-                        fts_conn.execute("""
-                            INSERT OR REPLACE INTO memories_text
-                            (memory_id, content, category, source, importance, created_at)
-                            VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
-                        """, (mid, content, category, source, importance, fts_created))
-                        synced += 1
-
-                if scroll_offset is None:
-                    break
-
-            if synced > 0:
-                fts_conn.commit()
-            fts_conn.close()
-
-            if synced > 0:
-                parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
-            else:
-                parts.append(f"fts_sync: in sync ({fts_count})")
+            parts.append(f"fts_sync: in sync ({fts_count})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
 
@@ -2050,9 +2053,11 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
     start = time.monotonic()
     try:
         conn = connect_fts(FTS_DB_PATH)
-        now = datetime.now(TZ_COL)
+        now = now_col()
         now_str = now.isoformat()
-        since_24h = (now - timedelta(hours=24)).isoformat()
+        since_24h = (now - timedelta(hours=24)).isoformat()  # F1: aware Colombia, for write_queue_log
+        # F2: naive Colombia for tables written by datetime.now().isoformat()
+        since_24h_local = to_sqlite_local(now - timedelta(hours=24))
 
         # --- tick_stats: age of each tick ---
         _valid_tick_keys = {f"last_{t}" for t in TICK_ORDER}
@@ -2091,11 +2096,12 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         # --- predictions_json ---
         pred_json = {"count_24h": 0, "accuracy_pct": 0.0, "avg_pe": 0.0}
         try:
+            # prediction_results.created_at written by datetime.now().isoformat() = naive local (F2)
             pred_row = conn.execute(
                 """SELECT COUNT(*), AVG(CASE WHEN hit = 1 THEN 1.0 ELSE 0.0 END)*100,
                           AVG(COALESCE(weighted_surprise, surprise_score))
                    FROM prediction_results WHERE created_at > ?""",
-                (since_24h,),
+                (since_24h_local,),
             ).fetchone()
             if pred_row and pred_row[0]:
                 pred_json = {
@@ -2140,8 +2146,9 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             pass
 
         # --- global_json ---
+        # event_counts.last_seen written by datetime.now().isoformat() = naive local (F2)
         ev_row = conn.execute(
-            "SELECT COUNT(*) FROM event_counts WHERE datetime(last_seen) > datetime(?)", (since_24h,)
+            "SELECT COUNT(*) FROM event_counts WHERE last_seen > ?", (since_24h_local,)
         ).fetchone()
         wr_row = conn.execute(
             "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)
