@@ -2047,6 +2047,7 @@ def _tick_health(budget_ms: int) -> dict:
             result["neuro_violations"] = neuro["violations"]
     except Exception as e:
         parts.append(f"neuro: error {str(e)[:40]}")
+        has_failure = True
 
     # Operational health monitoring (v1: 3 rules, alerts only)
     hc_conn = None
@@ -2063,6 +2064,7 @@ def _tick_health(budget_ms: int) -> dict:
         err = f"{type(e).__name__}: {redact_secrets(str(e))[:50]}"
         _logger.exception("health_monitor tick failed")
         parts.append(f"health_monitor: error {err}")
+        has_failure = True
     finally:
         if hc_conn is not None:
             hc_conn.close()

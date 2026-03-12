@@ -70,6 +70,14 @@ def parse_timestamp(value) -> datetime:
     return dt.astimezone(TZ_COL)
 
 
+def parse_sqlite_utc(ts: str) -> datetime:
+    """Parse a naive SQLite UTC timestamp (from datetime('now')) as UTC-aware."""
+    dt = datetime.fromisoformat(ts)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def now_sqlite() -> str:
     """Colombia-local naive for TEXT comparisons: '2026-03-12 14:30:00'"""
     return now_col().strftime("%Y-%m-%d %H:%M:%S")
@@ -99,9 +107,8 @@ try:
     _HAS_MCP = True
 except ImportError:
     _HAS_MCP = False
-from mem0 import Memory
-from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+# mem0 and qdrant_client are imported lazily inside get_memory() / get_qdrant()
+# to avoid import failures when STORAGE_BACKEND != "legacy".
 try:
     from supabase import create_client, Client
 except ImportError:
@@ -413,6 +420,7 @@ def get_memory():
     global _memory, _init_error
     if _memory is None:
         try:
+            from mem0 import Memory
             _memory = Memory.from_config(mem0_config)
             _init_error = None
             _logger.info("mem0 conectado OK")
@@ -466,6 +474,7 @@ def get_qdrant():
                 )
 
         try:
+            from qdrant_client import QdrantClient
             _qdrant = QdrantClient(
                 url=QDRANT_URL,
                 api_key=QDRANT_API_KEY or None,

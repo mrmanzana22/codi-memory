@@ -307,8 +307,8 @@ def process_one_job(lease_seconds: int = DEFAULT_LEASE_SECONDS) -> bool:
 
     executor = JOB_EXECUTORS.get(kind)
     if not executor:
-        mark_job_failed(job_id, f"Unknown job kind: {kind}")
-        log_job_completion(job_id, kind, "dead", attempts, error_class="UnknownKind",
+        new_status = mark_job_failed(job_id, f"Unknown job kind: {kind}")
+        log_job_completion(job_id, kind, new_status, attempts, error_class="UnknownKind",
                            error_msg=f"No executor for kind={kind}")
         return True
 
@@ -418,6 +418,7 @@ def drain_tick(
 
     tick_start = time.monotonic()
     processed = 0
+    failed = 0
 
     while processed < max_jobs:
         if time.monotonic() - tick_start >= max_seconds:
@@ -425,11 +426,12 @@ def drain_tick(
 
         did_work = process_one_job(lease_seconds=lease_seconds)
         if not did_work:
+            failed += 1
             break  # queue empty
 
         processed += 1
 
-    return {"processed": processed, "reap": reap_result}
+    return {"processed": processed, "failed": failed, "reap": reap_result}
 
 
 # ============================================================
@@ -490,8 +492,11 @@ def run_worker_loop(
     failed = 0
 
     while not _shutdown:
-        tick_result = drain_tick(lease_seconds=lease_seconds)
+        remaining = max_jobs - processed if max_jobs > 0 else MAX_JOBS_PER_TICK
+        tick_result = drain_tick(lease_seconds=lease_seconds,
+                                 max_jobs=min(MAX_JOBS_PER_TICK, remaining))
         drained = tick_result["processed"]
+        failed += tick_result.get("failed", 0)
 
         # Emit heartbeat every tick (even when idle)
         _emit_worker_tick(tick_result)
