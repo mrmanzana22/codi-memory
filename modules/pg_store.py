@@ -396,12 +396,32 @@ class PGMemoryStore:
         if embedding is None:
             embedding = _embed_text(query)
 
+        # Filter Spanish stopwords before FTS (english dict doesn't remove them)
+        _ES_STOPS = frozenset({
+            "que", "de", "en", "el", "la", "los", "las", "un", "una",
+            "por", "con", "para", "como", "del", "al", "es", "se", "no",
+        })
+        fts_terms = [w for w in query.split() if len(w) > 1 and w.lower() not in _ES_STOPS]
+
         # Sanitize FTS query: AND for <=2 words (precise), OR for 3+ (broad recall)
-        fts_terms = [w for w in query.split() if len(w) > 1]
         if len(fts_terms) <= 2:
             fts_query = " & ".join(fts_terms) if fts_terms else query
         else:
             fts_query = " | ".join(fts_terms)
+
+        # Alias expansion: OR-append known technical synonyms (max 1 match)
+        _FTS_ALIASES = {
+            "prediction": ["HGF", "L0", "L1", "L2", "L3"],
+            "active inference": ["EFE", "dirichlet", "options"],
+            "valora": ["values", "autonomy"],
+        }
+        q_lower = query.lower()
+        for trigger, aliases in _FTS_ALIASES.items():
+            if trigger in q_lower:
+                safe = [a for a in aliases if len(a) > 1]
+                if safe:
+                    fts_query = f"({fts_query}) | " + " | ".join(safe)
+                break
 
         # Semantic filter
         semantic_clause = ""
@@ -867,12 +887,32 @@ class PGMemoryStore:
         Searches both English and Spanish dictionaries.
         Returns list of dicts: [{memory_id, content, category, source, bm25_rank}, ...]
         """
+        # Filter Spanish stopwords before FTS (english dict doesn't remove them)
+        _ES_STOPS = frozenset({
+            "que", "de", "en", "el", "la", "los", "las", "un", "una",
+            "por", "con", "para", "como", "del", "al", "es", "se", "no",
+        })
+        terms = [w for w in query.split() if len(w) > 1 and w.lower() not in _ES_STOPS]
+
         # Sanitize: AND for <=2 words, OR for 3+ words
-        terms = [w for w in query.split() if len(w) > 1]
         if len(terms) <= 2:
             tsquery = " & ".join(terms) if terms else query
         else:
             tsquery = " | ".join(terms)
+
+        # Alias expansion (same dict as search(), OR-appended)
+        _FTS_ALIASES = {
+            "prediction": ["HGF", "L0", "L1", "L2", "L3"],
+            "active inference": ["EFE", "dirichlet", "options"],
+            "valora": ["values", "autonomy"],
+        }
+        q_lower = query.lower()
+        for trigger, aliases in _FTS_ALIASES.items():
+            if trigger in q_lower:
+                safe = [a for a in aliases if len(a) > 1]
+                if safe:
+                    tsquery = f"({tsquery}) | " + " | ".join(safe)
+                break
 
         with get_conn() as conn:
             rows = conn.execute(
