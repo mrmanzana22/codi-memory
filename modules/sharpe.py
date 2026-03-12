@@ -232,7 +232,12 @@ def compute_sharpe_for_payload(payload: dict) -> dict:
     importance = payload.get("narrative_importance") or "medium"
     evidence_count = int(payload.get("evidence_count") or 1)
     contradiction_count = int(payload.get("contradiction_count") or 0)
-    last_accessed = payload.get("attention_last_accessed") or payload.get("last_accessed") or ""
+    last_accessed = (
+        payload.get("last_accessed_at")
+        or payload.get("attention_last_accessed")
+        or payload.get("last_accessed")
+        or ""
+    )
     created_at = payload.get("created_at") or ""
     is_labile = bool(payload.get("is_labile") or False)
 

@@ -833,17 +833,19 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
             L2_PE_THRESHOLD = 0.5    # Domains with avg meta_pe above this are flagged
             L2_MIN_SAMPLES = 5       # Need enough L2 data to trust the signal
             MAX_FLAG_PER_CYCLE = 3   # Cap to prevent mass destabilization
+            # Use Python cutoff to match writer format (datetime.now().isoformat()) (#042)
+            l2_cutoff = (datetime.now() - timedelta(days=7)).isoformat()
 
             # Find domains with consistently high L2 prediction error
             flagged_domains = conn.execute("""
                 SELECT domain, AVG(meta_pe) as avg_pe, COUNT(*) as cnt
                 FROM prediction_results_l2
-                WHERE created_at > datetime('now', '-7 days')
+                WHERE created_at > ?
                 GROUP BY domain
                 HAVING cnt >= ? AND AVG(meta_pe) > ?
                 ORDER BY avg_pe DESC
                 LIMIT 5
-            """, (L2_MIN_SAMPLES, L2_PE_THRESHOLD)).fetchall()
+            """, (l2_cutoff, L2_MIN_SAMPLES, L2_PE_THRESHOLD)).fetchall()
 
             if flagged_domains:
                 flagged_count = 0
@@ -2176,9 +2178,11 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
             pass
 
         # --- global_json ---
-        # event_counts.last_seen written by now_iso() = aware ISO (#008)
+        # event_counts.count is lifetime cumulative (#017/#041); only
+        # last_seen supports recency filtering.  Report distinct event
+        # types active in the window instead of the inflated SUM(count).
         ev_row = conn.execute(
-            "SELECT SUM(count) FROM event_counts WHERE last_seen > ?", (since_24h,)
+            "SELECT COUNT(*) FROM event_counts WHERE last_seen > ?", (since_24h,)
         ).fetchone()
         wr_row = conn.execute(
             "SELECT COUNT(*) FROM write_queue_log WHERE status='done' AND created_at > ?", (since_24h,)
