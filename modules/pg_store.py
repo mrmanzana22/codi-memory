@@ -396,9 +396,12 @@ class PGMemoryStore:
         if embedding is None:
             embedding = _embed_text(query)
 
-        # Sanitize FTS query: words joined with &
+        # Sanitize FTS query: AND for <=2 words (precise), OR for 3+ (broad recall)
         fts_terms = [w for w in query.split() if len(w) > 1]
-        fts_query = " & ".join(fts_terms) if fts_terms else query
+        if len(fts_terms) <= 2:
+            fts_query = " & ".join(fts_terms) if fts_terms else query
+        else:
+            fts_query = " | ".join(fts_terms)
 
         # Semantic filter
         semantic_clause = ""
@@ -864,9 +867,12 @@ class PGMemoryStore:
         Searches both English and Spanish dictionaries.
         Returns list of dicts: [{memory_id, content, category, source, bm25_rank}, ...]
         """
-        # Sanitize: remove special FTS chars, join with &
+        # Sanitize: AND for <=2 words, OR for 3+ words
         terms = [w for w in query.split() if len(w) > 1]
-        tsquery = " & ".join(terms) if terms else query
+        if len(terms) <= 2:
+            tsquery = " & ".join(terms) if terms else query
+        else:
+            tsquery = " | ".join(terms)
 
         with get_conn() as conn:
             rows = conn.execute(
@@ -874,15 +880,12 @@ class PGMemoryStore:
                 SELECT id AS memory_id, content, category, source, importance,
                        ts_rank(fts_combined, to_tsquery('english', %s)) AS bm25_rank
                 FROM memories
-                WHERE (
-                    fts_combined @@ to_tsquery('english', %s)
-                    OR fts_combined @@ to_tsquery('spanish', %s)
-                )
+                WHERE fts_combined @@ to_tsquery('english', %s)
                   AND COALESCE(is_dormant, FALSE) = FALSE
                 ORDER BY bm25_rank DESC
                 LIMIT %s
                 """,
-                (tsquery, tsquery, tsquery, limit),
+                (tsquery, tsquery, limit),
             ).fetchall()
 
         return [
