@@ -101,5 +101,5 @@ def is_fts_query_safe(query: str) -> bool:
 def clamp_fts_limit(limit: int) -> int:
     """Ensure FTS result limit does not exceed hard cap."""
     if not isinstance(limit, int) or limit < 1:
-        return FTS_MAX_RESULTS
+        return 1
     return min(limit, FTS_MAX_RESULTS)

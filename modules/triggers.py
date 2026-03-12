@@ -23,15 +23,17 @@ def _load_triggers():
     """Carga triggers desde archivo JSON."""
     global _triggers_cache
     if _triggers_cache is None:
-        try:
-            if os.path.exists(TRIGGERS_FILE):
-                with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    _triggers_cache = data.get('triggers', {})
-            else:
-                _triggers_cache = {}
-        except Exception as e:
+        if not os.path.exists(TRIGGERS_FILE):
             _triggers_cache = {}
+        else:
+            with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("Invalid triggers file format: expected top-level object")
+            triggers = data.get('triggers', {})
+            if not isinstance(triggers, dict):
+                raise ValueError("Invalid triggers file schema: 'triggers' must be an object")
+            _triggers_cache = triggers
     return _triggers_cache
 
 
@@ -42,7 +44,7 @@ def _detect_triggers(text: str) -> list:
     text_lower = text.lower()
 
     for trigger_name, trigger_data in triggers.items():
-        patterns = trigger_data.get('patterns', [])
+        patterns = [p.strip() for p in trigger_data.get('patterns', []) if isinstance(p, str) and p.strip()]
         for pattern in patterns:
             if pattern.lower() in text_lower:
                 activated.append({
@@ -211,6 +213,9 @@ def register_tools(mcp):
             else:
                 data = {"_meta": {"version": "1.0", "description": "Sistema de triggers de Codi"}, "triggers": {}, "indice_rapido": {}}
 
+            if 'indice_rapido' not in data:
+                data['indice_rapido'] = {}
+
             # Verificar que no exista
             if nombre in data.get('triggers', {}):
                 return json.dumps({
@@ -219,8 +224,14 @@ def register_tools(mcp):
                 }, ensure_ascii=False)
 
             # Parsear patterns y evoca
-            patterns_list = [p.strip() for p in patterns.split(',')]
+            patterns_list = [p.strip() for p in patterns.split(',') if p.strip()]
             evoca_list = [e.strip() for e in evoca.split(',')] if evoca else []
+
+            if not patterns_list:
+                return json.dumps({
+                    "error": "Debes proporcionar al menos un pattern no vacio",
+                    "sugerencia": "Usa palabras clave separadas por coma, sin entradas vacias"
+                }, ensure_ascii=False)
 
             # Crear nuevo trigger
             nuevo_trigger = {

@@ -435,7 +435,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                 # Try SS/RS dual strength model (Bjork & Bjork 1992)
                 hours = _get_hours_since_access(point.payload)
                 if hours is not None:
-                    new_ss, new_rs, effective = compute_fadem_strength_ss_rs(
+                    fadem_ss, fadem_rs, fadem_effective = compute_fadem_strength_ss_rs(
                         ss=ss, rs=rs,
                         hours_since_access=hours,
                         importance=importance,
@@ -443,7 +443,10 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                         memory_type=_get_memory_type(point.payload),
                         emotional_arousal=_get_emotional_arousal(point.payload),
                     )
-                    new_salience = effective
+                    # Scale FadeMem delta by decay_multiplier (D5 fix)
+                    new_ss = fadem_ss
+                    new_rs = max(FADEM_FLOOR, rs + (fadem_rs - rs) * decay_multiplier)
+                    new_salience = max(FADEM_FLOOR, salience + (fadem_effective - salience) * decay_multiplier)
                     fadem_count += 1
                 else:
                     # Flat fallback for memories without timing data

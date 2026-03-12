@@ -68,10 +68,18 @@ def consolidate_recent(hours: int = 24) -> str:
     """
     try:
         session_id = get_session_id()
-        recent_points, _ = pg.scroll(
-            filters={"metadata_key": {"key": "temporal_session_id", "value": session_id}},
-            limit=50, is_semantic=False
-        )
+        cursor = None
+        recent_points = []
+        while True:
+            page_points, cursor = pg.scroll(
+                filters={"metadata_key": {"key": "temporal_session_id", "value": session_id}},
+                limit=50, cursor=cursor, is_semantic=False
+            )
+            if not page_points:
+                break
+            recent_points.extend(page_points)
+            if cursor is None:
+                break
         if not recent_points:
             return "No hay memorias recientes para consolidar en esta sesion."
 
@@ -94,8 +102,12 @@ def consolidate_recent(hours: int = 24) -> str:
                     if s_id != mem_id and score >= 0.7:
                         related_ids.append(s_id)
                         try:
+                            existing_links = s.get('payload', {}).get('consolidated_with', [])
+                            if not isinstance(existing_links, list):
+                                existing_links = []
+                            merged_links = existing_links if mem_id in existing_links else existing_links + [mem_id]
                             pg.update_payload(s_id, {
-                                'consolidated_with': [mem_id],
+                                'consolidated_with': merged_links,
                                 'attention_salience': min(point.payload.get('attention_salience', 0.5) + 0.1, 1.0),
                             })
                         except Exception:
@@ -318,11 +330,12 @@ def despertar_codi(verbose: bool = False) -> str:
         except Exception:
             pass
 
+        event_handler_error = None
         try:
             from modules.active_inference_integration import register_event_handlers
             register_event_handlers()
-        except Exception:
-            pass
+        except Exception as e:
+            event_handler_error = redact_secrets(str(e))
 
         # ── DATA GATHERING ──
 
@@ -475,6 +488,13 @@ def despertar_codi(verbose: bool = False) -> str:
                 "severity": "high" if worker_status == "missing" else "medium",
                 "detail": f"Worker {worker_status} ({worker_detail})",
                 "action": "Verificar launchd/write_worker",
+            })
+        if event_handler_error:
+            incidents.append({
+                "type": "event_handlers",
+                "severity": "high",
+                "detail": f"Event handler registration failed: {event_handler_error}",
+                "action": "Verificar modules.active_inference_integration.register_event_handlers",
             })
         if bridge and bridge.get("hours_since_last", 0) > 6:
             incidents.append({

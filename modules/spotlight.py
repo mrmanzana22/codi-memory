@@ -53,10 +53,11 @@ def _apply_ttl(items: list) -> list:
     for item in items:
         try:
             ts = datetime.fromisoformat(item["ts"])
-            if (now - ts).total_seconds() < SPOTLIGHT_TTL_SECONDS:
-                alive.append(item)
-        except Exception:
-            alive.append(item)  # keep if we can't parse
+        except (KeyError, TypeError, ValueError):
+            _logger.warning("Dropping spotlight item with invalid timestamp: %r", item)
+            continue
+        if (now - ts).total_seconds() < SPOTLIGHT_TTL_SECONDS:
+            alive.append(item)
     return alive
 
 
@@ -211,8 +212,8 @@ def update_spotlight_from_text(current: list, text: str, source: str) -> list:
         updated.append(new_item)
 
     # Detect risk signals
-    risk_kw = ["riesgo", "bloqueo", "bug", "fail", "error", "rompe", "broken"]
-    if any(kw in text_low for kw in risk_kw):
+    risk_kw = ["riesgo", "bloqueo", "fail", "error", "rompe", "broken"]
+    if any(kw in text_low for kw in risk_kw) or re.search(r"\bbug\b", text_low):
         new_item = make_item("risk", text[:200], source)
         updated = [i for i in updated if i["type"] != "risk"]
         updated.append(new_item)
@@ -243,16 +244,21 @@ def should_update_from_recall(results: list) -> bool:
     if not results:
         return False
 
-    # Strong signal: found critical/high importance memories
+    # Strong signal: explicit evidence inside a recall result
     for r in results:
-        meta = r.get("meta", {})
-        # Check if any result text mentions critical terms
+        meta = r.get("meta", {}) or {}
         text = r.get("text", "")
-        if "critical" in text.lower() or "bloqueo" in text.lower():
+        text_low = text.lower()
+        importance = str(meta.get("importance", "")).lower()
+        hits = meta.get("hits", 0)
+        if importance in ("critical", "high"):
+            return True
+        if isinstance(hits, int) and hits >= 3:
+            return True
+        if "critical" in text_low or "bloqueo" in text_low:
             return True
 
-    # At least 3 results = decent signal
-    return len(results) >= 3
+    return False
 
 
 # ============================================================

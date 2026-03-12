@@ -610,8 +610,20 @@ def _init_prediction_tables(conn):
             precision_weight REAL,
             weighted_surprise REAL,
             hit INTEGER DEFAULT 0,
+            source TEXT,
             created_at TEXT NOT NULL
         )
+    """)
+    # Backward-compatible migration: older DBs created before `source` existed.
+    prediction_results_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(prediction_results)").fetchall()
+    }
+    if "source" not in prediction_results_columns:
+        conn.execute("ALTER TABLE prediction_results ADD COLUMN source TEXT")
+    conn.execute("""
+        UPDATE prediction_results
+        SET source = 'interactive'
+        WHERE source IS NULL
     """)
     # Transition frequency stats for entropy-based precision (Friston 2010, Bogacz 2017)
     conn.execute("""
@@ -952,7 +964,7 @@ def _compute_precision(conn, actual_topic):
         rows = conn.execute("""
             SELECT weighted_surprise FROM (
                 SELECT weighted_surprise FROM prediction_results
-                WHERE actual_topic = ? AND source = 'interactive'
+                WHERE actual_topic = ? AND COALESCE(source, 'interactive') = 'interactive'
                 ORDER BY id DESC LIMIT 20
             )
         """, (actual_topic,)).fetchall()
@@ -1757,8 +1769,8 @@ def _meta_prediction_cycle(conn, actual_topic, l0_hit):
             old_actual_acc = row[1]
             sample_size = row[2]
         else:
-            predicted_acc = 0.5  # Default prior: 50% accuracy
-            old_actual_acc = 0.5
+            predicted_acc = 0.05  # Empirical prior: non-general domains avg ~5% L0 accuracy
+            old_actual_acc = 0.05
             sample_size = 0
 
         # Compute actual accuracy from rolling window of recent results for this domain

@@ -85,10 +85,10 @@ def reflect_on_self(update_attention: bool = True) -> str:
             content = p.payload.get('data', '')
             source = p.payload.get('ownership_source', 'unknown')
 
-            if 'puedo' in data or 'capacidad' in data or 'habilidad' in data:
-                capacidades.append(f"[{source}] {content[:80]}")
-            elif 'no puedo' in data or 'limita' in data or 'cuesta' in data or 'dificulta' in data:
+            if 'no puedo' in data or 'limita' in data or 'cuesta' in data or 'dificulta' in data:
                 limitaciones.append(f"[{source}] {content[:80]}")
+            elif 'puedo' in data or 'capacidad' in data or 'habilidad' in data:
+                capacidades.append(f"[{source}] {content[:80]}")
             elif 'import' in data or 'valor' in data or 'creo en' in data:
                 valores.append(f"[{source}] {content[:80]}")
             else:
@@ -1017,7 +1017,7 @@ def detect_self_discrepancies() -> dict:
         try:
             recent_rows = conn.execute(
                 "SELECT domain || '|' || discrepancy_type FROM self_discrepancies "
-                "WHERE created_at > datetime('now', '-8 hours')"
+                "WHERE datetime(created_at) > datetime('now', '-8 hours')"
             ).fetchall()
             _recent_keys = {r[0] for r in recent_rows}
         except Exception:

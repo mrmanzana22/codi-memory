@@ -22,9 +22,25 @@ import sqlite3
 from datetime import datetime
 
 from modules.agent_model import AgentModel, AgentTraits, AgentState, AgentPredictions
-from modules.config import connect_fts
+from modules.config import connect_fts, now_iso
 
 _logger = logging.getLogger(__name__)
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    """Check if a table exists in the SQLite database."""
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,)
+    ).fetchone()
+    return row is not None
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Return True when a SQLite table exposes the requested column."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
+
 
 # Path to FTS database (same as rest of system)
 _FTS_DB_PATH = os.path.join(
@@ -90,6 +106,10 @@ def _build_traits() -> AgentTraits:
 
         # Extract interaction patterns from attention_transitions
         try:
+            if not _table_exists(conn, "attention_transitions"):
+                conn.close()
+                return traits
+
             rows = conn.execute("""
                 SELECT
                     CAST(strftime('%H', created_at) AS INTEGER) as hour,
@@ -113,20 +133,21 @@ def _build_traits() -> AgentTraits:
             traits.interaction_patterns = {
                 k: v for k, v in time_patterns.items() if not k.endswith("_cnt")
             }
-        except Exception:
-            pass
+        except sqlite3.Error as e:
+            _logger.warning("Failed to extract interaction patterns: %s", e)
 
         # Extract topic capabilities from prediction accuracy
         try:
-            rows = conn.execute("""
-                SELECT domain, actual_accuracy, sample_size
-                FROM prediction_state_l2
-                WHERE sample_size >= 5
-            """).fetchall()
-            for domain, acc, n in rows:
-                traits.capabilities[domain] = round(acc, 2)
-        except Exception:
-            pass
+            if _table_exists(conn, "prediction_state_l2"):
+                rows = conn.execute("""
+                    SELECT domain, actual_accuracy, sample_size
+                    FROM prediction_state_l2
+                    WHERE sample_size >= 5
+                """).fetchall()
+                for domain, acc, n in rows:
+                    traits.capabilities[domain] = round(acc, 2)
+        except sqlite3.Error as e:
+            _logger.warning("Failed to extract topic capabilities: %s", e)
 
         conn.close()
     except Exception:
@@ -140,7 +161,7 @@ def _build_state() -> AgentState:
 
     Sources: session topics, turn frequency, topic shifts.
     """
-    state = AgentState(last_updated=datetime.now().isoformat())
+    state = AgentState(last_updated=now_iso())
 
     try:
         if not os.path.exists(_FTS_DB_PATH):
@@ -150,38 +171,45 @@ def _build_state() -> AgentState:
 
         # Get current session info from L1 prediction state
         try:
-            row = conn.execute("""
-                SELECT session_id, turn_count, goal_topics, goal_locked, last_topic
-                FROM prediction_state_l1 WHERE id = 1
-            """).fetchone()
+            if _table_exists(conn, "prediction_state_l1"):
+                row = conn.execute("""
+                    SELECT session_id, turn_count, goal_topics, goal_locked, last_topic
+                    FROM prediction_state_l1 WHERE id = 1
+                """).fetchone()
 
-            if row:
-                state.current_topic = row[4] or ""
-                goal_topics = json.loads(row[2] or '{}')
-                if goal_topics:
-                    primary = max(goal_topics, key=goal_topics.get)
-                    state.current_goal = f"Working on {primary}"
+                if row:
+                    state.current_topic = row[4] or ""
+                    goal_topics = json.loads(row[2] or '{}')
+                    goal_locked = bool(row[3])
+                    if goal_locked and goal_topics:
+                        primary = max(goal_topics, key=goal_topics.get)
+                        state.current_goal = f"Working on {primary}"
 
-                # Engagement proxy: more turns = more engaged
-                turn_count = row[1] or 0
-                state.engagement = min(1.0, turn_count / 10.0)
-        except Exception:
-            pass
+                    # Engagement proxy: more turns = more engaged
+                    turn_count = row[1] or 0
+                    state.engagement = min(1.0, turn_count / 10.0)
+        except sqlite3.Error as e:
+            _logger.warning("Failed to extract session state: %s", e)
 
         # Infer stress from PE levels (high PE = topic shifting = possibly stressed)
         try:
-            row = conn.execute("""
-                SELECT AVG(weighted_surprise) FROM (
-                    SELECT weighted_surprise FROM prediction_results
-                    WHERE COALESCE(source, 'interactive') != 'sleep_loop'
-                    ORDER BY id DESC LIMIT 5
-                )
-            """).fetchone()
-            if row and row[0] is not None:
-                # High surprise = lots of topic switching = possibly stressed/rushed
-                state.stress_level = min(1.0, row[0] * 2.0)
-        except Exception:
-            pass
+            if _table_exists(conn, "prediction_results"):
+                if _has_column(conn, "prediction_results", "source"):
+                    where_clause = "WHERE COALESCE(source, 'interactive') != 'sleep_loop'"
+                else:
+                    where_clause = ""
+                row = conn.execute(f"""
+                    SELECT AVG(weighted_surprise) FROM (
+                        SELECT weighted_surprise FROM prediction_results
+                        {where_clause}
+                        ORDER BY id DESC LIMIT 5
+                    )
+                """).fetchone()
+                if row and row[0] is not None:
+                    # High surprise = lots of topic switching = possibly stressed/rushed
+                    state.stress_level = min(1.0, row[0] * 2.0)
+        except sqlite3.OperationalError as e:
+            _logger.warning("Failed to infer stress from prediction_results: %s", e)
 
         # Emotional valence: positive if on-goal, negative if lots of PE
         state.emotional_valence = max(-1.0, min(1.0, 0.3 - state.stress_level))

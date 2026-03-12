@@ -104,7 +104,12 @@ def _intention_exists_today(topic: str) -> bool:
         from modules.prospective import check_intention_exists
         return check_intention_exists(f"pe_dedupe:{dedupe_key}")
     except Exception:
-        return False
+        _logger.exception(
+            "PE intention dedupe check failed for topic=%r dedupe_key=%s",
+            topic,
+            dedupe_key,
+        )
+        raise
 
 
 # ============================================================
@@ -190,6 +195,9 @@ def pe_prospective_handler(event_name: str, data: dict) -> None:
             return
 
         # Rate limit is shared with H1 — if H1 already recorded, skip
+        if _is_rate_limited(topic):
+            return
+
         # But we check intention-specific dedupe separately
         if _intention_exists_today(topic):
             return
@@ -205,6 +213,8 @@ def pe_prospective_handler(event_name: str, data: dict) -> None:
             context=f"PE high on '{topic}'. pe_dedupe:{dedupe_key}",
             creator="pe_actions",
         )
+
+        _record_action(topic)
 
     except Exception as e:
         _logger.error("H2 prospective error: %s", e)

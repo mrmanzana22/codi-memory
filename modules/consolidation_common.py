@@ -63,6 +63,10 @@ def get_embed_cache_info() -> dict:
 
 def _cosine_similarity(a: list, b: list) -> float:
     """Compute cosine similarity between two vectors."""
+    if len(a) != len(b):
+        raise ValueError(
+            f"Cosine similarity requires vectors of equal length, got {len(a)} and {len(b)}"
+        )
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
@@ -82,10 +86,11 @@ def _try_ollama(task_type: str, prompt: str) -> str | None:
     """
     try:
         from modules.ollama_router import ollama_chat_completion
-        return ollama_chat_completion(task_type, prompt)
-    except Exception as e:
+    except ImportError as e:
         _logger.debug("Ollama routing unavailable: %s", e)
         return None
+
+    return ollama_chat_completion(task_type, prompt)
 
 
 # ============================================================
@@ -111,4 +116,5 @@ def init_consolidation_db():
 try:
     init_consolidation_db()
 except Exception as e:
-    _logger.warning("Could not validate tables: %s", redact_secrets(str(e)))
+    _logger.error("Could not validate tables: %s", redact_secrets(str(e)))
+    raise

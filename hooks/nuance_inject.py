@@ -46,6 +46,14 @@ def cleanup_old_files():
             pass
 
 
+def quarantine_bad_file(fpath: str):
+    """Rename unreadable transcript so older valid files can be processed."""
+    try:
+        os.rename(fpath, f"{fpath}.bad")
+    except Exception:
+        pass
+
+
 def find_pending_transcript(current_session_id: str):
     """Find the most recent pending transcript from a different session."""
     if not os.path.isdir(PENDING_DIR):
@@ -111,10 +119,17 @@ def main():
     if not pending_file:
         return
 
-    try:
-        with open(pending_file, "r") as f:
-            data = json.load(f)
-    except Exception:
+    data = None
+    while pending_file:
+        try:
+            with open(pending_file, "r") as f:
+                data = json.load(f)
+            break
+        except Exception:
+            quarantine_bad_file(pending_file)
+            pending_file, _ = find_pending_transcript(session_id)
+
+    if not pending_file or data is None:
         return
 
     transcript_text = format_transcript_for_injection(data)
@@ -144,12 +159,6 @@ def main():
         f"</nuance-instructions>"
     )
 
-    # Delete the processed file
-    try:
-        os.remove(pending_file)
-    except Exception:
-        pass
-
     # Output as JSON with additionalContext
     output = {
         "hookSpecificOutput": {
@@ -157,7 +166,16 @@ def main():
             "additionalContext": injection,
         }
     }
-    print(json.dumps(output))
+    try:
+        print(json.dumps(output), flush=True)
+    except Exception:
+        return
+
+    # Delete the processed file only after successful emission
+    try:
+        os.remove(pending_file)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

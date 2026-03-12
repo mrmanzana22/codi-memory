@@ -172,6 +172,15 @@ def _as_spec(val) -> dict:
         return {}
 
 
+def _normalize_keywords(keywords) -> list[str]:
+    """Return only non-empty string keywords to keep trigger checks safe."""
+    if keywords is None:
+        return []
+    if not isinstance(keywords, list):
+        keywords = [keywords]
+    return [kw.strip() for kw in keywords if isinstance(kw, str) and kw.strip()]
+
+
 def _log_event(conn, int_id: str, event: str, detail: str = ""):
     """Write to intention_log audit trail (call inside a transaction)."""
     conn.execute(
@@ -222,6 +231,9 @@ def create_intention(
         spec = json.loads(trigger_spec) if isinstance(trigger_spec, str) else trigger_spec
     except json.JSONDecodeError:
         spec = {"keywords": [trigger_spec]}
+    if not isinstance(spec, dict):
+        spec = {"keywords": [spec]}
+    spec["keywords"] = _normalize_keywords(spec.get("keywords", []))
 
     # Determine focality
     cue_focality = "focal"
@@ -373,8 +385,9 @@ def check_intention_exists(context_pattern: str) -> bool:
                 )
                 row = cur.fetchone()
         return row is not None
-    except Exception:
-        return False
+    except Exception as e:
+        _logger.exception("Failed dedup check in check_intention_exists(context_pattern=%r): %s", context_pattern, e)
+        raise
 
 
 # ============================================================
@@ -501,7 +514,7 @@ def check_intentions(prompt: str, current_context: str = "") -> list:
 
 def _check_focal(spec: dict, full_text: str) -> dict:
     """Tier 1: Fast keyword matching (spontaneous retrieval path)."""
-    keywords = spec.get("keywords", [])
+    keywords = _normalize_keywords(spec.get("keywords", []))
     threshold = spec.get("match_threshold", 1)
 
     if not keywords:
@@ -523,7 +536,7 @@ def _check_nonfocal(spec: dict, full_text: str, context_at_creation: str = "") -
     per encoding specificity (Tulving & Thomson, 1973): PM retrieval is
     enhanced when current context overlaps with encoding context.
     """
-    keywords = spec.get("keywords", [])
+    keywords = _normalize_keywords(spec.get("keywords", []))
 
     # Fast pre-filter
     if keywords and not any(kw.lower() in full_text for kw in keywords):
@@ -620,7 +633,7 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
     """If intention is recurring, create next instance after trigger."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            "SELECT action, trigger_type, trigger_spec, priority, recurrence, "
+            "SELECT action, trigger_type, trigger_spec, cue_focality, priority, recurrence, "
             "recurrence_spec, context_at_creation, creator FROM intentions WHERE id = %s",
             (int_id,),
         )
@@ -632,6 +645,7 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
     action = row["action"]
     trigger_type = row["trigger_type"]
     spec = _as_spec(row["trigger_spec"])
+    cue_focality = row["cue_focality"] or "focal"
     priority = row["priority"]
     recurrence = row["recurrence"]
     rec_spec = _as_spec(row["recurrence_spec"])
@@ -660,11 +674,11 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
 
     conn.execute("""
         INSERT INTO intentions
-        (id, action, trigger_type, trigger_spec, priority, activation,
+        (id, action, trigger_type, trigger_spec, cue_focality, priority, activation,
          context_at_creation, creator, recurrence, recurrence_spec)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
-        new_id, action, trigger_type, json.dumps(spec), priority,
+        new_id, action, trigger_type, json.dumps(spec), cue_focality, priority,
         activation, ctx, creator, recurrence,
         json.dumps(rec_spec) if rec_spec else None,
     ))

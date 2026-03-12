@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from typing import Optional
 
 from modules.config import FTS_DB_PATH, now_iso, connect_fts
+
+_logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -312,12 +315,12 @@ def compare_results(kind: str, sync_dict: dict, async_dict: dict,
         sync_mid = sync_dict.get("memory_id")
         async_mid = async_dict.get("memory_id")
         if "memory_id" in sync_dict and "memory_id" in async_dict:
-            if bool(sync_mid) != bool(async_mid):
+            if sync_mid != async_mid:
                 diff_details["memory_id"] = {"sync": sync_mid, "async": async_mid}
                 return {
                     "match": False,
                     "divergence_code": "memory_id_diff",
-                    "diff_summary": f"memory_id presence differs: sync={'present' if sync_mid else 'absent'}, async={'present' if async_mid else 'absent'}",
+                    "diff_summary": f"memory_id differs: sync={sync_mid}, async={async_mid}",
                     "diff_json": json.dumps(diff_details, ensure_ascii=False)[:CAP_DIFF_JSON],
                 }
 
@@ -498,8 +501,9 @@ def update_async_result(
         conn.commit()
         return "updated"
 
-    except Exception:
-        return "error"
+    except Exception as exc:
+        _logger.warning("update_async_result failed for job_id=%s: %s", job_id, exc)
+        return f"error:{type(exc).__name__}"
     finally:
         conn.close()
 

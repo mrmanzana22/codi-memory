@@ -87,9 +87,9 @@ def checkpoint_session_close(
         goal_stack = []
 
     now = now_iso()
-    conn = _get_conn()
 
     try:
+        conn = _get_conn()
         # --- DEDUPE WINDOW ---
         existing = conn.execute(
             "SELECT id, source, created_at FROM session_checkpoints "
@@ -265,8 +265,9 @@ def checkpoint_session_close(
         )
 
         if should_update:
-            cols = [f"{k} = ?" for k in row_data.keys() if k != "created_at"]
-            vals = [v for k, v in row_data.items() if k != "created_at"]
+            _skip_on_update = {"created_at", "sleep_report"}
+            cols = [f"{k} = ?" for k in row_data.keys() if k not in _skip_on_update]
+            vals = [v for k, v in row_data.items() if k not in _skip_on_update]
             vals.append(existing_id)  # type: ignore[possibly-undefined]
             conn.execute(
                 f"UPDATE session_checkpoints SET {', '.join(cols)} WHERE id = ?",
@@ -303,6 +304,7 @@ def checkpoint_session_close(
         event_bus.emit(Events.SESSION_CLOSE, {
             "checkpoint_id": checkpoint_id,
             "source": source,
+            "reason": source,
             "active_project": active_project,
         })
 

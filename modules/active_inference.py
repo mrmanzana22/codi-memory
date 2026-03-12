@@ -264,8 +264,8 @@ def compute_option_efe(
         step_efe = compute_efe(sim_state, action, model)
         total_efe += survival_prob * step_efe
 
-        # P(terminate at this step)
-        p_term = option.termination_fn(sim_state, step)
+        # P(terminate at this step) — elapsed count = step + 1 (1-based)
+        p_term = option.termination_fn(sim_state, step + 1)
         survival_prob *= (1.0 - p_term)
         if survival_prob < 0.01:
             break
@@ -500,6 +500,7 @@ def select_action(
     actions: List[Action] = None,
     temperature: float = EFE_SOFTMAX_TEMPERATURE,
     include_options: bool = None,  # None = auto: True only when actions=None
+    deterministic: bool = False,
 ) -> Tuple[object, Dict[str, float]]:
     """Select action (or option) via softmax over negative EFE (policy selection).
 
@@ -510,6 +511,8 @@ def select_action(
 
     Friston 2017: Active inference agents select the action (policy)
     with lowest expected free energy. Temperature controls exploration.
+
+    Track 2: deterministic=True returns argmin(EFE) directly (no sampling).
 
     Returns:
         (selected_action_or_option, {name: efe_value}) — option or Action
@@ -541,6 +544,12 @@ def select_action(
     # Build combined candidate pool
     all_efes = {**efes, **option_efes}
     all_candidates = list(actions) + available_options  # Action | Option
+
+    # Track 2: Deterministic mode — argmin(EFE), no sampling
+    if deterministic:
+        best_name = min(all_efes, key=all_efes.get)
+        best_candidate = next(c for c in all_candidates if c.name == best_name)
+        return best_candidate, all_efes
 
     # Softmax selection over combined pool
     min_g = min(all_efes.values())

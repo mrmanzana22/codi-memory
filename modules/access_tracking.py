@@ -224,12 +224,20 @@ def _reset_for_testing() -> None:
 # LEGACY FALLBACK (direct update_payload, no batching)
 # ============================================================
 
+def _record_legacy_failure(op: str, point_id: str) -> None:
+    """Track and log legacy-mode write failures."""
+    with _lock:
+        _stats["errors"] += 1
+        _stats["dropped"] += 1
+    _logger.exception("access_tracking legacy %s failed for point_id=%s", op, point_id)
+
+
 def _direct_set_payload(collection: str, point_id: str, payload: dict) -> None:
     """Legacy mode: call pg.update_payload directly."""
     try:
         pg.update_payload(point_id, payload)
     except Exception:
-        pass
+        _record_legacy_failure("update_payload", str(point_id))
 
 
 def _direct_spreading(
@@ -248,7 +256,7 @@ def _direct_spreading(
                 },
             )
         except Exception:
-            pass
+            _record_legacy_failure("spreading_update_payload", str(pid))
 
 
 # ============================================================
@@ -290,11 +298,11 @@ def _flush_cycle(reason: str) -> None:
         t0 = time.monotonic()
 
         items = list(batch.items())  # [(point_id, payload), ...]
-        _send_batch(items)
+        successful_writes = _send_batch(items)
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         with _lock:
-            _stats["flushed"] += len(batch)
+            _stats["flushed"] += successful_writes
             _stats["flush_count"] += 1
             _stats["last_flush_ms"] = round(elapsed_ms, 1)
 
@@ -306,13 +314,15 @@ def _flush_cycle(reason: str) -> None:
         _flush_semaphore.release()
 
 
-def _send_batch(items: list[tuple[str, dict]]) -> None:
-    """Send batched update_payload ops to pg_store in chunks."""
+def _send_batch(items: list[tuple[str, dict]]) -> int:
+    """Send batched update_payload ops to pg_store in chunks. Returns success count."""
+    successful_writes = 0
     for i in range(0, len(items), MAX_OPS_PER_BATCH):
         chunk = items[i : i + MAX_OPS_PER_BATCH]
         for pid, payload in chunk:
             try:
                 pg.update_payload(pid, payload)
+                successful_writes += 1
             except Exception as e:
                 with _lock:
                     _stats["dropped"] += 1
@@ -322,3 +332,4 @@ def _send_batch(items: list[tuple[str, dict]]) -> None:
                     pid,
                     type(e).__name__,
                 )
+    return successful_writes

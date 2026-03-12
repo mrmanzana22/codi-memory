@@ -1,5 +1,8 @@
-import os
 import json
+import logging
+import os
+
+_logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta, timezone
 from modules.config import USER_ID, COLLECTION_NAME, BASE_DIR, BACKUP_FILE, now_col, now_iso, now_short, TZ_COL
 from modules.utils import calculate_confidence_score
@@ -21,8 +24,11 @@ def _cargar_mantenimiento():
             with open(MANTENIMIENTO_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return {"metadata": {}, "tareas": []}
-    except Exception:
+    except FileNotFoundError:
         return {"metadata": {}, "tareas": []}
+    except Exception as exc:
+        _logger.exception("Failed to load mantenimiento file: %s", exc)
+        raise
 
 
 def _guardar_mantenimiento(data):
@@ -270,30 +276,47 @@ def _mantenimiento_memorias() -> str:
         # 2. Aplicar decay de salience
         resultado += "\n## 2. Decay de salience\n"
         try:
-            # Buscar memorias con alta salience que no se han accedido recientemente
-            all_salience_points, _ = pg.scroll(filters={}, limit=100, is_semantic=False)
-            # Post-filter by salience >= 0.5 (Range filter applied in Python)
-            points_salience = [p for p in all_salience_points if (p.payload or {}).get('salience', 0) >= 0.5][:30]
+            # Paginated scan for memories with salience >= 0.5
+            points_salience = []
+            _decay_offset = None
+            while len(points_salience) < 30:
+                _batch, _decay_offset = pg.scroll(filters={}, limit=100, is_semantic=False, offset=_decay_offset)
+                if not _batch:
+                    break
+                for p in _batch:
+                    if (p.payload or {}).get('salience', 0) >= 0.5:
+                        points_salience.append(p)
+                        if len(points_salience) >= 30:
+                            break
+                if _decay_offset is None:
+                    break
 
             decayed = 0
+            parse_errors = 0
+            update_errors = 0
             for p in points_salience:
                 last_access = p.payload.get('last_accessed')
                 if last_access:
                     try:
                         last_dt = datetime.fromisoformat(last_access.replace('Z', '+00:00'))
-                        dias_sin_acceso = (datetime.now(timezone.utc) - last_dt).days
-                        if dias_sin_acceso > 3:
-                            # Reducir salience
-                            old_salience = p.payload.get('salience', 0.5)
-                            new_salience = max(0.1, old_salience - 0.1)
+                    except (ValueError, TypeError):
+                        parse_errors += 1
+                        continue
+                    dias_sin_acceso = (datetime.now(timezone.utc) - last_dt).days
+                    if dias_sin_acceso > 3:
+                        old_salience = p.payload.get('salience', 0.5)
+                        new_salience = max(0.1, old_salience - 0.1)
+                        try:
                             pg.update_payload(p.id, {
                                 'salience': new_salience,
                             })
                             decayed += 1
-                    except Exception:
-                        pass
+                        except Exception:
+                            update_errors += 1
 
             resultado += f"- Memorias con decay aplicado: {decayed}\n"
+            if parse_errors or update_errors:
+                resultado += f"- Decay errors: {parse_errors} parse, {update_errors} update\n"
             if decayed > 0:
                 acciones.append(f"Decay aplicado a {decayed} memorias")
 

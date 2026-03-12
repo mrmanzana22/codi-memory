@@ -44,9 +44,11 @@ def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) 
         importance=importance_map.get(momento, 'medium'),
     )
 
-    if result:
-        mem_id = result.get("id") if isinstance(result, dict) else None
-        if mem_id:
+    mem_id = result.get("id") if isinstance(result, dict) else None
+    if not mem_id:
+        raise RuntimeError(f"pg.add() returned no id for checkpoint: {result!r}")
+
+    if mem_id:
             enrich_with_ownership(
                 memory_id=mem_id,
                 category="checkpoint",
@@ -345,25 +347,27 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
 def _export_memories_markdown() -> str:
     """Exporta todas las memorias en formato Markdown."""
     try:
-        results = memory.get_all(user_id=USER_ID)
-        if not results or not results.get("results"):
+        points = pg.get_all()
+        if not points:
             return "No hay memorias para exportar."
 
         by_category = {}
-        for mem in results["results"]:
-            cat = mem.get("metadata", {}).get("category", "general")
+        for p in points:
+            payload = p.payload or {}
+            cat = payload.get("category", "general")
             if cat not in by_category:
                 by_category[cat] = []
             by_category[cat].append({
-                "id": mem.get("id", "unknown"),
-                "text": mem.get("memory", "")
+                "id": str(p.id)[:8],
+                "text": payload.get("data", payload.get("content", ""))
             })
 
+        total = sum(len(v) for v in by_category.values())
         lines = [
             f"# Backup Memorias Codi",
             f"",
             f"**Fecha:** {now_short()}",
-            f"**Total:** {len(results['results'])} memorias",
+            f"**Total:** {total} memorias",
             f"**Schema:** v2 con Ownership Tagging",
             f"",
         ]
@@ -372,7 +376,7 @@ def _export_memories_markdown() -> str:
             lines.append(f"## {cat.upper()}")
             lines.append("")
             for m in mems:
-                lines.append(f"- [{m['id'][:8]}] {m['text']}")
+                lines.append(f"- [{m['id']}] {m['text'][:120]}")
             lines.append("")
 
         return "\n".join(lines)

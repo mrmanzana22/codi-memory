@@ -72,7 +72,7 @@ def is_legacy_enabled() -> bool:
 
 def compute_fingerprint(tool_name: str, **kwargs) -> str:
     """Deterministic fingerprint tying a token to a specific tool + args."""
-    normalized = json.dumps(kwargs, sort_keys=True, default=str)[:2048]
+    normalized = json.dumps(kwargs, sort_keys=True, default=str)
     raw = f"{tool_name}|{normalized}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 

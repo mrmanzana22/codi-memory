@@ -53,6 +53,7 @@ def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: s
 
         from modules.config import BASE_DIR
         DATASET_PATH = Path(BASE_DIR) / "training_data" / "codi_dataset.json"
+        DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         # Cargar dataset existente
         if DATASET_PATH.exists():
@@ -159,7 +160,7 @@ def _guardar_ejemplo_training(
         response = supabase.table('training_examples').insert(data).execute()
 
         if response.data:
-            ejemplo_id = response.data[0].get('id', 'unknown')
+            ejemplo_id = str(response.data[0].get('id', 'unknown'))
             return f"Ejemplo de training guardado. ID: {ejemplo_id[:8]}... Categoria: {categoria}, Comportamiento: {comportamiento}, Calidad: {calidad}/5"
         else:
             return "Error: No se pudo guardar el ejemplo"

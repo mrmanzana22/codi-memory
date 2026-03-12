@@ -20,6 +20,20 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 
 
+def build_error_output(error_message):
+    """Build fallback hook output when reinjection fails."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": (
+                "# CONTEXTO RE-INYECTADO POST-COMPACTACION\n"
+                "[ERROR] compact_reinject.py fallo y uso fallback.\n"
+                f"Detalle: {error_message}"
+            )
+        }
+    }
+
+
 def get_db_connection():
     conn = sqlite3.connect(FTS_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -39,7 +53,8 @@ def get_critical_memories(conn, limit=5):
             LIMIT ?
         """, (limit,))
         return cursor.fetchall()
-    except Exception:
+    except sqlite3.Error as exc:
+        print(f"[compact_reinject] get_critical_memories failed: {exc}", file=sys.stderr)
         return []
 
 
@@ -54,7 +69,8 @@ def get_identity_memories(conn, limit=3):
             LIMIT ?
         """, (limit,))
         return [row[0] for row in cursor.fetchall()]
-    except Exception:
+    except sqlite3.Error as exc:
+        print(f"[compact_reinject] get_identity_memories failed: {exc}", file=sys.stderr)
         return []
 
 
@@ -69,7 +85,8 @@ def get_working_memory(conn, limit=6):
             LIMIT ?
         """, (limit,))
         return cursor.fetchall()
-    except Exception:
+    except sqlite3.Error as exc:
+        print(f"[compact_reinject] get_working_memory failed: {exc}", file=sys.stderr)
         return []
 
 
@@ -84,7 +101,8 @@ def get_recent_memories(conn, limit=5):
             LIMIT ?
         """, (limit,))
         return cursor.fetchall()
-    except Exception:
+    except sqlite3.Error as exc:
+        print(f"[compact_reinject] get_recent_memories failed: {exc}", file=sys.stderr)
         return []
 
 
@@ -153,8 +171,10 @@ def main():
         finally:
             conn.close()
 
-    except Exception:
-        pass
+    except Exception as exc:
+        error_message = f"{type(exc).__name__}: {exc}"
+        print(f"compact_reinject hook failed: {error_message}", file=sys.stderr)
+        print(json.dumps(build_error_output(error_message)))
 
 
 if __name__ == '__main__':

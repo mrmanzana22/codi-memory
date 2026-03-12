@@ -246,7 +246,7 @@ def save_memories(conn, memories):
 
         memory_id = f"auto_{uuid.uuid4().hex[:12]}"
         try:
-            conn.execute("""
+            cursor = conn.execute("""
                 INSERT OR IGNORE INTO memories_text
                 (memory_id, content, category, source, importance, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -258,9 +258,11 @@ def save_memories(conn, memories):
                 'medium',
                 mem.get('timestamp', datetime.now().isoformat())
             ))
-            saved += 1
+            if cursor.rowcount > 0:
+                saved += 1
         except Exception:
-            continue
+            conn.rollback()
+            raise
 
     if saved > 0:
         conn.commit()
@@ -268,6 +270,8 @@ def save_memories(conn, memories):
 
 
 def main():
+    session_id = ''
+    transcript_path = ''
     try:
         input_data = json.loads(sys.stdin.read())
         session_id = input_data.get('session_id', '')
@@ -326,28 +330,30 @@ def main():
         # Save to database
         conn = get_db_connection()
         try:
-            saved = save_memories(conn, memories)
+            save_memories(conn, memories)
         finally:
             conn.close()
 
-        # Update tracker
+        # Update tracker only after the database write succeeds
         save_last_captured_uuid(session_id, final_uuid)
 
     except Exception:
         # Never block Claude — silent fail
         pass
+    finally:
+        # Phase 2: Session bridge checkpoint (lightweight SQLite-only)
+        try:
+            if session_id:
+                _session_bridge_checkpoint(session_id)
+        except Exception:
+            pass
 
-    # Phase 2: Session bridge checkpoint (lightweight SQLite-only)
-    try:
-        _session_bridge_checkpoint(session_id)
-    except Exception:
-        pass
-
-    # Phase 3: Finalize nuance transcript for next session
-    try:
-        _finalize_nuance_transcript(session_id, transcript_path)
-    except Exception:
-        pass
+        # Phase 3: Finalize nuance transcript for next session
+        try:
+            if session_id and transcript_path:
+                _finalize_nuance_transcript(session_id, transcript_path)
+        except Exception:
+            pass
 
 
 def _session_bridge_checkpoint(session_id: str):
@@ -577,13 +583,13 @@ def _finalize_nuance_transcript(session_id: str, transcript_path: str):
 
     # Enforce size limit: drop oldest turns
     serialized = json.dumps(data, ensure_ascii=False)
-    while len(serialized) > NUANCE_MAX_BYTES and len(data["turns"]) > 1:
+    while len(serialized.encode("utf-8")) > NUANCE_MAX_BYTES and len(data["turns"]) > 1:
         data["turns"].pop(0)
         serialized = json.dumps(data, ensure_ascii=False)
 
     os.makedirs(PENDING_DIR, exist_ok=True)
     filepath = os.path.join(PENDING_DIR, f"{session_id}.json")
-    with open(filepath, "w") as f:
+    with open(filepath, "w", encoding="utf-8") as f:
         f.write(serialized)
 
 

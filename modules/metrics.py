@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,8 @@ from typing import Any, Callable, Dict, Optional
 
 from modules.config import now_iso
 from modules.tracing import get_trace_id
+
+_logger = logging.getLogger(__name__)
 from modules.secret_redact import redact_secrets
 from modules.db_pool import get_conn
 
@@ -81,6 +84,14 @@ def log_tool_call(
         conn.commit()
 
 
+def _log_tool_call_safe(**kwargs) -> None:
+    """Fail-open wrapper: metrics must never break actual tool execution."""
+    try:
+        log_tool_call(**kwargs)
+    except Exception:
+        _logger.exception("log_tool_call failed for tool=%s", kwargs.get("tool_name", "?"))
+
+
 # ============================================================
 # PERFORMANCE CONTRACTS - Budget lookup & violation detection
 # ============================================================
@@ -134,7 +145,7 @@ def _emit_violation(tool_name: str, dur_ms: int, violation: dict) -> None:
             **violation,
         })
     except Exception:
-        pass
+        _logger.exception("Failed to emit PERF_BUDGET_VIOLATION for tool=%s dur=%dms", tool_name, dur_ms)
 
 
 MACRO_TAGS = {
@@ -175,7 +186,7 @@ def instrument_mcp(mcp: Any) -> None:
                             result = redact_secrets(result)
                         dur_ms = int((time.perf_counter() - t0) * 1000)
                         res_size = _safe_len_bytes(result)
-                        log_tool_call(
+                        _log_tool_call_safe(
                             tool_name=tool_name,
                             started_at=started,
                             duration_ms=dur_ms,
@@ -192,7 +203,7 @@ def instrument_mcp(mcp: Any) -> None:
                         return result
                     except Exception as e:
                         dur_ms = int((time.perf_counter() - t0) * 1000)
-                        log_tool_call(
+                        _log_tool_call_safe(
                             tool_name=tool_name,
                             started_at=started,
                             duration_ms=dur_ms,
@@ -219,7 +230,7 @@ def instrument_mcp(mcp: Any) -> None:
                         result = redact_secrets(result)
                     dur_ms = int((time.perf_counter() - t0) * 1000)
                     res_size = _safe_len_bytes(result)
-                    log_tool_call(
+                    _log_tool_call_safe(
                         tool_name=tool_name,
                         started_at=started,
                         duration_ms=dur_ms,
@@ -236,7 +247,7 @@ def instrument_mcp(mcp: Any) -> None:
                     return result
                 except Exception as e:
                     dur_ms = int((time.perf_counter() - t0) * 1000)
-                    log_tool_call(
+                    _log_tool_call_safe(
                         tool_name=tool_name,
                         started_at=started,
                         duration_ms=dur_ms,

@@ -12,11 +12,15 @@ Design: Pure logic, no Qdrant/SQLite dependencies. Fully unit-testable.
 Created: 2026-02-13 (WIRING-6 - Phase 6.1)
 """
 
+import logging
 import math
 import random
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from modules.config import now_iso
+
+_logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -93,7 +97,7 @@ def run_workspace_competition(
         return CompetitionResult(
             winners=[],
             losers=[],
-            timestamp=datetime.now().isoformat(),
+            timestamp=now_iso(),
             competition_id=str(uuid.uuid4())[:8],
         )
 
@@ -128,7 +132,7 @@ def run_workspace_competition(
     result = CompetitionResult(
         winners=winners,
         losers=losers,
-        timestamp=datetime.now().isoformat(),
+        timestamp=now_iso(),
         competition_id=str(uuid.uuid4())[:8],
     )
 
@@ -184,9 +188,11 @@ def _softmax_select(candidates: list, k: int) -> list:
                     chosen_idx = i
                     break
             selected.append(remaining.pop(chosen_idx))
+        # Sort winners by activation descending so winners[0] is the strongest
+        selected.sort(key=lambda c: c.activation, reverse=True)
         return selected
     except Exception:
-        # Fallback: deterministic argmax
+        _logger.exception("softmax_select failed for %d candidates, falling back to argmax", len(candidates))
         ranked = sorted(candidates, key=lambda c: c.activation, reverse=True)
         return ranked[:k]
 
@@ -266,4 +272,4 @@ def _emit_competition_event(result: CompetitionResult):
                 'timestamp': result.timestamp,
             })
     except Exception:
-        pass
+        _logger.exception("Failed to emit WORKSPACE_COMPETITION_COMPLETE event")

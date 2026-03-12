@@ -238,14 +238,17 @@ def collect_evidence() -> Dict[str, Any]:
         src = inspect.getsource(correct_memory)
         evidence["has_correct_memory"] = "stub" not in src.lower()
         if evidence["has_correct_memory"]:
+            conn = None
             try:
                 conn = _consolidation_conn()
                 evidence["reconsolidation_count"] = conn.execute(
                     "SELECT COUNT(*) FROM reconsolidation_log"
                 ).fetchone()[0]
-                conn.close()
             except Exception:
                 pass
+            finally:
+                if conn is not None:
+                    conn.close()
     except Exception:
         pass
 
@@ -268,6 +271,7 @@ def collect_evidence() -> Dict[str, Any]:
 
     # --- Proposal #64: Quality checks for honest scoring ---
     # Attention transition quality (stale word-level vs proper topics)
+    conn = None
     try:
         from modules.config import connect_fts
         conn = connect_fts()
@@ -277,7 +281,7 @@ def collect_evidence() -> Dict[str, Any]:
         KNOWN_TOPICS = {"general", "codigo", "consciencia", "trading", "fullempaques",
                         "automatizacion", "memoria", "identidad", "relaciones"}
         if rows:
-            valid = sum(1 for r in rows if r[0].lower() in KNOWN_TOPICS and r[1].lower() in KNOWN_TOPICS)
+            valid = sum(1 for r in rows if r[0] and r[1] and r[0].lower() in KNOWN_TOPICS and r[1].lower() in KNOWN_TOPICS)
             evidence["attention_transition_quality"] = "clean" if valid >= 5 else "stale"
         else:
             evidence["attention_transition_quality"] = "empty"
@@ -290,11 +294,12 @@ def collect_evidence() -> Dict[str, Any]:
             evidence["reconsolidation_quality_count"] = quality
         except Exception:
             evidence["reconsolidation_quality_count"] = 0
-
-        conn.close()
     except Exception:
         evidence["attention_transition_quality"] = "unknown"
         evidence["reconsolidation_quality_count"] = 0
+    finally:
+        if conn is not None:
+            conn.close()
 
     return evidence
 
@@ -806,18 +811,21 @@ def get_last_sleep_tick_age(db_path: str = None) -> Optional[float]:
     from datetime import datetime
     from modules.db_pool import get_conn
     conn = get_conn(db_path)
-    row = conn.execute(
-        "SELECT started_at FROM tool_calls "
-        "WHERE tool_name LIKE 'sleep_tick_%' "
-        "ORDER BY started_at DESC LIMIT 1"
-    ).fetchone()
-    if not row or not row[0]:
-        return None
-    last = datetime.fromisoformat(str(row[0]))
-    if last.tzinfo:
-        last = last.replace(tzinfo=None)
-    age_hours = (datetime.now() - last).total_seconds() / 3600
-    return age_hours
+    try:
+        row = conn.execute(
+            "SELECT started_at FROM tool_calls "
+            "WHERE tool_name LIKE 'sleep_tick_%' "
+            "ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        last = datetime.fromisoformat(str(row[0]))
+        if last.tzinfo:
+            last = last.replace(tzinfo=None)
+        age_hours = (datetime.now() - last).total_seconds() / 3600
+        return age_hours
+    finally:
+        conn.close()
 
 
 # ============================================================
@@ -848,27 +856,33 @@ def get_last_worker_tick_age(db_path: str = None) -> Optional[float]:
     from datetime import datetime
     from modules.db_pool import get_conn
     conn = get_conn(db_path)
-    row = conn.execute(
-        "SELECT started_at FROM tool_calls "
-        "WHERE tool_name = 'write_worker_tick' "
-        "ORDER BY started_at DESC LIMIT 1"
-    ).fetchone()
-    if not row or not row[0]:
-        return None
-    last = datetime.fromisoformat(str(row[0]))
-    if last.tzinfo:
-        last = last.replace(tzinfo=None)
-    return (datetime.now() - last).total_seconds() / 60
+    try:
+        row = conn.execute(
+            "SELECT started_at FROM tool_calls "
+            "WHERE tool_name = 'write_worker_tick' "
+            "ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        last = datetime.fromisoformat(str(row[0]))
+        if last.tzinfo:
+            last = last.replace(tzinfo=None)
+        return (datetime.now() - last).total_seconds() / 60
+    finally:
+        conn.close()
 
 
 def get_queue_backlog(db_path: str = None) -> Dict[str, int]:
     """Return write_queue job counts by status."""
     from modules.db_pool import get_conn
     conn = get_conn(db_path)
-    rows = conn.execute(
-        "SELECT status, COUNT(*) as cnt FROM write_queue GROUP BY status"
-    ).fetchall()
-    return {r[0]: r[1] for r in rows}
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM write_queue GROUP BY status"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+    finally:
+        conn.close()
 
 
 def get_worker_health(db_path: str = None) -> Dict[str, Any]:

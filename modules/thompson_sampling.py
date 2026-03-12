@@ -101,6 +101,9 @@ def sample_allocation(base_limit: int = 5,
     """
     posteriors = get_channel_posteriors(topic=topic)
 
+    if base_limit <= 0:
+        return {ch: 0 for ch in CHANNELS}
+
     # Sample from each channel's Beta posterior
     samples = {}
     for ch, (a, b) in posteriors.items():
@@ -112,17 +115,37 @@ def sample_allocation(base_limit: int = 5,
     # Convert samples to allocation proportions
     total = sum(samples.values())
     if total <= 0:
-        # Uniform allocation
-        per_channel = max(1, base_limit // len(CHANNELS))
-        return {ch: per_channel for ch in CHANNELS}
+        samples = {ch: 1.0 for ch in CHANNELS}
+        total = float(len(CHANNELS))
 
+    min_items = int(base_limit * MIN_ALLOCATION)
+    if min_items * len(CHANNELS) > base_limit:
+        min_items = 0
+
+    # Largest-remainder method: guarantees sum == base_limit
+    raw_allocations = {}
     allocations = {}
-    min_items = max(1, int(base_limit * MIN_ALLOCATION))
-
     for ch in CHANNELS:
         proportion = samples[ch] / total
         raw = proportion * base_limit
-        allocations[ch] = max(min_items, round(raw))
+        raw_allocations[ch] = raw
+        allocations[ch] = min_items
+
+    remaining = base_limit - sum(allocations.values())
+    if remaining <= 0:
+        return allocations
+
+    extras = {}
+    for ch in CHANNELS:
+        raw_extra = max(0.0, raw_allocations[ch] - min_items)
+        floored_extra = math.floor(raw_extra)
+        allocations[ch] += floored_extra
+        extras[ch] = raw_extra - floored_extra
+
+    remaining = base_limit - sum(allocations.values())
+    if remaining > 0:
+        for ch in sorted(CHANNELS, key=lambda name: extras[name], reverse=True)[:remaining]:
+            allocations[ch] += 1
 
     return allocations
 

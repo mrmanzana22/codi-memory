@@ -32,6 +32,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from modules.config import now_iso
 
 _logger = logging.getLogger(__name__)
 
@@ -399,7 +400,7 @@ def _save_discovery_state(W: np.ndarray, topics: List[str], h_value: float,
             float(h_value),
             _LAMBDA,
             n_edges,
-            datetime.now().isoformat(),
+            now_iso(),
         ))
         # Keep only last 5 states
         conn.execute("""

@@ -116,8 +116,9 @@ def parse_counterfactual_query(query: str) -> Optional[Dict]:
     # Detect "what if we HAD used X?" — positive intervention
     positive_markers = ["if we had used", "si hubiéramos usado", "si usáramos",
                         "what if we used", "con", "with ", "usando"]
+    has_negation_token = bool(re.search(r"\b(?:not|no)\b", q_low, re.IGNORECASE))
     for marker in positive_markers:
-        if marker in q_low and "not" not in q_low and "no" not in q_low:
+        if marker in q_low and not has_negation_token:
             negated = False
             break
 
@@ -226,9 +227,12 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
                         if row and target in (row[0] or "").lower():
                             # Found a relevant chain — collect all its nodes
                             relevant_nodes.update(nodes)
-                except Exception:
-                    pass
-        except Exception:
+                except (json.JSONDecodeError, sqlite3.Error) as exc:
+                    _logger.warning("Causal chain %s parse/query error: %s", chain_id, exc)
+                except (KeyError, IndexError, TypeError) as exc:
+                    _logger.warning("Causal chain %s row shape error: %s", chain_id, exc)
+        except sqlite3.OperationalError as exc:
+            _logger.warning("Causal chain table query failed: %s", exc)
             relevant_nodes = set()
 
         # 2. Direct text search for target concept in memories_text
@@ -300,6 +304,10 @@ def intervention_step(factual_chain: List[Dict], parsed: Dict,
     negated = parsed.get("negated", True)
 
     if not target or not factual_chain:
+        return factual_chain
+
+    # Positive interventions preserve the factual chain instead of removing target evidence
+    if not negated:
         return factual_chain
 
     # Partition: keep memories not about target, remove target memories

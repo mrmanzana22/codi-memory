@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
 
+from modules.config import now_iso
 from modules.pg_store import pg
 
 
@@ -46,7 +47,7 @@ class RetrievalResult:
     cox_failure_type: str = ""  # Cox taxonomy (Sprint 3, item 3.2)
     # Values: "" | "retrieval" | "application" | "knowledge" | "novel" | "success"
     cox_remedy: str = ""  # Recommended remediation action
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=now_iso)
 
 
 # ============================================================
@@ -848,7 +849,7 @@ def log_failed_search(conn, query: str, result_count: int, top_activation: float
     """
     conn.execute(
         "INSERT INTO failed_searches (query, result_count, top_activation, topic, created_at) VALUES (?, ?, ?, ?, ?)",
-        (query[:200], result_count, top_activation, topic, datetime.now().isoformat())
+        (query[:200], result_count, top_activation, topic, now_iso())
     )
 
     # FIFO cleanup: keep max 500
@@ -932,7 +933,7 @@ def record_rcj(query: str, fok_predicted: float, actual_coverage: str,
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (query[:200], fok_predicted, actual_coverage, actual_count,
              actual_top_activation, familiarity_score, accessibility_score,
-             fok_process or "single_process", datetime.now().isoformat())
+             fok_process or "single_process", now_iso())
         )
         # FIFO cleanup: keep max 500
         conn.execute("""
@@ -999,7 +1000,7 @@ def update_fok_dual_alpha(fts_db_path: str = None) -> float:
         conn.execute("""
             INSERT OR REPLACE INTO metamemory_params (key, value, updated_at)
             VALUES ('fok_dual_alpha', ?, ?)
-        """, (str(new_alpha), datetime.now().isoformat()))
+        """, (str(new_alpha), now_iso()))
         conn.commit()
         return new_alpha
 

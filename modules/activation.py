@@ -27,11 +27,14 @@ Neuroscience references:
 Created: 2026-02-13 (WIRING-5 - Phase 1)
 """
 
+import logging
 import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -116,7 +119,7 @@ def _compute_base_level(
     # Parse creation time (default: 30 days ago if missing)
     default_created = now - timedelta(days=30)
     try:
-        if created_at_str and 'T' in str(created_at_str):
+        if created_at_str:
             created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
             if created_at.tzinfo:
                 created_at = created_at.replace(tzinfo=None)
@@ -128,6 +131,7 @@ def _compute_base_level(
     # Best case: full access timestamps
     if access_timestamps and len(access_timestamps) > 0:
         total = 0.0
+        parsed_any = False
         for ts_str in access_timestamps:
             try:
                 ts = datetime.fromisoformat(str(ts_str).replace('Z', '+00:00'))
@@ -135,11 +139,13 @@ def _compute_base_level(
                     ts = ts.replace(tzinfo=None)
                 t_hours = max(1.0, (now - ts).total_seconds() / ACTR_TIME_UNIT)
                 total += t_hours ** (-decay)
+                parsed_any = True
             except Exception:
                 continue
         if total > 0:
             return math.log(total)
-        return ACTR_MIN_ACTIVATION
+        if parsed_any:
+            return ACTR_MIN_ACTIVATION
 
     # Approximation: interpolate access times
     t_created = max(1.0, (now - created_at).total_seconds() / ACTR_TIME_UNIT)
@@ -342,6 +348,10 @@ def compute_unified_activation(
         try:
             trace_callback(memory_id=memory_id, result=result, decay=d)
         except Exception:
-            pass
+            logger.exception(
+                "Activation trace callback failed for memory_id=%s callback=%s",
+                memory_id,
+                getattr(trace_callback, "__qualname__", getattr(trace_callback, "__name__", trace_callback.__class__.__name__)),
+            )
 
     return result

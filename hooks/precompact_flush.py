@@ -38,8 +38,10 @@ def get_active_working_memory(conn):
             LIMIT 15
         """)
         return cursor.fetchall()
-    except Exception:
-        return []
+    except sqlite3.OperationalError as exc:
+        if "no such table: working_memory" in str(exc).lower():
+            return []
+        raise
 
 
 def save_checkpoint(conn, wm_items):
@@ -58,43 +60,56 @@ def save_checkpoint(conn, wm_items):
         return 0
 
     memory_id = f"checkpoint_{uuid.uuid4().hex[:10]}"
-    try:
-        conn.execute("""
-            INSERT OR IGNORE INTO memories_text
-            (memory_id, content, category, source, importance, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            memory_id,
-            checkpoint_content[:1000],
-            'checkpoint',
-            'experienced',
-            'medium',
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        return 1
-    except Exception:
-        return 0
+    conn.execute("""
+        INSERT INTO memories_text
+        (memory_id, content, category, source, importance, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        memory_id,
+        checkpoint_content[:1000],
+        'checkpoint',
+        'experienced',
+        'medium',
+        datetime.now().isoformat()
+    ))
+    conn.commit()
+    return 1
+
+
+def _report_error(message):
+    """Report hook failures without throwing secondary exceptions."""
+    print(f"[precompact_flush] {message}", file=sys.stderr)
 
 
 def main():
-    try:
-        # Read stdin (PreCompact sends { trigger: "manual"|"auto" })
-        _input_data = json.loads(sys.stdin.read())
-
-        if not os.path.exists(FTS_DB_PATH):
+    # Read stdin (PreCompact sends { trigger: "manual"|"auto" })
+    raw_input = sys.stdin.read()
+    if raw_input.strip():
+        try:
+            json.loads(raw_input)
+        except json.JSONDecodeError as exc:
+            _report_error(f"invalid stdin JSON: {exc}")
             return
 
-        conn = get_db_connection()
-        try:
-            wm_items = get_active_working_memory(conn)
-            if wm_items:
-                save_checkpoint(conn, wm_items)
-        finally:
-            conn.close()
+    if not os.path.exists(FTS_DB_PATH):
+        return
 
-    except Exception:
-        pass
+    try:
+        conn = get_db_connection()
+    except sqlite3.Error as exc:
+        _report_error(f"database connection failed: {exc}")
+        return
+
+    try:
+        wm_items = get_active_working_memory(conn)
+        if wm_items:
+            save_checkpoint(conn, wm_items)
+    except sqlite3.Error as exc:
+        _report_error(f"database operation failed: {exc}")
+    except Exception as exc:
+        _report_error(f"unexpected failure: {exc}")
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':

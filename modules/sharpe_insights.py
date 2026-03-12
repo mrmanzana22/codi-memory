@@ -109,7 +109,7 @@ def _read_insights_mode() -> str:
     return "shadow"
 
 
-INSIGHTS_MODE = _read_insights_mode()
+INSIGHTS_MODE = _read_insights_mode()  # default; re-read per invocation in discover_()
 
 _logger.info("[sharpe_insights] Module loaded. INSIGHTS_MODE=%s", INSIGHTS_MODE)
 
@@ -149,6 +149,7 @@ def _collect_domain_anchors(max_scroll: int = 500) -> dict:
             limit=100,
             is_semantic=False,
             offset=offset,
+            with_vectors=True,
         )
         if not pts:
             break
@@ -360,6 +361,9 @@ def discover_cross_domain_insights() -> dict:
     Returns:
         Dict with candidates, bridges, insights, and diagnostics
     """
+    global INSIGHTS_MODE
+    INSIGHTS_MODE = _read_insights_mode()
+
     if INSIGHTS_MODE == "off":
         return {"mode": "off", "insights": [], "skipped": True}
 
@@ -447,6 +451,8 @@ def discover_cross_domain_insights() -> dict:
         "anchor_stats": anchor_stats,
         "total_bridges": len(bridges),
         "total_anchor_pairs": len(anchor_pairs),
+        "bridges_found": len(bridges),
+        "anchor_pairs": len(anchor_pairs),
         "cos_threshold_used": threshold_used,
         "insights_generated": len(insights),
         "insights": insights,

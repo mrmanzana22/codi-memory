@@ -133,7 +133,8 @@ def check_static_invariants() -> list:
         _r("config", "RECONSOLIDATION_STRENGTH_FLOOR", 0.10, 0.25,
            RECONSOLIDATION_STRENGTH_FLOOR, "Exton-McGuinness 2015")
     except ImportError:
-        pass  # These may be defined differently
+        violations.append({"type": "import", "module": "config", "name": "reconsolidation_import_failed",
+                           "expected": "importable", "actual": "error", "theory": "—"})
 
     # --- Spreading Activation (Collins & Loftus 1975) ---
     try:
@@ -147,7 +148,8 @@ def check_static_invariants() -> list:
            SPREAD_DEFAULT_DEPTH, "Anderson 2007")
         _v("config", "SPREAD_SALIENCE_CAP", 1.0, SPREAD_SALIENCE_CAP, "Normalization bound")
     except ImportError:
-        pass
+        violations.append({"type": "import", "module": "config", "name": "spread_import_failed",
+                           "expected": "importable", "actual": "error", "theory": "—"})
 
     # --- Emotion Appraisal (Scherer 2001 CPM) ---
     try:
@@ -162,7 +164,8 @@ def check_static_invariants() -> list:
                 "theory": "Scherer 2001 CPM: SECs required",
             })
     except ImportError:
-        pass
+        violations.append({"type": "import", "module": "emotion", "name": "import_failed",
+                           "expected": "importable", "actual": "error", "theory": "—"})
 
     # --- Spreading Activation (Collins & Loftus 1975, Desimone & Duncan 1995) ---
     try:
@@ -172,7 +175,8 @@ def check_static_invariants() -> list:
         _r("spreading", "_INHIBITION_FACTOR", 0.1, 0.5, _INHIBITION_FACTOR,
            "Desimone & Duncan 1995: suppression strength")
     except ImportError:
-        pass
+        violations.append({"type": "import", "module": "spreading", "name": "import_failed",
+                           "expected": "importable", "actual": "error", "theory": "—"})
 
     # --- Sleep Loop Architecture (Diekelmann & Born 2010) ---
     try:
@@ -190,7 +194,8 @@ def check_static_invariants() -> list:
                 "theory": "Diekelmann & Born 2010 + system architecture",
             })
     except ImportError:
-        pass
+        violations.append({"type": "import", "module": "sleep_loop", "name": "import_failed",
+                           "expected": "importable", "actual": "error", "theory": "—"})
 
     return violations
 
@@ -236,20 +241,36 @@ def check_runtime_invariants() -> list:
         # 2. Prediction results should not be dominated by sleep_loop (PCI fix)
         try:
             total = conn.execute("SELECT COUNT(*) FROM prediction_results").fetchone()
-            sleep = conn.execute(
-                "SELECT COUNT(*) FROM prediction_results WHERE source = 'sleep_loop'"
-            ).fetchone()
-            if total and total[0] > 20 and sleep and sleep[0] > 0:
-                ratio = sleep[0] / total[0]
-                if ratio > 0.3:
-                    violations.append({
-                        "type": "runtime", "module": "prediction",
-                        "name": "sleep_loop_contamination",
-                        "detail": f"sleep_loop is {ratio:.0%} of predictions ({sleep[0]}/{total[0]})",
-                        "theory": "PCI fix (Proposal #42)",
-                    })
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(prediction_results)").fetchall()
+            }
+            if "source" not in columns:
+                violations.append({
+                    "type": "runtime", "module": "prediction",
+                    "name": "source_column_missing",
+                    "detail": "prediction_results.source missing; contamination check unavailable",
+                    "theory": "PCI fix (Proposal #42)",
+                })
+            else:
+                sleep = conn.execute(
+                    "SELECT COUNT(*) FROM prediction_results WHERE source = 'sleep_loop'"
+                ).fetchone()
+                if total and total[0] > 20 and sleep and sleep[0] > 0:
+                    ratio = sleep[0] / total[0]
+                    if ratio > 0.3:
+                        violations.append({
+                            "type": "runtime", "module": "prediction",
+                            "name": "sleep_loop_contamination",
+                            "detail": f"sleep_loop is {ratio:.0%} of predictions ({sleep[0]}/{total[0]})",
+                            "theory": "PCI fix (Proposal #42)",
+                        })
         except sqlite3.OperationalError:
-            pass  # Table may not exist yet
+            violations.append({
+                "type": "runtime", "module": "prediction",
+                "name": "prediction_results_missing",
+                "detail": "Table prediction_results does not exist",
+                "theory": "PCI fix (Proposal #42)",
+            })
 
         # 3. Attention schema should be persisting (Graziano 2013 AST)
         try:
@@ -270,7 +291,7 @@ def check_runtime_invariants() -> list:
         try:
             expired = conn.execute("""
                 SELECT COUNT(*) FROM labile_memories
-                WHERE window_expires < datetime('now', '-1 hour')
+                WHERE datetime(window_expires) < datetime('now', '-1 hour')
             """).fetchone()
             if expired and expired[0] > 5:
                 violations.append({

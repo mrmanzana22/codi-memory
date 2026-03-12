@@ -116,6 +116,7 @@ BUNDLES = {
     "core": BUNDLE_CORE,
     "ops": BUNDLE_OPS,
     "research": BUNDLE_RESEARCH,
+    "full": frozenset(),
 }
 
 # Preset -> which bundles are active
@@ -203,12 +204,19 @@ def apply_allowlist(mcp, allowed_tools):
     all_tools = set(mcp._tool_manager._tools.keys())
     to_remove = all_tools - set(allowed_tools)
 
-    removed_names = sorted(to_remove)
-    for name in removed_names:
+    removed_names = []
+    failed_names = []
+    for name in sorted(to_remove):
         try:
             mcp.remove_tool(name)
         except Exception as e:
+            failed_names.append(name)
             _logger.warning("Failed to remove tool %r: %s", name, e)
+        else:
+            removed_names.append(name)
+
+    if failed_names:
+        _logger.warning("Tool allowlist left %d tool(s) visible: %s", len(failed_names), failed_names)
 
     return len(removed_names), removed_names
 

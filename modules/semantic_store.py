@@ -86,7 +86,7 @@ def get_semantic_facts(topic: str = "", limit: int = 10) -> str:
         lines = [f"=== Semantic Facts ({len(pts)}/{count} total) ==="]
         for p in pts:
             pl = p.payload
-            fact = pl.get("fact_text", pl.get("data", "?"))
+            fact = pl.get("memory", pl.get("fact_text", pl.get("data", "?")))
             topic_val = pl.get("category", "?")
             conf = pl.get("confidence", 0)
             evidence = pl.get("evidence_count", 0)

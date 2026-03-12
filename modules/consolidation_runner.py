@@ -34,14 +34,18 @@ STATUS_FILE = LOCK_DIR / "full_consolidation.status.json"
 STALE_THRESHOLD_S = 7200  # 2 hours — if lock older than this, consider stale
 
 
+class LockReadError(RuntimeError):
+    """Raised when an existing lockfile cannot be read safely."""
+
+
 def _read_lock() -> dict | None:
-    """Read lockfile contents. Returns None if absent or unparseable."""
+    """Read lockfile contents. Returns None only when the lockfile is absent."""
     if not LOCK_FILE.exists():
         return None
     try:
         return json.loads(LOCK_FILE.read_text())
-    except Exception:
-        return None
+    except Exception as e:
+        raise LockReadError(f"Failed to read lockfile {LOCK_FILE}: {e}") from e
 
 
 def _is_process_alive(pid: int, dispatched_at: str) -> bool:
@@ -104,7 +108,13 @@ def _release_lock():
 
 def acquire_lock() -> bool:
     """Try to acquire the lock. Returns True if acquired."""
-    existing = _read_lock()
+    try:
+        existing = _read_lock()
+    except LockReadError as e:
+        _logger.error("Refusing to acquire lock: %s", e)
+        _write_status("lock-read-error", str(e), 0)
+        return False
+
     if existing:
         pid = existing.get("pid", -1)
         dispatched = existing.get("dispatched_at", "")
@@ -144,6 +154,7 @@ def run(lookback_hours: int = 24):
         duration_ms = int((time.monotonic() - start) * 1000)
         _logger.error("Failed after %dms: %s", duration_ms, e)
         _write_status("error", str(e)[:500], duration_ms)
+        raise
 
     finally:
         _release_lock()

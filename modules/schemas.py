@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional
+from modules.config import now_iso
 
 
 # ============================================================
@@ -51,7 +52,7 @@ class SchemaTemplate:
     topic: str                   # Parent topic (e.g., "fullempaques", "trading")
     slots: List[SchemaSlot] = field(default_factory=list)
     instance_count: int = 0      # How many times this pattern was observed
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(default_factory=lambda: now_iso())
     last_matched: str = ""
     schema_id: int = 0
 
@@ -82,8 +83,8 @@ def save_schema(conn: sqlite3.Connection, schema: SchemaTemplate) -> int:
 
     if existing:
         conn.execute(
-            "UPDATE schemas SET instance_count = ?, slots_json = ?, last_matched = ? WHERE id = ?",
-            (existing[1] + 1, slots_json, datetime.now().isoformat(), existing[0])
+            "UPDATE schemas SET description = ?, instance_count = ?, slots_json = ?, last_matched = ? WHERE id = ?",
+            (schema.description, existing[1] + 1, slots_json, now_iso(), existing[0])
         )
         conn.commit()
         return existing[0]

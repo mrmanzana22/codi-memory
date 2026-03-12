@@ -15,7 +15,7 @@ Run as batch job during sleep loop or manually.
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from modules.pg_store import pg
 
@@ -102,6 +102,7 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
     for orig_from, orig_to in edges:
         pl_a = payload_cache.get(orig_from, {})
         pl_b = payload_cache.get(orig_to, {})
+        from_id, to_id = orig_from, orig_to
 
         created_a = pl_a.get("created_at", "")
         created_b = pl_b.get("created_at", "")
@@ -122,6 +123,7 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
         if ts_a >= ts_b:
             ts_a, ts_b = ts_b, ts_a
             pl_a, pl_b = pl_b, pl_a
+            from_id, to_id = orig_to, orig_from
 
         gap = ts_b - ts_a
         if gap > timedelta(hours=MAX_CAUSAL_GAP_HOURS):
@@ -144,20 +146,20 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
 
         if causal_links_a:
             # Strong: explicit causal_links AND temporal precedence
-            updates.append(("causes", 1, orig_from, orig_to))
+            updates.append(("causes", 1, from_id, to_id))
             result["classified_causes"] += 1
         elif has_causal_language and gap <= timedelta(hours=6):
             # Strong: causal language in content + tight temporal window
-            updates.append(("causes", 1, orig_from, orig_to))
+            updates.append(("causes", 1, from_id, to_id))
             result["classified_causes"] += 1
         elif (cat_a and cat_a == cat_b and gap <= timedelta(hours=4)
               and cat_a not in ("general", "aprendizaje", "episodio")):
             # Moderate: specific domain match + temporal proximity -> enables
-            updates.append(("enables", 1, orig_from, orig_to))
+            updates.append(("enables", 1, from_id, to_id))
             result["classified_enables"] += 1
         elif gap <= timedelta(hours=1) and _content_overlap(data_a, data_b):
             # Content-supported temporal proximity -> enables
-            updates.append(("enables", 1, orig_from, orig_to))
+            updates.append(("enables", 1, from_id, to_id))
             result["classified_enables"] += 1
         else:
             result["unchanged"] += 1
@@ -183,16 +185,20 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
 
 
 def _parse_ts(ts_str: str) -> datetime:
-    """Parse ISO timestamp, handling timezone offsets."""
-    # Remove timezone info for simple comparison
-    clean = ts_str.split("+")[0].split("-05:00")[0].split("-04:00")[0]
-    clean = clean.split("Z")[0]
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(clean, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f"Cannot parse timestamp: {ts_str}")
+    """Parse ISO timestamp, normalizing to naive UTC for consistent comparison."""
+    normalized = ts_str.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(normalized, fmt)
+            except ValueError:
+                continue
+        raise ValueError(f"Cannot parse timestamp: {ts_str}")
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _content_overlap(text_a: str, text_b: str, min_shared: int = 3) -> bool:

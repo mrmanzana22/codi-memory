@@ -93,13 +93,10 @@ def _ensure_tables():
                 "ON working_memory(created_at)"
             )
             # Add machine_id column if not exists (Fase 5 multi-host)
-            try:
-                conn.execute(
-                    "ALTER TABLE working_memory ADD COLUMN IF NOT EXISTS "
-                    "machine_id TEXT DEFAULT NULL"
-                )
-            except Exception:
-                pass
+            conn.execute(
+                "ALTER TABLE working_memory ADD COLUMN IF NOT EXISTS "
+                "machine_id TEXT DEFAULT NULL"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_traces_active_updated "
                 "ON narrative_traces(active, last_updated)"
@@ -163,12 +160,15 @@ def _effective_score(relevance, last_accessed_at, access_count, created_at):
 # ============================================================
 
 _general_counter = 0
+_MAX_GENERAL_COUNTER = 1_000_000
 
 def _resolve_chain_id(conn, topic: str, occurred_at) -> str:
     """Determine chain_id using temporal window logic."""
     global _general_counter
     if topic == "general":
         _general_counter += 1
+        if _general_counter >= _MAX_GENERAL_COUNTER:
+            _general_counter = 0
         ts = now_col().strftime("%Y%m%d%H%M%S")
         return f"general_{ts}_{_general_counter}"
 

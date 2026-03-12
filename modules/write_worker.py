@@ -556,8 +556,13 @@ def cli_main():
     try:
         from modules.active_inference_integration import register_event_handlers
         register_event_handlers()
-    except Exception:
-        pass  # AI integration is optional, never block worker startup
+    except Exception as e:
+        require_ai = os.getenv("CODI_REQUIRE_AI_HANDLERS", "0") == "1"
+        _logger.exception(
+            "Failed to register active inference event handlers (require=%s)", require_ai
+        )
+        if require_ai:
+            raise RuntimeError("AI handler registration failed and CODI_REQUIRE_AI_HANDLERS=1") from e
 
     if args.once:
         did_work = process_one_job()
@@ -565,9 +570,14 @@ def cli_main():
         sys.exit(0 if did_work else 2)
 
     if args.drain:
-        tick_result = drain_tick()
-        count = tick_result["processed"]
-        _emit_worker_tick(tick_result)
+        count = 0
+        while not _shutdown:
+            tick_result = drain_tick()
+            drained = tick_result["processed"]
+            _emit_worker_tick(tick_result)
+            count += drained
+            if drained == 0:
+                break
         _logger.info("Drained %s jobs", count)
         sys.exit(0)
 

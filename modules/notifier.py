@@ -39,6 +39,10 @@ def send_telegram(message: str) -> bool:
     Handles chunking for messages > 4096 chars.
     No rate limiting — caller is responsible.
     """
+    if not message or not message.strip():
+        _logger.debug("Empty Telegram message, skipping send")
+        return False
+
     bot_token, chat_id = _get_telegram_config()
     if not bot_token or not chat_id:
         _logger.debug("Telegram not configured, skipping send")
@@ -93,7 +97,7 @@ def notify_hare(message: str, force: bool = False) -> bool:
         try:
             from modules.working_memory import push_to_working_memory
             push_to_working_memory(
-                content=f"[PROACTIVE MSG SENT TO HARE] {message}",
+                content=f"[PROACTIVE MSG SENT] {message}",
                 topic="proactive",
                 relevance=0.9,
                 source="system",

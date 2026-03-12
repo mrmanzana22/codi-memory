@@ -73,9 +73,11 @@ def compute_log_bayes_factor(
     for key in shared_keys:
         if key in ('created_at', 'updated_at', 'id', 'score', 'memory'):
             continue  # Skip non-semantic fields
+        has_a = key in metadata_a
+        has_b = key in metadata_b
         val_a = metadata_a.get(key)
         val_b = metadata_b.get(key)
-        if val_a != val_b and val_a is not None and val_b is not None:
+        if has_a != has_b or val_a != val_b:
             mismatches += 1
 
     # Each mismatch penalizes by ~0.5 log-units

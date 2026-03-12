@@ -4,6 +4,8 @@ Auto-learning, tool audit, topic confidence.
 PE is COMPUTED in prediction, APPLIED here (Schultz/Dayan/Montague 1997).
 """
 
+import logging
+
 from modules.config import (
     USER_ID,
     now_iso,
@@ -13,6 +15,8 @@ from modules.utils import (
     get_session_id, enrich_with_ownership,
 )
 from modules.secret_redact import redact_secrets
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "auto_learn_from_session",
@@ -79,7 +83,7 @@ def _update_topic_confidence(topic: str, new_confidence: float):
     try:
         pg.add(content=content, category="aprendizaje", source="experienced", importance="medium")
     except Exception:
-        pass
+        _logger.exception("Failed to persist topic confidence for '%s'", topic)
 
 
 def auto_learn_from_session() -> str:
@@ -182,12 +186,16 @@ def auto_learn_from_session() -> str:
         except Exception as e:
             lines.append(f"- Error guardando resumen: {redact_secrets(str(e))}")
 
+        saved_rules = 0
+        failed_rules = []
         for rule in actions_generated[:5]:
             try:
                 pg.add(content=f"[REGLA DE ACCION] {rule}", category="aprendizaje", source="experienced", importance="high")
                 lines.append(f"- Regla: {rule[:40]}...")
-            except Exception:
-                pass
+                saved_rules += 1
+            except Exception as e:
+                failed_rules.append((rule, redact_secrets(str(e))))
+                lines.append(f"- Error guardando regla: {rule[:40]}... ({redact_secrets(str(e))})")
 
         _predictive_state['accuracy_history'].append({
             'timestamp': now_iso(), 'predictions': total_predictions,
@@ -201,6 +209,9 @@ def auto_learn_from_session() -> str:
         lines.append(f"- Aprendi de {total_surprises} errores en {len(error_patterns)} temas")
         lines.append(f"- Ajuste confianza en {len(error_patterns) + len(accurate_themes)} temas")
         lines.append(f"- Genere {len(actions_generated)} reglas de accion")
+        lines.append(f"- Reglas guardadas: {saved_rules}")
+        if failed_rules:
+            lines.append(f"- Reglas con fallo al persistir: {len(failed_rules)}")
         # P1: backup removed from hot path
         return "\n".join(lines)
     except Exception as e:
@@ -256,8 +267,9 @@ def rate_tool_usefulness(tool_name: str, score: int) -> str:
         score: Calificacion 1-5
     """
     try:
-        _rate_tool_usefulness_internal(tool_name, score)
-        return f"Utilidad de '{tool_name}' registrada: {score}/5"
+        normalized_score = max(1, min(5, score))
+        _rate_tool_usefulness_internal(tool_name, normalized_score)
+        return f"Utilidad de '{tool_name}' registrada: {normalized_score}/5"
     except Exception as e:
         return f"Error: {redact_secrets(str(e))}"
 

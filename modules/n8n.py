@@ -3,6 +3,7 @@ Codi Memory - N8N integration module.
 Webhook dispatch to n8n workflows.
 """
 
+import logging
 import os
 import requests as http_requests
 
@@ -36,7 +37,7 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
         if not webhook_path or any((not ch.isalnum()) and ch not in ('_', '-') for ch in webhook_path) or len(webhook_path) > 80:
             return "Error: webhook_path invalido (solo A-Z a-z 0-9 _ -)"
         url = f"{N8N_WEBHOOK_BASE}/{webhook_path}"
-        payload = data or {}
+        payload = dict(data or {})
         payload['_from'] = 'codi-memory'
         payload['_timestamp'] = now_iso()
         timeout = 30 if esperar_respuesta else 5
@@ -44,6 +45,8 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
         response = http_requests.post(url, json=payload, timeout=timeout, headers={'Content-Type': 'application/json'})
 
         if esperar_respuesta:
+            if response.status_code not in [200, 201, 202]:
+                return f"Error disparando webhook: {response.status_code} - {response.text[:200]}"
             try:
                 return f"Respuesta de n8n: {response.json()}"
             except Exception:
@@ -56,6 +59,7 @@ def trigger_n8n(webhook_path: str, data: dict = None, esperar_respuesta: bool = 
     except http_requests.exceptions.Timeout:
         return f"Timeout esperando respuesta de n8n (webhook: {webhook_path})"
     except Exception as e:
+        logging.error("Error disparando n8n (webhook: %s): %s", webhook_path, redact_secrets(str(e)), exc_info=True)
         return f"Error disparando n8n: {redact_secrets(str(e))}"
 
 

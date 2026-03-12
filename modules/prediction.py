@@ -3,6 +3,7 @@ Codi Memory - Prediction module.
 Predictive processing: predict, surprise, beliefs, accuracy.
 """
 
+import logging
 import threading
 
 from modules.config import (
@@ -14,6 +15,8 @@ from modules.utils import (
 )
 from modules.secret_redact import redact_secrets
 from modules.pg_store import pg
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "get_predictive_state",
@@ -78,11 +81,11 @@ def predict_context(current_context: str) -> str:
                     })
                     total_score += score
                     pg.update_payload(mem_id, {
-                        'attention_access_count': int((payload or {}).get('attention_access_count', 0) or 0) + 1,
-                        'attention_last_accessed': now_iso(),
+                        'access_count': int((payload or {}).get('access_count', 0) or 0) + 1,
+                        'last_accessed_at': now_iso(),
                     })
             except Exception:
-                pass
+                _logger.exception("predict_context: failed to process memory %s", mem_id)
 
         confidence = min(total_score / len(predicted_memories) if predicted_memories else 0, 1.0)
         predicted_themes = []
@@ -208,7 +211,7 @@ def get_prediction_accuracy() -> str:
             lines.append(f"**Sorpresas de alta intensidad:** {high_surprises}")
 
         try:
-            all_error_points, _ = pg.scroll(filters={"metadata_key": {"key": "prediction_error", "value": True}}, limit=500, is_semantic=False)
+            all_error_points, _ = pg.scroll(filters={"metadata_key": {"key": "prediction_error", "value": "true"}}, limit=500, is_semantic=False)
             if all_error_points:
                 lines.append(f"\n## Errores de Prediccion Almacenados ({len(all_error_points)})")
                 for p in all_error_points[:10]:

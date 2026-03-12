@@ -88,14 +88,17 @@ def enqueue_write_job(
     """
     conn = _get_conn(db_path)
     now = now_iso()
+    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+    dedupe_source = json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+    effective_dedupe_key = dedupe_key or compute_dedupe_key(kind, dedupe_source)
 
     # Check dedupe: if same key exists in active states, return existing job
-    if dedupe_key:
+    if effective_dedupe_key:
         row = conn.execute(
             "SELECT job_id, status FROM write_queue "
             "WHERE dedupe_key = ? AND status IN ('queued', 'running', 'done') "
             "ORDER BY created_at DESC LIMIT 1",
-            (dedupe_key,)
+            (effective_dedupe_key,)
         ).fetchone()
 
         if row:
@@ -106,7 +109,6 @@ def enqueue_write_job(
             }
 
     job_id = str(uuid.uuid4())
-    payload_json = json.dumps(payload, ensure_ascii=False, default=str)
 
     conn.execute(
         "INSERT INTO write_queue "
@@ -114,7 +116,7 @@ def enqueue_write_job(
         " dedupe_key, created_at, updated_at) "
         "VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?)",
         (job_id, kind, payload_json, priority, max_attempts,
-         dedupe_key, now, now),
+         effective_dedupe_key, now, now),
     )
     conn.commit()
 
@@ -270,13 +272,16 @@ def claim_next_job(
         return None
 
     # Claim it (record claimed_at for latency breakdown)
-    conn.execute(
+    cursor = conn.execute(
         "UPDATE write_queue "
         "SET status = 'running', lease_until = ?, updated_at = ?, "
         "    claimed_at = ?, attempts = attempts + 1 "
         "WHERE id = ? AND status = 'queued'",
         (lease_until, now, now, row["id"])
     )
+    if cursor.rowcount == 0:
+        conn.commit()
+        return None
     conn.commit()
 
     payload = json.loads(row["payload_json"])
@@ -545,17 +550,30 @@ def reap_stuck_jobs(
     ).fetchall()
 
     for row in orphans:
-        conn.execute(
-            "UPDATE write_queue "
-            "SET status = 'queued', failure_reason = 'stuck_no_started_at', "
-            "    last_error = 'claimed but never started, requeued', "
-            "    updated_at = ?, claimed_at = NULL, lease_until = NULL "
-            "WHERE id = ?",
-            (now, row["id"])
-        )
-        requeued += 1
-        details.append({"job_id": row["job_id"], "kind": row["kind"],
-                        "action": "requeued_no_start", "attempts": row["attempts"]})
+        if row["attempts"] >= row["max_attempts"]:
+            conn.execute(
+                "UPDATE write_queue "
+                "SET status = 'dead', failure_reason = 'stuck_no_started_at_exhausted', "
+                "    last_error = 'claimed but never started, attempts exhausted', "
+                "    updated_at = ?, claimed_at = NULL, lease_until = NULL "
+                "WHERE id = ?",
+                (now, row["id"])
+            )
+            dead += 1
+            details.append({"job_id": row["job_id"], "kind": row["kind"],
+                            "action": "dead_no_start", "attempts": row["attempts"]})
+        else:
+            conn.execute(
+                "UPDATE write_queue "
+                "SET status = 'queued', failure_reason = 'stuck_no_started_at', "
+                "    last_error = 'claimed but never started, requeued', "
+                "    updated_at = ?, claimed_at = NULL, lease_until = NULL "
+                "WHERE id = ?",
+                (now, row["id"])
+            )
+            requeued += 1
+            details.append({"job_id": row["job_id"], "kind": row["kind"],
+                            "action": "requeued_no_start", "attempts": row["attempts"]})
 
     conn.commit()
 

@@ -15,6 +15,7 @@ Neuroscience basis:
 """
 
 import logging
+import sqlite3
 import threading
 from datetime import datetime, timedelta
 
@@ -27,6 +28,17 @@ _logger = logging.getLogger(__name__)
 REWARD_WINDOW_SEC = 300  # 5 minutes: re-access within this = reward
 EXPIRE_BATCH_SIZE = 200  # Max rows to expire per tick
 LOG_MAX_PER_QUERY = 10   # Max reward entries per search (cap noise)
+
+
+def _ensure_topic_column(conn) -> None:
+    """Ensure reward_signals.topic exists before topic-aware reads/writes."""
+    try:
+        conn.execute("SELECT topic FROM reward_signals LIMIT 0")
+    except sqlite3.OperationalError as e:
+        if "no such column" not in str(e).lower():
+            raise
+        conn.execute("ALTER TABLE reward_signals ADD COLUMN topic TEXT DEFAULT 'general'")
+        conn.commit()
 
 
 # ============================================================
@@ -55,12 +67,18 @@ def log_retrieval(query: str, channel_attributions: list, ts: str = None,
 
     try:
         conn = get_conn(FTS_DB_PATH)
-        # Ensure topic column exists (migration 017)
-        try:
-            conn.execute("SELECT topic FROM reward_signals LIMIT 0")
-        except Exception:
-            conn.execute("ALTER TABLE reward_signals ADD COLUMN topic TEXT DEFAULT 'general'")
-            conn.commit()
+        # Ensure base table exists before applying incremental schema fixes
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS reward_signals ("
+            "id INTEGER PRIMARY KEY, "
+            "query TEXT NOT NULL, "
+            "memory_id TEXT NOT NULL, "
+            "channel TEXT NOT NULL, "
+            "retrieved_at TEXT NOT NULL, "
+            "rewarded INTEGER, "
+            "reward_at TEXT)"
+        )
+        _ensure_topic_column(conn)
 
         rows = []
         for attr in channel_attributions[:LOG_MAX_PER_QUERY]:
@@ -78,7 +96,7 @@ def log_retrieval(query: str, channel_attributions: list, ts: str = None,
             )
             conn.commit()
     except Exception as e:
-        _logger.debug("log_retrieval error: %s", e)
+        _logger.exception("log_retrieval schema bootstrap failed: %s", e)
 
 
 def check_reward(retrieved_ids: list) -> dict:
@@ -151,12 +169,15 @@ def expire_pending(max_rows: int = EXPIRE_BATCH_SIZE) -> int:
         if expired > 0:
             conn.commit()
 
-        # FIFO cleanup: keep last 5000 entries
+        # FIFO cleanup: keep last 5000 terminal entries (preserve live pending rows)
         conn.execute("""
-            DELETE FROM reward_signals WHERE id NOT IN (
-                SELECT id FROM reward_signals ORDER BY created_at DESC LIMIT 5000
+            DELETE FROM reward_signals
+            WHERE rewarded IS NOT NULL AND retrieved_at < ? AND id NOT IN (
+                SELECT id FROM reward_signals
+                WHERE rewarded IS NOT NULL AND retrieved_at < ?
+                ORDER BY created_at DESC LIMIT 5000
             )
-        """)
+        """, (cutoff, cutoff))
         conn.commit()
 
         return expired
@@ -183,6 +204,7 @@ def get_channel_stats(lookback_hours: int = 24, topic: str = None) -> dict:
 
     try:
         conn = get_conn(FTS_DB_PATH)
+        _ensure_topic_column(conn)
 
         if topic:
             # Per-topic stats (Canon v2, CC-8)

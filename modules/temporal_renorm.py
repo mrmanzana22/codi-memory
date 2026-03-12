@@ -22,6 +22,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 from collections import defaultdict
+from modules.config import now_iso
 
 _logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ def extract_events(clusters: list, conn: sqlite3.Connection = None) -> list:
         return []
 
     events = []
-    now = datetime.now().isoformat()
+    now = now_iso()
 
     for cluster in clusters:
         episode_ids = cluster.get("episode_ids", [])
@@ -166,7 +167,7 @@ def extract_narratives(events: list, conn: sqlite3.Connection = None) -> list:
         by_topic[event["topic"]].append(event)
 
     narratives = []
-    now = datetime.now().isoformat()
+    now = now_iso()
 
     for topic, topic_events in by_topic.items():
         if len(topic_events) < NARRATIVE_MIN_EVENTS:
@@ -254,16 +255,32 @@ def extract_themes(narratives: list, conn: sqlite3.Connection = None) -> list:
     Returns:
         List of theme dicts
     """
-    if len(narratives) < THEME_MIN_NARRATIVES:
+    # Cross-run accumulation: each consolidation produces ~1 narrative,
+    # but themes require >= THEME_MIN_NARRATIVES. Load persisted narratives
+    # so themes can emerge across runs.
+    all_narratives = list(narratives)
+    if conn:
+        try:
+            current_ids = {n.get("narrative_id") for n in narratives}
+            db_rows = conn.execute(
+                "SELECT narrative_id, theme FROM renorm_narratives"
+            ).fetchall()
+            for row in db_rows:
+                if row[0] not in current_ids:
+                    all_narratives.append({"narrative_id": row[0], "theme": row[1]})
+        except Exception:
+            pass  # table may not exist yet
+
+    if len(all_narratives) < THEME_MIN_NARRATIVES:
         return []
 
     # Group narratives by theme/topic
     by_theme = defaultdict(list)
-    for narrative in narratives:
+    for narrative in all_narratives:
         by_theme[narrative["theme"]].append(narrative)
 
     themes = []
-    now = datetime.now().isoformat()
+    now = now_iso()
 
     for theme_name, theme_narratives in by_theme.items():
         if len(theme_narratives) < THEME_MIN_NARRATIVES:

@@ -87,7 +87,8 @@ def _collect_ai(conn: sqlite3.Connection, since_24h: str) -> dict:
     if not _table_exists(conn, "generative_model_transitions"):
         return {"total_observations": 0, "table_exists": False}
     total = conn.execute(
-        "SELECT COALESCE(SUM(count), 0) FROM generative_model_transitions"
+        "SELECT COALESCE(SUM(count), 0) FROM generative_model_transitions WHERE updated_at > ?",
+        (since_24h,),
     ).fetchone()[0]
     return {"total_observations": int(total or 0), "table_exists": True}
 
@@ -139,6 +140,7 @@ _AI_MIN_WRITES_TO_CHECK = 20  # same as _PERSIST_INTERVAL; AI won't persist belo
 
 def _rule_ai_disconnected(metrics: dict, now_iso: str) -> dict | None:
     writes = metrics["global"]["writes_24h"]
+    events = metrics["global"]["events_24h"]
     observations = metrics["active_inference"]["total_observations"]
     enough_activity = writes >= _AI_MIN_WRITES_TO_CHECK
     if enough_activity and observations == 0:

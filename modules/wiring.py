@@ -504,7 +504,14 @@ def _on_prediction_error(event_name: str, data: dict):
     """
     # Normalize across emitters: preturn_inject uses error_magnitude,
     # record_surprise uses confidence/intensity
-    error_magnitude = data.get("error_magnitude") or data.get("confidence") or 0.5
+    raw_error_magnitude = data.get("error_magnitude")
+    raw_confidence = data.get("confidence")
+    if raw_error_magnitude is not None:
+        error_magnitude = raw_error_magnitude
+    elif raw_confidence is not None:
+        error_magnitude = raw_confidence
+    else:
+        error_magnitude = 0.5
     topic = data.get("topic", "unknown")
     # Build keywords from available data
     actual_keywords = data.get("actual_keywords", [])
@@ -687,6 +694,7 @@ def _on_competition_complete(event_name: str, data: dict):
 
         # Salience penalty for losers (inhibition of return) - batched
         if loser_ids:
+            data["loser_penalty_applied"] = False
             try:
                 from modules.config import COLLECTION_NAME
                 from modules.access_tracking import record_spreading
@@ -698,8 +706,17 @@ def _on_competition_complete(event_name: str, data: dict):
                 }
                 if sal_updates:
                     record_spreading(COLLECTION_NAME, sal_updates)
-            except Exception:
-                pass
+                    data["loser_penalty_applied"] = True
+                else:
+                    data["loser_penalty_error"] = "no_points_found"
+            except Exception as e:
+                data["loser_penalty_error"] = redact_secrets(str(e))
+                _logger.warning(
+                    "Loser salience penalty failed for %d losers: %s",
+                    len(loser_ids),
+                    data["loser_penalty_error"],
+                    exc_info=True,
+                )
     except Exception as e:
         _logger.error("Competition handler error: %s", redact_secrets(str(e)))
 

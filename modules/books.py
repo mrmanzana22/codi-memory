@@ -25,13 +25,26 @@ from modules.secret_redact import redact_secrets
 LIBROS_FILE = os.path.join(BASE_DIR, "libros.json")
 
 
+def _normalizar_libro_key(nombre: str) -> str:
+    """Canonical book key: lowercase + hyphens."""
+    return nombre.lower().replace(' ', '-')
+
+
 def _cargar_libros_de_qdrant():
     """Carga libros desde pg_store buscando memorias con category=libro."""
     try:
         libros = {}
 
-        # Buscar memorias que son libros
-        libro_points, _ = pg.scroll(filters={"category": "libro"}, limit=100, is_semantic=False)
+        # Buscar memorias que son libros (paginated)
+        libro_points = []
+        _lb_offset = None
+        while True:
+            _batch, _lb_offset = pg.scroll(filters={"category": "libro"}, limit=100, is_semantic=False, offset=_lb_offset)
+            if not _batch:
+                break
+            libro_points.extend(_batch)
+            if _lb_offset is None:
+                break
 
         for point in libro_points:
             payload = point.payload
@@ -47,9 +60,18 @@ def _cargar_libros_de_qdrant():
                     "memory_id": str(point.id)
                 }
 
-        # Buscar capitulos para cada libro
+        # Buscar capitulos (paginated, once for all libros)
+        all_cap_points = []
+        _cap_offset = None
+        while True:
+            _batch, _cap_offset = pg.scroll(filters={"category": "capitulo"}, limit=100, is_semantic=False, offset=_cap_offset)
+            if not _batch:
+                break
+            all_cap_points.extend(_batch)
+            if _cap_offset is None:
+                break
+
         for libro_key in libros:
-            all_cap_points, _ = pg.scroll(filters={"category": "capitulo"}, limit=100, is_semantic=False)
             # Post-filter for this specific libro
             cap_points = [p for p in all_cap_points if p.payload.get('libro') == libro_key]
 
@@ -82,8 +104,11 @@ def _cargar_libros_local():
             with open(LIBROS_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         return {"metadata": {}, "libros": {}}
-    except Exception:
+    except FileNotFoundError:
         return {"metadata": {}, "libros": {}}
+    except Exception as exc:
+        _logger.exception("Failed to load local libros backup: %s", exc)
+        return {"metadata": {"error": "local_backup_read_failed"}, "libros": {}}
 
 def _cargar_libros():
     """Carga libros - primero intenta Qdrant, si no hay usa archivo local."""
@@ -158,7 +183,7 @@ def register_tools(mcp):
         """
         try:
             data = _cargar_libros()
-            libro = data.get('libros', {}).get(nombre.lower())
+            libro = data.get('libros', {}).get(_normalizar_libro_key(nombre))
 
             if not libro:
                 disponibles = list(data.get('libros', {}).keys())
@@ -203,7 +228,7 @@ def register_tools(mcp):
         """
         try:
             data = _cargar_libros()
-            libro_key = libro.lower()
+            libro_key = _normalizar_libro_key(libro)
 
             if libro_key not in data.get('libros', {}):
                 return f"Libro '{libro}' no existe. Usa crear_libro() primero."
@@ -274,7 +299,7 @@ Guardado en: Qdrant + backup local
         """
         try:
             data = _cargar_libros()
-            nombre_key = nombre.lower().replace(' ', '-')
+            nombre_key = _normalizar_libro_key(nombre)
 
             if nombre_key in data.get('libros', {}):
                 return f"Ya existe un libro llamado '{nombre_key}'"
@@ -342,7 +367,7 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
         """
         try:
             data = _cargar_libros()
-            libro_key = libro.lower()
+            libro_key = _normalizar_libro_key(libro)
 
             if libro_key not in data.get('libros', {}):
                 return f"Libro '{libro}' no existe."

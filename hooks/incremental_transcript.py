@@ -40,9 +40,14 @@ def truncate_at_sentence(text: str, max_chars: int) -> str:
 
 
 def main():
+    raw_input = sys.stdin.read()
     try:
-        input_data = json.loads(sys.stdin.read())
-    except Exception:
+        input_data = json.loads(raw_input)
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(
+            f"incremental_transcript: invalid JSON on stdin at line {exc.lineno} "
+            f"column {exc.colno}: {exc.msg}\n"
+        )
         return
 
     session_id = input_data.get("session_id", "")
@@ -71,13 +76,15 @@ def main():
                 "finalized": False,
                 "turns": [],
             }
-    except (json.JSONDecodeError, Exception):
+    except json.JSONDecodeError:
         data = {
             "session_id": session_id,
             "started_at": datetime.now().isoformat(),
             "finalized": False,
             "turns": [],
         }
+    except OSError:
+        return
 
     # Truncate turn at sentence boundary
     condensed = truncate_at_sentence(prompt, MAX_TURN_CHARS)
@@ -98,8 +105,9 @@ def main():
     try:
         with open(filepath, "w") as f:
             f.write(serialized)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"incremental_transcript: failed to write {filepath}: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

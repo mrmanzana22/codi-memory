@@ -21,7 +21,7 @@ Neuroscience references:
 import logging
 import math
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from modules.pg_store import pg
@@ -240,7 +240,7 @@ def _get_hours_since_access(payload: dict) -> Optional[float]:
     Checks access_timestamps (list), then created_at as fallback.
     Returns None if no timing data available.
     """
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     # Try access_timestamps first (most recent access)
     timestamps = payload.get("access_timestamps")
@@ -248,9 +248,9 @@ def _get_hours_since_access(payload: dict) -> Optional[float]:
         try:
             last_ts = timestamps[-1]
             if isinstance(last_ts, str):
-                last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00").replace("+00:00", ""))
-                if last_dt.tzinfo:
-                    last_dt = last_dt.replace(tzinfo=None)
+                last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
                 return max(0.0, (now - last_dt).total_seconds() / 3600)
         except (ValueError, TypeError):
             pass
@@ -259,9 +259,9 @@ def _get_hours_since_access(payload: dict) -> Optional[float]:
     created = payload.get("created_at")
     if created and isinstance(created, str):
         try:
-            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-            if created_dt.tzinfo:
-                created_dt = created_dt.replace(tzinfo=None)
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
             return max(0.0, (now - created_dt).total_seconds() / 3600)
         except (ValueError, TypeError):
             pass
@@ -413,7 +413,7 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
         competitors = [
             n for n in neighbors
             if str(n.id) not in retrieved_set
-            and n.payload.get('narrative_importance') != 'critical'
+            and n.payload.get('importance', n.payload.get('narrative_importance', 'medium')) != 'critical'
             and str(n.id) not in _chain_ids
             and getattr(n, "score", 1.0) >= RIF_SIMILARITY_THRESHOLD
         ]

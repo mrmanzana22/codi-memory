@@ -24,6 +24,7 @@ from modules.config import (
     RECONSOLIDATION_PE_THRESHOLD,
     RECONSOLIDATION_STRENGTH_FLOOR,
     RECONSOLIDATION_STRENGTH_CEILING,
+    now_col, now_iso,
 )
 from modules.pg_store import pg
 from modules.consolidation_common import (
@@ -287,7 +288,7 @@ def mark_as_labile(memory_id: str, prediction_error: float = 0.0,
     """
     try:
         conn = _consolidation_conn()
-        now = datetime.now()
+        now = now_col()
         expires = now + timedelta(hours=RECONSOLIDATION_WINDOW_HOURS)
 
         conn.execute("""
@@ -308,7 +309,7 @@ def clear_expired_labile():
     """Remove expired labile memory entries."""
     try:
         conn = _consolidation_conn()
-        now = datetime.now().isoformat()
+        now = now_iso()
         conn.execute("DELETE FROM labile_memories WHERE window_expires < ?", (now,))
         conn.commit()
         conn.close()
@@ -414,7 +415,7 @@ def correct_memory(
             conn = _consolidation_conn()
             row = conn.execute(
                 "SELECT 1 FROM labile_memories WHERE memory_id = ? AND window_expires > ?",
-                (full_id, datetime.now().isoformat())
+                (full_id, now_iso())
             ).fetchone()
             conn.close()
             is_labile = row is not None
@@ -584,7 +585,7 @@ def get_pending_corrections(include_expired: bool = False) -> str:
     import json
     try:
         conn = _consolidation_conn()
-        now = datetime.now().isoformat()
+        now = now_iso()
 
         if include_expired:
             rows = conn.execute("""
@@ -635,7 +636,7 @@ def expire_stale_corrections() -> int:
     """
     try:
         conn = _consolidation_conn()
-        now = datetime.now().isoformat()
+        now = now_iso()
         cursor = conn.execute("""
             UPDATE pending_corrections
             SET status = 'expired', reviewed_at = ?

@@ -49,16 +49,20 @@ def scroll_all(
             "offset": offset,
         }
         if scroll_filter is not None:
-            kwargs["scroll_filter"] = scroll_filter
+            kwargs["filter"] = scroll_filter
 
-        pts, next_offset = qdrant.scroll(**kwargs)
+        try:
+            pts, next_offset = qdrant.scroll(**kwargs)
+        except Exception as e:
+            _logger.error("Qdrant scroll failed: %s", e, exc_info=True)
+            raise
 
         if not pts:
             break
 
         results.extend(pts)
 
-        if not next_offset:
+        if next_offset is None:
             break
         offset = next_offset
 

@@ -159,8 +159,8 @@ def compute_uncertainty(
             )
             if last_acc.tzinfo:
                 last_acc = last_acc.replace(tzinfo=None)
-        except Exception:
-            pass
+        except (ValueError, TypeError) as exc:
+            _logger.warning("compute_uncertainty: bad last_accessed_str=%r: %s", last_accessed_str, exc)
 
     created = None
     if created_at_str:
@@ -170,8 +170,8 @@ def compute_uncertainty(
             )
             if created.tzinfo:
                 created = created.replace(tzinfo=None)
-        except Exception:
-            pass
+        except (ValueError, TypeError) as exc:
+            _logger.warning("compute_uncertainty: bad created_at_str=%r: %s", created_at_str, exc)
 
     ref_time = last_acc or created or (now - timedelta(days=7))
     days_since = (now - ref_time).total_seconds() / 86400
@@ -297,7 +297,6 @@ def get_sharpe_report(topic: str = "", top_n: int = 20) -> str:
 
     all_scores = []
     offset = None
-    max_scroll = 500  # safety cap
 
     # Sanity counters for field tracking
     sanity_has_attention = 0   # has attention_access_count
@@ -305,7 +304,7 @@ def get_sharpe_report(topic: str = "", top_n: int = 20) -> str:
     sanity_has_none = 0        # no access field at all
 
     scrolled = 0
-    while scrolled < max_scroll:
+    while True:
         pts, next_offset = pg.scroll(
             filters=scroll_filters,
             limit=100,

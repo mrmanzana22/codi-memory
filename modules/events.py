@@ -25,6 +25,7 @@ Usage:
 """
 
 import atexit
+import inspect
 import logging
 import os
 import sqlite3
@@ -32,6 +33,7 @@ import threading
 import time
 from collections import defaultdict
 from datetime import datetime
+from modules.config import now_iso
 
 _logger = logging.getLogger(__name__)
 
@@ -85,23 +87,48 @@ class EventBus:
         self._dirty_total = 0
         self._last_flush = time.monotonic()
         atexit.register(self._flush_counts)
+        self._handler_modes = {}  # (event_name, handler) -> "data_only" | "event_and_data"
+
+    @staticmethod
+    def _get_handler_mode(handler: callable) -> str:
+        """Return compatible calling convention for a subscriber."""
+        try:
+            signature = inspect.signature(handler)
+            positional = [
+                param for param in signature.parameters.values()
+                if param.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            ]
+            required = [
+                param for param in positional
+                if param.default is inspect.Parameter.empty
+            ]
+            if any(param.kind == inspect.Parameter.VAR_POSITIONAL for param in signature.parameters.values()):
+                return "event_and_data"
+            if len(required) == 1:
+                return "data_only"
+            return "event_and_data"
+        except (ValueError, TypeError):
+            return "event_and_data"
 
     def on(self, event_name: str, handler: callable):
         """Register a handler for an event.
 
         Args:
             event_name: Event to listen for (use Events constants)
-            handler: Callable that receives (event_name, data_dict)
+            handler: Callable that receives (data_dict) or (event_name, data_dict)
         """
+        handler_mode = self._get_handler_mode(handler)
         with self._lock:
             if handler not in self._handlers[event_name]:
                 self._handlers[event_name].append(handler)
+                self._handler_modes[(event_name, handler)] = handler_mode
 
     def off(self, event_name: str, handler: callable):
         """Unregister a handler."""
         with self._lock:
             try:
                 self._handlers[event_name].remove(handler)
+                self._handler_modes.pop((event_name, handler), None)
             except ValueError:
                 pass
 
@@ -123,7 +150,7 @@ class EventBus:
         # Record in history
         entry = {
             'event': event_name,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': now_iso(),
             'data_keys': list(data.keys())
         }
 
@@ -131,20 +158,31 @@ class EventBus:
             self._history.append(entry)
             if len(self._history) > self._history_max:
                 self._history = self._history[-self._history_max:]
-            handlers = list(self._handlers.get(event_name, []))
+            handlers = [
+                (handler, self._handler_modes.get((event_name, handler), "event_and_data"))
+                for handler in self._handlers.get(event_name, [])
+            ]
 
         # Accumulate persistent counter (batched)
-        self._dirty_counts[event_name] += 1
-        self._dirty_total += 1
-        if self._dirty_total >= self._FLUSH_THRESHOLD or (time.monotonic() - self._last_flush) > 1.0:
+        with self._lock:
+            self._dirty_counts[event_name] += 1
+            self._dirty_total += 1
+            should_flush = (
+                self._dirty_total >= self._FLUSH_THRESHOLD
+                or (time.monotonic() - self._last_flush) > 1.0
+            )
+        if should_flush:
             self._flush_counts()
 
         # Call handlers outside the lock
-        for handler in handlers:
+        for handler, handler_mode in handlers:
             try:
-                handler(event_name, data)
+                if handler_mode == "data_only":
+                    handler(data)
+                else:
+                    handler(event_name, data)
             except Exception as e:
-                _logger.error("Error in handler for %s: %s", event_name, e)
+                _logger.error("Error in handler %r for %s: %s", handler, event_name, e)
 
     def get_history(self, limit: int = 20) -> list:
         """Get recent event history for debugging."""
@@ -174,16 +212,21 @@ class EventBus:
 
     def _flush_counts(self):
         """Batch-write dirty counters to SQLite. Safe: never blocks emit on failure."""
-        if not self._dirty_counts:
-            return
+        with self._lock:
+            if not self._dirty_counts:
+                return
+            pending_counts = dict(self._dirty_counts)
+            pending_total = self._dirty_total
+            self._dirty_counts = defaultdict(int)
+            self._dirty_total = 0
         try:
             from modules.db_pool import get_conn
             conn = get_conn(self._get_db_path())
             if not EventBus._event_tables_validated:
                 conn.execute("SELECT 1 FROM event_counts LIMIT 0")
                 EventBus._event_tables_validated = True
-            now = datetime.now().isoformat()
-            for event_name, increment in self._dirty_counts.items():
+            now = now_iso()
+            for event_name, increment in pending_counts.items():
                 conn.execute("""
                     INSERT INTO event_counts (event, count, last_seen)
                     VALUES (?, ?, ?)
@@ -192,11 +235,15 @@ class EventBus:
                         last_seen = excluded.last_seen
                 """, (event_name, increment, now))
             conn.commit()
-            self._dirty_counts.clear()
-            self._dirty_total = 0
-            self._last_flush = time.monotonic()
+            with self._lock:
+                self._last_flush = time.monotonic()
         except Exception:
-            pass  # Never block emit
+            _logger.debug("Failed to flush event_counts", exc_info=True)
+            # Restore snapshot so evidence isn't lost
+            with self._lock:
+                for event_name, increment in pending_counts.items():
+                    self._dirty_counts[event_name] += increment
+                self._dirty_total += pending_total
 
     def get_persistent_count(self, event_name: str) -> int:
         """Read total historical count for an event type from SQLite."""
@@ -214,6 +261,7 @@ class EventBus:
             row = cursor.fetchone()
             return row[0] if row else 0
         except Exception:
+            _logger.debug("Failed to read event_counts for %s", event_name, exc_info=True)
             return 0
 
 

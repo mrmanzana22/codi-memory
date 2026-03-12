@@ -61,8 +61,12 @@ def redact_secrets(text: str) -> str:
         >>> redact_secrets("normal error message")
         'normal error message'
     """
-    if not text or not isinstance(text, str):
-        return text or ""
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return ""
 
     result = text
     for pattern, replacement in _REDACTION_PATTERNS:

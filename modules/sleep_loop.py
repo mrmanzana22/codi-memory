@@ -555,29 +555,27 @@ def _get_target_checkpoint(max_age_min: int) -> int | None:
     """
     conn = _get_conn()
     try:
-        row = conn.execute(
+        rows = conn.execute(
             "SELECT id, created_at FROM session_checkpoints "
             "WHERE sleep_report IS NULL OR TRIM(sleep_report) = '' "
-            "ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+            "ORDER BY created_at DESC"
+        ).fetchall()
 
-        if not row:
+        if not rows:
             return None
 
-        cp_id, created_at = row
+        for cp_id, created_at in rows:
+            try:
+                dt = datetime.fromisoformat(created_at)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=TZ_COL)
+                age_min = (now_col() - dt).total_seconds() / 60
+                if age_min <= max_age_min:
+                    return cp_id
+            except Exception:
+                continue
 
-        # Too old?
-        try:
-            dt = datetime.fromisoformat(created_at)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=TZ_COL)
-            age_min = (now_col() - dt).total_seconds() / 60
-            if age_min > max_age_min:
-                return None
-        except Exception:
-            return None
-
-        return cp_id
+        return None
     finally:
         conn.close()
 

@@ -98,10 +98,10 @@ class AgentModel:
             "traits": {
                 "name": self.traits.name,
                 "role": self.traits.role,
-                "personality": self.traits.personality,
-                "preferences": self.traits.preferences,
-                "capabilities": self.traits.capabilities,
-                "interaction_patterns": self.traits.interaction_patterns,
+                "personality": dict(self.traits.personality),
+                "preferences": dict(self.traits.preferences),
+                "capabilities": dict(self.traits.capabilities),
+                "interaction_patterns": dict(self.traits.interaction_patterns),
             },
             "state": {
                 "current_goal": self.state.current_goal,
@@ -110,11 +110,12 @@ class AgentModel:
                 "arousal": self.state.arousal,
                 "engagement": self.state.engagement,
                 "stress_level": self.state.stress_level,
+                "last_updated": self.state.last_updated,
             },
             "predictions": {
                 "predicted_topic": self.predictions.predicted_topic,
                 "predicted_action": self.predictions.predicted_action,
-                "predicted_needs": self.predictions.predicted_needs,
+                "predicted_needs": list(self.predictions.predicted_needs),
                 "confidence": self.predictions.confidence,
                 "basis": self.predictions.basis,
             },

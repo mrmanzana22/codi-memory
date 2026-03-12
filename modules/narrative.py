@@ -108,11 +108,13 @@ def _retrieve_by_period(days: int, focus: str = None) -> list:
     memories = []
     offset = None
     while True:
-        pts, nxt = pg.scroll(filters=filters, limit=100, is_semantic=False)
+        pts, nxt = pg.scroll(filters=filters, limit=100, is_semantic=False, offset=offset)
         if not pts:
             break
         # Post-filter by created_at >= cutoff (Range condition)
-        pts = [p for p in pts if (p.payload or {}).get("created_at", "") >= cutoff]
+        # Normalize to 19-char naive ISO for cross-store comparison
+        cutoff_norm = cutoff[:19]
+        pts = [p for p in pts if (p.payload or {}).get("created_at", "")[:19] >= cutoff_norm]
         memories.extend(pts)
         offset = nxt
         if offset is None:
@@ -343,6 +345,7 @@ def _integrate_wm_chains(period_days: int = 7) -> list:
             "label": f"{c[1]} ({c[2]} events)",
         } for c in chains]
     except Exception:
+        _logger.exception("_integrate_wm_chains failed")
         return []
 
 
