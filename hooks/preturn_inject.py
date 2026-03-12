@@ -1236,16 +1236,17 @@ def _compare_prediction(conn, prompt):
 
         now = datetime.now().isoformat()
 
-        # Detect source: sleep_loop ticks have predictable patterns
-        source = 'interactive'
-        if predicted_topic == actual_topic == 'codigo':
+        # Detect source: explicit env var OR timing heuristic (P0 Bug #5 fix)
+        # Removed topic=='codigo' restriction — sleep ticks can predict any topic
+        source = os.environ.get('CODI_SOURCE', 'interactive')
+        if source == 'interactive':
             last_row = conn.execute(
                 "SELECT created_at FROM prediction_results ORDER BY id DESC LIMIT 1"
             ).fetchone()
             if last_row:
                 last_time = datetime.fromisoformat(last_row[0])
                 gap_min = (datetime.now() - last_time).total_seconds() / 60
-                if 25 <= gap_min <= 35:
+                if 12 <= gap_min <= 35:
                     source = 'sleep_loop'
 
         conn.execute("""

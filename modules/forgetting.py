@@ -103,6 +103,11 @@ def compute_fadem_strength(
     if hours_since_access <= 0:
         return current_salience
 
+    # Critical memories never decay (P0 Bug #3 fix)
+    # These are identity/architectural facts that must persist indefinitely.
+    if importance == "critical":
+        return current_salience
+
     # Step 1: Importance modulates lambda (higher importance = slower decay)
     imp = FADEM_IMPORTANCE.get(importance, 0.5)
     lambda_i = FADEM_LAMBDA_BASE * math.exp(-FADEM_MU * imp) * decay_multiplier
