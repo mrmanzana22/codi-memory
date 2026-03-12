@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 import pytz
 
-from modules.config import now_iso
+from modules.config import now_iso, parse_timestamp
 from modules.pg_store import pg
 
 _logger = logging.getLogger(__name__)
@@ -105,17 +105,36 @@ def _retrieve_by_period(days: int, focus: str = None) -> list:
     if focus:
         filters["narrative_themes"] = {"key": "narrative_themes", "value": focus.lower()}
 
+    # Bug #052: Parse cutoff as proper datetime instead of truncating timezone
+    try:
+        cutoff_dt = parse_timestamp(cutoff)
+    except Exception:
+        cutoff_dt = None
+
     memories = []
     offset = None
     while True:
         pts, nxt = pg.scroll(filters=filters, limit=100, is_semantic=False, offset=offset)
         if not pts:
             break
-        # Post-filter by created_at >= cutoff (Range condition)
-        # Normalize to 19-char naive ISO for cross-store comparison
-        cutoff_norm = cutoff[:19]
-        pts = [p for p in pts if (p.payload or {}).get("created_at", "")[:19] >= cutoff_norm]
-        memories.extend(pts)
+        # Post-filter by created_at >= cutoff using proper datetime comparison
+        if cutoff_dt:
+            filtered = []
+            for p in pts:
+                raw_ts = (p.payload or {}).get("created_at", "")
+                if raw_ts:
+                    try:
+                        pt_dt = parse_timestamp(raw_ts)
+                        if pt_dt >= cutoff_dt:
+                            filtered.append(p)
+                    except Exception:
+                        filtered.append(p)  # keep unparseable
+                else:
+                    filtered.append(p)
+            memories.extend(filtered)
+        else:
+            memories.extend(pts)
+        # Bug #053: Only break on exhausted cursor, NOT on empty filtered results
         offset = nxt
         if offset is None:
             break

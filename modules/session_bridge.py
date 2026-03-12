@@ -16,17 +16,20 @@ Created: 2026-02-15 (Session Bridge v1)
 """
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime
 
 from modules.config import (
     FTS_DB_PATH, _emotional_state, _current_session,
-    now_col, now_iso, TZ_COL, connect_fts,
+    now_col, now_iso, TZ_COL, connect_fts, parse_timestamp,
 )
 from modules.tracing import get_trace_id
 from modules.events import event_bus, Events
 from modules.secret_redact import redact_secrets
+
+_logger = logging.getLogger(__name__)
 
 # ============================================================
 # CONSTANTS
@@ -134,7 +137,7 @@ def checkpoint_session_close(
                 if not active_project and topic not in ('metamemory', 'contradiction', 'general', ''):
                     active_project = topic
         except Exception:
-            pass
+            _logger.debug("failed to collect active topics from working memory", exc_info=True)
 
         # 2. Attention schema
         attention_focus = None
@@ -144,7 +147,7 @@ def checkpoint_session_close(
             attention_focus = _attention_schema.get("current_focus")
             attention_strength = _attention_schema.get("focus_strength", 0.0)
         except Exception:
-            pass
+            _logger.debug("failed to read attention schema", exc_info=True)
 
         # 3. Prediction state (from preturn_inject SQLite tables)
         last_pred_topic = None
@@ -157,7 +160,7 @@ def checkpoint_session_close(
                 last_pred_topic = row[0]
                 last_pred_confidence = row[1]
         except Exception:
-            pass
+            _logger.debug("failed to read prediction state", exc_info=True)
 
         # 4. Recent prediction errors (last 3)
         recent_pes = []
@@ -172,7 +175,7 @@ def checkpoint_session_close(
                     "surprise": r[2], "ts": r[3]
                 })
         except Exception:
-            pass
+            _logger.debug("failed to read recent prediction errors", exc_info=True)
 
         # 5. Working memory: top 15 items by effective_score
         wm_items = []
@@ -182,7 +185,7 @@ def checkpoint_session_close(
             wm_active_count = wm_get_active_count()
             wm_items = wm_get_active_items(limit=15)
         except Exception:
-            pass
+            _logger.debug("failed to read working memory items", exc_info=True)
 
         # 6. PAD emotional state
         pad = _emotional_state.get('current', {})
@@ -205,7 +208,7 @@ def checkpoint_session_close(
                     "expiry": intent.get("expiry"),
                 })
         except Exception:
-            pass
+            _logger.debug("failed to collect pending intentions", exc_info=True)
 
         # 8. Active narrative traces
         active_traces = []
@@ -213,7 +216,7 @@ def checkpoint_session_close(
             from modules.working_memory import wm_get_active_traces
             active_traces = wm_get_active_traces(limit=10)
         except Exception:
-            pass
+            _logger.debug("failed to read active narrative traces", exc_info=True)
 
         # 9. Decisions: param + WM decision items
         decision_list = []
@@ -223,7 +226,7 @@ def checkpoint_session_close(
             from modules.working_memory import wm_get_decision_items
             decision_list.extend(wm_get_decision_items(limit=5))
         except Exception:
-            pass
+            _logger.debug("failed to collect decision items from working memory", exc_info=True)
 
         # --- BUILD ROW DATA ---
         trace_id = get_trace_id() or ""
@@ -298,7 +301,7 @@ def checkpoint_session_close(
             from modules.flush import _save_session_state
             _save_session_state(session_summary)
         except Exception:
-            pass
+            _logger.debug("failed to save fallback JSON session state", exc_info=True)
 
         # --- EMIT EVENT ---
         event_bus.emit(Events.SESSION_CLOSE, {
@@ -315,7 +318,7 @@ def checkpoint_session_close(
         try:
             conn.close()
         except Exception:
-            pass
+            _logger.debug("failed to close db connection during error cleanup", exc_info=True)
         return {"ok": False, "error": redact_secrets(str(e)), "checkpoint_id": None}
 
 
@@ -378,9 +381,9 @@ def load_session_bridge() -> dict | None:
                                 "severity": "medium",
                             })
                     except Exception:
-                        pass
+                        _logger.debug("failed to parse intention expiry timestamp", exc_info=True)
         except Exception:
-            pass
+            _logger.debug("failed to check expired intentions", exc_info=True)
 
         # PE2: External events (recordatorios_externos.json newer than checkpoint)
         try:
@@ -392,14 +395,20 @@ def load_session_bridge() -> dict | None:
                 checkpoint_ts = checkpoint.get("created_at", "")
                 for rec in pendientes:
                     rec_ts = rec.get("timestamp", "")
-                    if rec_ts and checkpoint_ts and rec_ts > checkpoint_ts:
-                        prediction_errors.append({
-                            "type": "external_event",
-                            "detail": f"Recordatorio: {rec.get('mensaje', '?')[:80]}",
-                            "severity": rec.get("prioridad", "normal"),
-                        })
+                    if rec_ts and checkpoint_ts:
+                        try:
+                            rec_dt = parse_timestamp(rec_ts)
+                            checkpoint_dt = parse_timestamp(checkpoint_ts)
+                            if rec_dt > checkpoint_dt:
+                                prediction_errors.append({
+                                    "type": "external_event",
+                                    "detail": f"Recordatorio: {rec.get('mensaje', '?')[:80]}",
+                                    "severity": rec.get("prioridad", "normal"),
+                                })
+                        except Exception:
+                            _logger.debug("failed to parse reminder/checkpoint timestamps for comparison", exc_info=True)
         except Exception:
-            pass
+            _logger.debug("failed to check external reminders file", exc_info=True)
 
         # --- GENERATE NARRATIVE BRIDGE ---
         parts = []
@@ -433,7 +442,7 @@ def load_session_bridge() -> dict | None:
             for intent in high_intents:
                 parts.append(f"Pendiente [{intent['priority']}]: {intent.get('action', '?')[:80]}")
         except Exception:
-            pass
+            _logger.debug("failed to parse high-priority pending intentions", exc_info=True)
 
         # Next step from goal stack
         try:
@@ -441,7 +450,7 @@ def load_session_bridge() -> dict | None:
             if goals and goals[0].get("next_step"):
                 parts.append(f"Siguiente paso: {goals[0]['next_step'][:100]}")
         except Exception:
-            pass
+            _logger.debug("failed to parse goal stack for next step", exc_info=True)
 
         bridge_text = "\n".join(parts)[:BRIDGE_MAX_CHARS]
 
@@ -454,6 +463,7 @@ def load_session_bridge() -> dict | None:
         }
 
     except Exception:
+        _logger.debug("failed to load session bridge", exc_info=True)
         return None
 
 

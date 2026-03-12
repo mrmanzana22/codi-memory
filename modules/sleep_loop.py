@@ -2451,8 +2451,8 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     # Emit event (best-effort, won't fail if event bus unavailable in CLI)
     try:
-        _ticks_ok = sum(1 for t in tick_results if t.get("ok") and t.get("status") not in {"tiered_skip", "skipped"})
-        _ticks_completed = sum(
+        _ticks_succeeded = sum(1 for t in tick_results if t.get("ok") and t.get("status") not in {"tiered_skip", "skipped"})
+        _ticks_executed = sum(
             1 for t in tick_results
             if t.get("status") not in {"tiered_skip", "skipped"}
         )
@@ -2460,8 +2460,8 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
             "reason": reason,
             "elapsed_ms": total_ms,
             "duration_seconds": total_ms / 1000.0,
-            "ticks_ok": _ticks_ok,
-            "ticks_completed": _ticks_completed,
+            "ticks_succeeded": _ticks_succeeded,
+            "ticks_executed": _ticks_executed,
             "ticks_total": len(tick_results),
         })
     except Exception:
