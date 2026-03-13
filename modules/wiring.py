@@ -953,6 +953,122 @@ def _on_sleep_loop_complete(event_name: str, data: dict):
         _logger.error("_on_sleep_loop_complete error: %s", redact_secrets(str(e)))
 
 
+def _on_curiosity_resolved(event_name: str, data: dict):
+    """L6: Curiosity loop closure — push discovery to working memory.
+
+    Closes the curiosity loop: question → explore → resolve → WM.
+    This makes resolved discoveries available for prediction context
+    and consolidation priority.
+    """
+    try:
+        from modules.working_memory import push_to_working_memory
+        question = data.get("question", "unknown")
+        category = data.get("category", "general")
+        answer_len = data.get("answer_length", 0)
+        push_to_working_memory(
+            content=f"[CURIOSITY RESOLVED] {question} (category={category}, answer={answer_len} chars)",
+            topic=category,
+            relevance=0.7,
+            source="curiosity_resolved",
+        )
+        _logger.info("L6 curiosity loop: resolved '%s' → WM (category=%s)", question[:60], category)
+    except Exception as e:
+        _logger.warning("_on_curiosity_resolved error: %s", redact_secrets(str(e)))
+
+
+def _on_affective_charge_wiring(event_name: str, data: dict):
+    """L7: Active inference outcome — push AC + action to working memory.
+
+    emotion.py already handles AC→PAD (Sprint 4.2).
+    This handler makes the action selection VISIBLE in working memory
+    so prediction context knows what action was taken and its AC signal.
+    """
+    try:
+        ac = data.get("ac", 0)
+        action = data.get("action", "unknown")
+        topic = data.get("state_topic", "general")
+        # Only push significant AC signals (avoid noise)
+        if abs(ac) > 0.1:
+            from modules.working_memory import push_to_working_memory
+            push_to_working_memory(
+                content=f"[ACTION] {action} on topic={topic}, AC={ac:.3f}",
+                topic=topic,
+                relevance=min(0.8, 0.4 + abs(ac)),
+                source="active_inference",
+            )
+            _logger.info("L7 active inference: action=%s, AC=%.3f, topic=%s", action, ac, topic)
+    except Exception as e:
+        _logger.warning("_on_affective_charge_wiring error: %s", redact_secrets(str(e)))
+
+
+def _on_memory_vaulted(event_name: str, data: dict):
+    """L10: Forgetting homeostasis — track when memories are vaulted.
+
+    Logs vault events so health_monitor can track forgetting rate
+    and consolidation can adjust selectivity based on capacity pressure.
+    """
+    try:
+        mid = data.get("memory_id", "?")
+        _logger.info("L10 forgetting: memory %s vaulted (dormant)", mid[:12])
+    except Exception as e:
+        _logger.warning("_on_memory_vaulted error: %s", redact_secrets(str(e)))
+
+
+def _on_memory_reactivated(event_name: str, data: dict):
+    """L10: Forgetting homeostasis — track when dormant memories reactivate.
+
+    Reactivation means the system needed something it had forgotten —
+    signal that forgetting was too aggressive for this memory.
+    """
+    try:
+        mid = data.get("memory_id", "?")
+        hours = data.get("hours_dormant", 0)
+        _logger.info("L10 forgetting: memory %s reactivated after %.1fh dormant", mid[:12], hours)
+    except Exception as e:
+        _logger.warning("_on_memory_reactivated error: %s", redact_secrets(str(e)))
+
+
+def _on_metacognitive_control(event_name: str, data: dict):
+    """L5+: Metacognitive control applied — log for evidence persistence.
+
+    HOT-3 (Block 1995): metacognitive interventions should be tracked
+    so the system can evaluate whether they helped.
+    """
+    try:
+        strategy = data.get("strategy", "unknown")
+        fok = data.get("fok_score")
+        _logger.info("L5 metacognitive control: strategy=%s, fok=%.2f", strategy, fok or 0)
+    except Exception as e:
+        _logger.warning("_on_metacognitive_control error: %s", redact_secrets(str(e)))
+
+
+def _on_self_model_refreshed(event_name: str, data: dict):
+    """L9: Self-model identity loop — push refresh to working memory.
+
+    Makes self-knowledge available in context so it can influence
+    action selection and response style.
+    """
+    try:
+        from modules.working_memory import push_to_working_memory
+        source = data.get("source", "unknown")
+        disc_count = data.get("discrepancy_count", 0)
+        summary_len = data.get("summary_len", 0)
+        content = f"[SELF-MODEL REFRESHED] source={source}"
+        if disc_count:
+            content += f", {disc_count} discrepancies detected"
+        if summary_len:
+            content += f", summary={summary_len} chars"
+        push_to_working_memory(
+            content=content,
+            topic="self_model",
+            relevance=0.6,
+            source="self_model_refreshed",
+        )
+        _logger.info("L9 self-model loop: refresh from %s (discrepancies=%d)", source, disc_count)
+    except Exception as e:
+        _logger.warning("_on_self_model_refreshed error: %s", redact_secrets(str(e)))
+
+
 def _on_perf_budget_violation(event_name: str, data: dict):
     """S3-04: Performance budget exceeded — log warning, push to WM."""
     try:
@@ -1092,6 +1208,24 @@ def wire_event_bus():
 
     # AST-1: Connect previously dead event — attention prediction error
     event_bus.on(Events.ATTENTION_PREDICTION_ERROR, _on_attention_prediction_error)
+
+    # L6: Curiosity loop closure — resolved discoveries enter working memory
+    event_bus.on(Events.CURIOSITY_RESOLVED, _on_curiosity_resolved)
+
+    # L9: Self-model identity loop — refresh summary enters working memory
+    event_bus.on(Events.SELF_MODEL_REFRESHED, _on_self_model_refreshed)
+
+    # L5+: Metacognitive control evidence — log interventions
+    event_bus.on(Events.METACOGNITIVE_CONTROL_APPLIED, _on_metacognitive_control)
+
+    # L10: Forgetting homeostasis — track vault/reactivation
+    event_bus.on(Events.MEMORY_VAULTED, _on_memory_vaulted)
+    event_bus.on(Events.MEMORY_REACTIVATED, _on_memory_reactivated)
+
+    # L7: Active inference outcome tracking — AC signal to working memory
+    # Note: emotion.py already handles AC→PAD internally (Sprint 4.2)
+    # This handler closes the AWARENESS loop: makes action+AC visible in context
+    event_bus.on(Events.AFFECTIVE_CHARGE_COMPUTED, _on_affective_charge_wiring)
 
     # Bloque 2: PE -> Action handlers (flag-gated inside pe_actions)
     try:
