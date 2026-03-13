@@ -484,7 +484,7 @@ def check_intentions(prompt: str, current_context: str = "") -> list:
                 # Process result
                 if match_result and match_result.get("matched"):
                     triggered.append({
-                        "id": int_id[:8],
+                        "id": str(int_id)[:8],
                         "full_id": int_id,
                         "action": action,
                         "action_type": action_type,
@@ -689,7 +689,7 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
         json.dumps(rec_spec) if rec_spec else None,
     ))
     _log_event(conn, new_id, "created_from_recurrence",
-               json.dumps({"parent": int_id[:8], "next_time": next_time.isoformat()}))
+               json.dumps({"parent": str(int_id)[:8], "next_time": next_time.isoformat()}))
 
 
 def _mark_triggered(conn, int_id: str, detail: str, now: datetime):

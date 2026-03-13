@@ -86,7 +86,8 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
 # CONSTANTS
 # ============================================================
 
-LOCK_FILE = os.path.join(DATA_DIR, "sleep_loop.lock")
+# Lock file in the instance's data directory (not computed from __file__)
+LOCK_FILE = os.path.join(DATA_DIR, "sleep_loop.lock")  # DATA_DIR is instance-aware via config.py
 DEFAULT_BUDGET_MS = 60000
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
@@ -1310,7 +1311,8 @@ def _tick_backup(budget_ms: int) -> dict:
     pg_ok = True
     cloud_required = False
     cloud_ok = True
-    collections = ["codi_memories", "codi_semantic"]
+    from modules.config import COLLECTION_NAME, SEMANTIC_COLLECTION
+    collections = [COLLECTION_NAME, SEMANTIC_COLLECTION]
     qdrant_url = "http://localhost:6333"
 
     for coll in collections:

@@ -1,0 +1,11 @@
+tenant_id: sebastian
+display_name: Sebastian
+user_id: sebastian
+pg_url: ${CODI_PG_URL_SEB}
+daemon_port: 8421
+data_dir: /Users/codi-air/codi-memory/data-sebastian
+qdrant_collection: seb_memories
+qdrant_semantic: seb_semantic
+log_dir: /Users/codi-air/.codi-daemon-seb/logs
+plist_prefix: com.seb
+timezone: America/Bogota

@@ -23,7 +23,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
-    """Use a temporary DB for each test."""
+    """Use a temporary DB for each test.  Also clean up PG test artifacts."""
     test_db = str(tmp_path / "test_prospective.db")
     # Run prospective migrations on the temp DB
     from modules.migrations import apply_migrations
@@ -37,6 +37,14 @@ def isolated_db(tmp_path, monkeypatch):
     if pm._conn:
         pm._conn.close()
         pm._conn = None
+    # Clean up test artifact intentions from PG (check_intentions hits real PG)
+    try:
+        from modules.config_pg import get_conn
+        with get_conn() as conn:
+            conn.execute("DELETE FROM intentions WHERE action LIKE 'Verify threshold filtering%'")
+            conn.execute("DELETE FROM intentions WHERE action LIKE '%_test_%'")
+    except Exception:
+        pass
 
 
 # ============================================================

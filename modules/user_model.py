@@ -42,11 +42,8 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     return any(row[1] == column for row in rows)
 
 
-# Path to FTS database (same as rest of system)
-_FTS_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "memories_fts.db"
-)
+# Path to FTS database — instance-aware via config
+from modules.config import FTS_DB_PATH as _FTS_DB_PATH
 
 
 def get_user_model() -> AgentModel:
@@ -59,7 +56,8 @@ def get_user_model() -> AgentModel:
 
     Returns AgentModel for Hare.
     """
-    model = AgentModel(agent_id="hare")
+    from modules.instance_config import get_instance
+    model = AgentModel(agent_id=get_instance().user_id)
 
     # 1. Traits (from memory + cached knowledge)
     model.traits = _build_traits()

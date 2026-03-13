@@ -48,9 +48,8 @@ __all__ = [
     "register_tools",
 ]
 
-# FTS DB for prediction data access
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_FTS_DB = os.path.join(_BASE_DIR, "memories_fts.db")
+# FTS DB for prediction data access — instance-aware
+from modules.config import FTS_DB_PATH as _FTS_DB
 
 
 def detectar_sorpresa(esperaba: str, paso: str, intensidad: str = "medium") -> str:

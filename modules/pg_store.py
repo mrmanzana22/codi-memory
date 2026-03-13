@@ -43,6 +43,13 @@ from modules.config_pg import get_conn
 
 _logger = logging.getLogger(__name__)
 
+
+def _get_user_id() -> str:
+    """Get the current tenant's user_id from instance config."""
+    from modules.instance_config import get_instance
+    return get_instance().user_id
+
+
 # Colombia timezone (UTC-5)
 _COL_TZ = timezone(timedelta(hours=-5))
 
@@ -177,7 +184,7 @@ def _row_to_point(row: dict, with_vectors: bool = False) -> Point:
         "emotion_p": row.get("emotion_p", 0.0),
         "emotion_a": row.get("emotion_a", 0.0),
         "emotion_d": row.get("emotion_d", 0.0),
-        "user_id": "hare",
+        "user_id": _get_user_id(),
     }
 
     # Merge JSONB metadata into payload

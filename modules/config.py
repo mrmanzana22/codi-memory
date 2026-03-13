@@ -116,18 +116,34 @@ except ImportError:
     Client = None
 
 # ============================================================
+# EARLY DOTENV LOAD (must be before INSTANCE CONFIG)
+# Instance config reads CODI_PG_URL from env — dotenv must load first.
+# ============================================================
+_EARLY_ENV_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+load_dotenv(_EARLY_ENV_PATH)
+
+# ============================================================
+# INSTANCE CONFIG (must be before PATHS)
+# ============================================================
+from modules.instance_config import get_instance as _get_instance
+_inst = _get_instance()
+
+# ============================================================
 # PATHS AND CONSTANTS
 # ============================================================
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # /Users/harecjimenez/codi-memory
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # /Users/codi-air/codi-memory
 PID_FILE = os.path.join(BASE_DIR, ".codi-memory.pid")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
-DATA_DIR = os.path.join(BASE_DIR, "data")
-BACKUP_DIR = BASE_DIR
+# Instance-aware data directory: for Hare data_dir=BASE_DIR (backward compat),
+# for other tenants a separate directory (e.g. data-sebastian/)
+_INSTANCE_DATA_DIR = _inst.data_dir
+DATA_DIR = os.path.join(_INSTANCE_DATA_DIR, "data")
+BACKUP_DIR = _INSTANCE_DATA_DIR
 BACKUP_FILE = os.path.join(BACKUP_DIR, "memories_backup.json")
-TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
-FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
-PROSPECTIVE_DB_PATH = os.path.join(os.path.dirname(FTS_DB_PATH), "prospective.db")
+TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")  # shared (read-only)
+FTS_DB_PATH = os.path.join(_INSTANCE_DATA_DIR, "memories_fts.db")
+PROSPECTIVE_DB_PATH = os.path.join(_INSTANCE_DATA_DIR, "prospective.db")
 
 # ---------------------------------------------------------------------------
 # Centralized SQLite connection factory
@@ -213,7 +229,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # Cargar variables de entorno
 load_dotenv(ENV_PATH)
 
-USER_ID = os.getenv("USER_ID", "hare")
+USER_ID = _inst.user_id
+TENANT_ID = _inst.tenant_id
 
 # ---------------------------------------------------------------------------
 # Storage backend: "legacy" (Qdrant+mem0+SQLite) or "pg" (PostgreSQL+pgvector)
@@ -226,8 +243,8 @@ BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))  # 10
 BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "20"))  # rotation cap
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
-COLLECTION_NAME = "codi_memories"          # Episodic store (existing)
-SEMANTIC_COLLECTION = "codi_semantic"       # Semantic store (Phase 1)
+COLLECTION_NAME = _inst.qdrant_collection   # Episodic store (per-tenant)
+SEMANTIC_COLLECTION = _inst.qdrant_semantic  # Semantic store (per-tenant)
 
 # ============================================================
 # PHASE 1: CONSOLIDATION PARAMETERS

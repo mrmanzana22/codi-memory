@@ -34,11 +34,9 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Connection string
 # ---------------------------------------------------------------------------
-# Priority: env var > default (Easypanel)
-PG_CONNECTION_STRING = os.getenv(
-    "CODI_PG_URL",
-    "postgresql://codi:c0d1m3m0ry2026pgv@lx6zon.easypanel.host:5433/codi_memory",
-)
+# Priority: InstanceConfig (YAML with env interpolation) > _default_hare() fallback
+from modules.instance_config import get_instance as _get_instance
+PG_CONNECTION_STRING = _get_instance().pg_url
 
 # ---------------------------------------------------------------------------
 # Pool configuration

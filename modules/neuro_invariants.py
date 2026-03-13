@@ -206,8 +206,8 @@ def check_runtime_invariants() -> list:
     Returns list of violation dicts. Empty = all OK.
     """
     violations = []
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    fts_db = os.path.join(BASE_DIR, "memories_fts.db")
+    from modules.config import FTS_DB_PATH
+    fts_db = FTS_DB_PATH
 
     if not os.path.exists(fts_db):
         violations.append({

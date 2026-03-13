@@ -34,10 +34,9 @@ THEME_MIN_NARRATIVES = 2        # Min narratives for theme extraction
 
 
 def _get_fts_db():
-    """Get path to FTS DB."""
-    import os
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "memories_fts.db")
+    """Get path to FTS DB (instance-aware)."""
+    from modules.config import FTS_DB_PATH
+    return FTS_DB_PATH
 
 
 def ensure_renorm_tables(conn: sqlite3.Connection):

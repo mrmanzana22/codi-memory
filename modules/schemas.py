@@ -28,7 +28,7 @@ SCHEMA_CONGRUENCE_MAX_BONUS = 0.06   # Max bonus for schema-congruent memories
 SCHEMA_MIN_FACTS_FOR_EXTRACTION = 3  # Need at least 3 facts to form a schema
 SCHEMA_MATCH_THRESHOLD = 0.3         # Min confidence to count as a match
 
-FTS_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memories_fts.db")
+from modules.config import FTS_DB_PATH  # instance-aware
 
 
 # ============================================================

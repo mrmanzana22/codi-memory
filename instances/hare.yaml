@@ -1,0 +1,11 @@
+tenant_id: hare
+display_name: Hare
+user_id: hare
+pg_url: ${CODI_PG_URL}
+daemon_port: 8420
+data_dir: /Users/codi-air/codi-memory
+qdrant_collection: codi_memories
+qdrant_semantic: codi_semantic
+log_dir: /Users/codi-air/.codi-daemon/logs
+plist_prefix: com.codi
+timezone: America/Bogota
