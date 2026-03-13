@@ -1,5 +1,5 @@
 {
-  "bridge_text": "Ultima sesion: Completamos baseline E0.1 y definimos SLOs v0\nProyecto activo: consciencia\nHan pasado ELAPSED horas\n[Sleep] SLEEP REPORT (launchd, 3200ms)\n- prospective: OK (150ms) intention maintenance applied\n- health: OK (800ms) fts: queue e\nPendiente [high]: Deploy trading bot v2\nSiguiente paso: E1.2 parity harness",
+  "bridge_text": "Ultima sesion: Completamos baseline E0.1 y definimos SLOs v0\nProyecto activo: aprendizaje\nHan pasado ELAPSED horas\n[Sleep] SLEEP REPORT (launchd, 3200ms)\n- prospective: OK (150ms) intention maintenance applied\n- health: OK (800ms) fts: queue e\nPendiente [high]: Deploy trading bot v2\nSiguiente paso: E1.2 parity harness",
   "has_sleep_report": true,
   "hours_since_last": 0.0,
   "prediction_errors": []

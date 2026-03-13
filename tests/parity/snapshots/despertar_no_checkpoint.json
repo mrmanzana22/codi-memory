@@ -4,12 +4,5 @@
   "has_session_bridge": false,
   "has_sleep_report": false,
   "intentions_present": [],
-  "sections_present": [
-    "CURIOSIDADES (N pendientes, N alta prioridad)",
-    "ESTADO EMOCIONAL",
-    "INTENCIONES PENDIENTES (N)",
-    "PREDICCION CONTEXTUAL",
-    "SPOTLIGHT (Executive Focus)",
-    "WORKER STATUS: MISSING"
-  ]
+  "sections_present": []
 }

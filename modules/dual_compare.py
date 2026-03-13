@@ -313,13 +313,14 @@ def compare_results(kind: str, sync_dict: dict, async_dict: dict,
         }
 
     # Both have same action — check memory_id for saved_new
-    # Only compare if BOTH sides explicitly report memory_id.
-    # The async worker often truncates results, so missing memory_id is normal.
+    # Only flag divergence when one side is None and the other is not,
+    # indicating one side failed to produce an ID. Two different non-None
+    # IDs from independent writes (dual mode) are expected and not a divergence.
     if sync_action == "saved_new":
         sync_mid = sync_dict.get("memory_id")
         async_mid = async_dict.get("memory_id")
         if "memory_id" in sync_dict and "memory_id" in async_dict:
-            if sync_mid != async_mid:
+            if (sync_mid is None) != (async_mid is None):
                 diff_details["memory_id"] = {"sync": sync_mid, "async": async_mid}
                 return {
                     "match": False,
@@ -446,7 +447,7 @@ def record_async_intent(
             "(request_fingerprint, trace_id, kind, sync_completed_at, "
             " async_job_id, async_status_at_record, write_mode, compare_status, "
             " created_at) "
-            "VALUES (?, ?, ?, NULL, ?, 'queued', ?, 'pending', ?)",
+            "VALUES (?, ?, ?, '', ?, 'queued', ?, 'pending', ?)",
             (fingerprint, trace_id, kind, async_job_id, write_mode, now),
         )
         conn.commit()

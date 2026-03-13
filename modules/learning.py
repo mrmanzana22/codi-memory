@@ -179,7 +179,7 @@ def auto_learn_from_session() -> str:
         try:
             result = pg.add(content=session_summary, category="aprendizaje", source="experienced", importance="high")
             if result:
-                mem_id = result.get("id") if isinstance(result, dict) else None
+                mem_id = result["results"][0].get("id") if isinstance(result, dict) and result.get("results") else None
                 if mem_id:
                     enrich_with_ownership(memory_id=mem_id, category="aprendizaje", content=session_summary, source="experienced", importance="high")
             lines.append(f"- Resumen de sesion guardado")

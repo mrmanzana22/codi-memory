@@ -387,8 +387,6 @@ class TestDespertarSections:
 
     def _setup_despertar_mocks(self, monkeypatch, db_path):
         """Minimal mocks for despertar_codi."""
-        from tests.parity.test_parity_harness import FakeQdrant
-
         monkeypatch.setattr(
             "modules.lifecycle._verificar_salud_memoria_interna",
             lambda: {"ok": True, "total_memories": 100, "message": "OK"}
@@ -396,13 +394,28 @@ class TestDespertarSections:
         monkeypatch.setattr("modules.triggers._load_triggers", lambda: [])
         monkeypatch.setattr("modules.maintenance._verificar_tareas_vencidas", lambda: [])
 
-        fake_qdrant = FakeQdrant([])
-        monkeypatch.setattr("modules.lifecycle.qdrant", fake_qdrant)
+        # Mock pg_store (replaces old qdrant/memory mocks after pg migration)
+        mock_pg = MagicMock()
+        mock_pg.scroll.return_value = ([], None)
+        mock_pg.count.return_value = MagicMock(points_count=100)
+        mock_pg.search.return_value = []
+        monkeypatch.setattr("modules.lifecycle.pg", mock_pg)
 
-        mock_memory = MagicMock()
-        mock_memory.search.return_value = {"results": []}
-        monkeypatch.setattr("modules.lifecycle.memory", mock_memory)
-        monkeypatch.setattr("modules.memory_smart.memory", mock_memory)
+        # Mock goals (deterministic, no real DB)
+        monkeypatch.setattr("modules.goals.get_context_goals", lambda limit=5: {
+            "goals": [
+                {"title": "Consciencia", "level": "project",
+                 "goal_what": "Sistema cognitivo con 5 loops",
+                 "goal_why": "Core identity project",
+                 "goal_next_step": "E1.2 parity harness",
+                 "goal_last_state": "Baseline E0.1 complete"},
+            ]
+        })
+
+        # Mock worker health (deterministic)
+        monkeypatch.setattr("modules.assessment.get_worker_health", lambda: {
+            "status": "ok", "age_minutes": 1.0, "queue_backlog": {}
+        })
 
         monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
 
@@ -474,13 +487,14 @@ class TestTickStatusSnapshot:
 
     @staticmethod
     def _mock_all_ticks(monkeypatch, elapsed_ms=50):
-        """Mock all 9 ticks as instant, deterministic functions."""
+        """Mock all 13 ticks as instant, deterministic functions."""
         def _make_tick(name):
             return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": elapsed_ms, "detail": "ok"}
 
-        for tick_name in ("prospective", "health", "self_model", "reconsolidation",
-                          "consolidation", "homeostasis", "curiosity", "backup",
-                          "causal_discovery"):
+        for tick_name in ("prospective", "health", "health_snapshot", "self_model",
+                          "reconsolidation", "consolidation", "homeostasis",
+                          "curiosity", "curiosity_resolve", "backup",
+                          "causal_discovery", "sharpe_insights", "proactive_contact"):
             monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
         # S4-05: Mock world model prioritization to preserve original tick order
@@ -541,13 +555,14 @@ class TestWritePathSmoke:
 
     def test_report_written_once(self, parity_env, monkeypatch):
         """run_sleep_loop produces a report; second call doesn't clobber."""
-        # Mock ALL 8 ticks to be fast and deterministic
+        # Mock ALL 13 ticks to be fast and deterministic
         def _make_tick(name):
             return lambda budget_ms: {"tick": name, "ok": True, "elapsed_ms": 10, "detail": "ok"}
 
-        for tick_name in ("prospective", "health", "self_model", "reconsolidation",
-                          "consolidation", "homeostasis", "curiosity", "backup",
-                          "causal_discovery"):
+        for tick_name in ("prospective", "health", "health_snapshot", "self_model",
+                          "reconsolidation", "consolidation", "homeostasis",
+                          "curiosity", "curiosity_resolve", "backup",
+                          "causal_discovery", "sharpe_insights", "proactive_contact"):
             monkeypatch.setattr(f"modules.sleep_loop._tick_{tick_name}", _make_tick(tick_name))
         monkeypatch.setattr("modules.sleep_loop._log_tick_metric", lambda *a, **k: None)
         # S4-05: Mock world model to preserve original tick order

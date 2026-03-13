@@ -44,7 +44,14 @@ def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) 
         importance=importance_map.get(momento, 'medium'),
     )
 
-    mem_id = result.get("id") if isinstance(result, dict) else None
+    # pg.add() returns {"results": [{"id": uuid, ...}]} (mem0-compatible format)
+    mem_id = None
+    if isinstance(result, dict):
+        results_list = result.get("results")
+        if results_list and isinstance(results_list, list) and len(results_list) > 0:
+            mem_id = results_list[0].get("id")
+        else:
+            mem_id = result.get("id")  # fallback for flat format
     if not mem_id:
         raise RuntimeError(f"pg.add() returned no id for checkpoint: {result!r}")
 

@@ -237,13 +237,43 @@ def fts_queue_stats() -> dict:
 
 
 def search_fts(query: str, limit: int = 20) -> list:
-    """Busca usando PG tsvector (BM25-style ranking).
+    """Busca usando PG tsvector (BM25-style ranking) con fallback a SQLite FTS5.
 
     Migrated from SQLite FTS5 to PostgreSQL tsvector in Fase 2.
+    Falls back to SQLite FTS5 when PG returns empty (hybrid transition).
     Returns same format: [{memory_id, content, category, source, bm25_rank}]
     """
+    if not query or not query.strip():
+        return []
     try:
-        return pg.search_fts(query, limit=min(limit, 100))
+        results = pg.search_fts(query, limit=min(limit, 100))
+        if results:
+            return results
+    except Exception:
+        pass
+    # Fallback: SQLite FTS5 (for transition period / tests)
+    try:
+        from modules.fts_safety import sanitize_fts_query
+        safe_q = sanitize_fts_query(query)
+        if not safe_q:
+            return []
+        conn = _fts_conn()
+        rows = conn.execute(
+            "SELECT memory_id, content, category, source, rank "
+            "FROM memories_fts WHERE memories_fts MATCH ? "
+            "ORDER BY rank LIMIT ?",
+            (safe_q, min(limit, 100)),
+        ).fetchall()
+        return [
+            {
+                "memory_id": r["memory_id"],
+                "content": r["content"],
+                "category": r["category"],
+                "source": r["source"],
+                "bm25_rank": r["rank"],
+            }
+            for r in rows
+        ]
     except Exception:
         return []
 
@@ -291,20 +321,15 @@ def get_text_by_id(memory_id: str):
 
 
 def search_with_fts_content(query, user_id=None, limit=5) -> dict:
-    """Vector cosine similarity search (pgvector).
+    """Hybrid search via pg.search (vector + FTS + activation).
 
     Returns mem0-compatible format: {"results": [{"id", "memory", "score"}, ...]}
     Score is cosine similarity (0-1), used by BMR dedup scoring.
     PG stores original content (no FTS overlay needed).
     """
     try:
-        from modules.consolidation_common import _embed_text
-        embedding = _embed_text(query)
-        points = pg.query_vector(embedding, limit=limit, is_semantic=False)
-        return {"results": [
-            {"id": str(p.id), "memory": p.payload.get("data", ""), "score": p.score}
-            for p in points
-        ]}
+        results = pg.search(query, limit=limit, is_semantic=False)
+        return results if results else {"results": []}
     except Exception:
         return {"results": []}
 

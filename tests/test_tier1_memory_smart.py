@@ -78,6 +78,10 @@ class TestFtsIndexing:
         assert result is True  # No error
 
     def test_search_finds_indexed(self, patch_externals):
+        # search_fts now delegates to pg.search_fts, so populate FakePG too
+        patch_externals["pg"].add_point("codi_memories", "mem-1",
+            {"data": "FastAPI backend development", "category": "aprendizaje",
+             "source": "learned", "importance": "high"})
         ms.index_memory_fts("mem-1", "FastAPI backend development", "aprendizaje", "learned", "high")
         results = ms.search_fts("FastAPI")
         assert len(results) >= 1
@@ -185,15 +189,15 @@ class TestAddMemorySmart:
         assert "new_id" in parsed
 
     def test_duplicate_skipped(self, patch_externals):
-        """Adding identical content twice triggers dedup."""
-        mem0 = patch_externals["mem0"]
+        """Adding identical content twice triggers dedup via BMR."""
+        from unittest.mock import patch
         # First add
         ms.add_memory_smart("exact same content", category="general")
-        # FakeMem0 uses substring match with score=0.8
-        # Default dedup_threshold=0.90, so 0.8 < 0.90 -> won't dedup
-        # Lower the threshold to trigger dedup
-        result = ms.add_memory_smart("exact same content", category="general",
-                                      dedup_threshold=0.70)
+        # FakePG search returns score=0.8. BMR decides dedup, not cosine threshold.
+        # Mock BMR to return positive log_bf (= merge/duplicate).
+        with patch('modules.bmr.compute_log_bayes_factor', return_value=2.0):
+            result = ms.add_memory_smart("exact same content", category="general",
+                                          dedup_threshold=0.70)
         parsed = json.loads(result)
         assert parsed["action"] == "skipped_duplicate"
 
@@ -215,11 +219,13 @@ class TestAddMemorySmart:
         ms.add_memory_smart("fts indexed content", category="aprendizaje")
         assert _text_count(db) >= 1
 
-    def test_add_error_returns_json(self, patch_externals):
-        """When mem0 breaks, add_memory_smart returns error JSON."""
+    def test_add_error_returns_json(self, patch_externals, monkeypatch):
+        """When pg breaks, add_memory_smart returns error JSON."""
         def broken(*a, **kw):
             raise RuntimeError("boom")
-        patch_externals["mem0"].search = broken
+        # add_memory_smart calls search_with_fts_content which uses pg.query_vector
+        # Break the pg.add to trigger error in the save path
+        patch_externals["pg"].add = broken
         result = ms.add_memory_smart("should fail", category="general")
         parsed = json.loads(result)
         assert parsed["action"] == "error"

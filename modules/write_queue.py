@@ -89,8 +89,7 @@ def enqueue_write_job(
     conn = _get_conn(db_path)
     now = now_iso()
     payload_json = json.dumps(payload, ensure_ascii=False, default=str)
-    dedupe_source = json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
-    effective_dedupe_key = dedupe_key or compute_dedupe_key(kind, dedupe_source)
+    effective_dedupe_key = dedupe_key  # Only dedupe when caller explicitly provides a key
 
     # Check dedupe: if same key exists in active states, return existing job
     if effective_dedupe_key:

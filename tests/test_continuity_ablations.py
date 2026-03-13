@@ -125,23 +125,32 @@ def clean_pad():
     _emotional_state.update(saved)
 
 
-class FakeQdrantPoint:
+class FakePoint:
+    """Minimal point mimic for pg.scroll results."""
     def __init__(self, point_id, payload):
         self.id = point_id
         self.payload = payload
 
 
-class FakeQdrant:
+class FakePg:
+    """Minimal pg_store fake for lifecycle tests.
+
+    Matches the modules.pg_store.pg interface used by despertar_codi:
+      - scroll(filters=, limit=, is_semantic=, offset=) -> (points, next_offset)
+      - count(is_semantic=) -> object with .points_count
+      - search(query, limit=, is_semantic=) -> dict
+    """
     def __init__(self, points):
         self.points = points
-        self.payloads_set = []
 
-    def scroll(self, collection_name, scroll_filter=None, limit=100,
-               with_payload=True, with_vectors=False, offset=None):
+    def scroll(self, filters=None, limit=50, is_semantic=None, offset=0, **kwargs):
         return (self.points, None)
 
-    def set_payload(self, collection_name, payload, points):
-        self.payloads_set.append({"payload": payload, "points": points})
+    def count(self, is_semantic=None):
+        return MagicMock(points_count=50)
+
+    def search(self, query, limit=5, is_semantic=None, **kwargs):
+        return {"results": []}
 
 
 def _insert_checkpoint(db_path, **overrides):
@@ -207,20 +216,17 @@ class TestWithoutBridge:
 
         # Mock the other deps
         monkeypatch.setattr(
-            "modules.consciousness._verificar_salud_memoria_interna",
+            "modules.lifecycle._verificar_salud_memoria_interna",
             lambda: {"ok": True, "total_memories": 50, "message": "OK"}
         )
         monkeypatch.setattr("modules.triggers._load_triggers", lambda: [])
         monkeypatch.setattr("modules.maintenance._verificar_tareas_vencidas", lambda: [])
-        monkeypatch.setattr("modules.consciousness.qdrant", FakeQdrant([]))
-        mock_memory = MagicMock()
-        mock_memory.search.return_value = {"results": []}
-        monkeypatch.setattr("modules.consciousness.memory", mock_memory)
+        monkeypatch.setattr("modules.lifecycle.pg", FakePg([]))
         from modules.events import event_bus
         monkeypatch.setattr(event_bus, "emit", lambda *a, **kw: None)
 
         from modules.consciousness import despertar_codi
-        result_text = despertar_codi()
+        result_text = despertar_codi(verbose=True)
 
         # Should NOT have SESSION BRIDGE section
         assert "SESSION BRIDGE" not in result_text
@@ -389,15 +395,12 @@ class TestStaleCheckpoint:
 
         # Now test despertar with this stale data
         monkeypatch.setattr(
-            "modules.consciousness._verificar_salud_memoria_interna",
+            "modules.lifecycle._verificar_salud_memoria_interna",
             lambda: {"ok": True, "total_memories": 50, "message": "OK"}
         )
         monkeypatch.setattr("modules.triggers._load_triggers", lambda: [])
         monkeypatch.setattr("modules.maintenance._verificar_tareas_vencidas", lambda: [])
-        monkeypatch.setattr("modules.consciousness.qdrant", FakeQdrant([]))
-        mock_memory = MagicMock()
-        mock_memory.search.return_value = {"results": []}
-        monkeypatch.setattr("modules.consciousness.memory", mock_memory)
+        monkeypatch.setattr("modules.lifecycle.pg", FakePg([]))
         monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
         from modules.events import event_bus
         monkeypatch.setattr(event_bus, "emit", lambda *a, **kw: None)

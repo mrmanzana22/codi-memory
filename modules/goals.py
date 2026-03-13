@@ -600,7 +600,7 @@ def complete_goal(goal_id: str, outcome: str = "") -> dict:
                     parent = cur.fetchone()
                 parent_title = parent["title"] if parent else "?"
                 result["cascade_suggestion"] = {
-                    "parent_id": parent_id,
+                    "parent_id": str(parent_id),
                     "parent_title": parent_title,
                     "message": f"All children completed. Consider completing parent '{parent_title}'.",
                 }

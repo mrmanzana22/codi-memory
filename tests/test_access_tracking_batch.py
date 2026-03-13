@@ -4,14 +4,15 @@ ACCESS TRACKING BATCH TESTS
 ============================
 Unit tests for modules/access_tracking.py aggregator + flusher.
 
-7 tests:
+8 tests:
   1. Aggregation: multiple record_access for same id merges correctly
   2. Aggregation: different ids kept separate
-  3. flush_now builds correct batch ops and calls batch_update_points
-  4. Chunking: >MAX_OPS_PER_BATCH items split into multiple calls
-  5. Failure in batch_update_points does not crash, increments error/dropped
-  6. record_spreading enqueues all updates correctly
-  7. Legacy mode calls set_payload directly (bypass aggregator)
+  3. flush_now drains pending and calls pg.update_payload per point
+  4. Chunking: >MAX_OPS_PER_BATCH items still all get flushed
+  5. Failure in pg.update_payload does not crash, increments error/dropped
+  6. Empty flush is a no-op
+  7. record_spreading enqueues all updates correctly
+  8. Legacy mode calls pg.update_payload directly (bypass aggregator)
 
 Run: ./venv/bin/pytest tests/test_access_tracking_batch.py -v
 """
@@ -38,7 +39,7 @@ def _reset_module(monkeypatch):
 
 
 class TestAggregation:
-    """record_access merges payloads per (collection, point_id)."""
+    """record_access merges payloads per point_id."""
 
     def test_same_id_merges(self):
         """Multiple writes to same id: last-writer-wins per field."""
@@ -55,7 +56,6 @@ class TestAggregation:
         })
 
         with at._lock:
-            # _pending is keyed by str(point_id), not (collection, point_id)
             entry = at._pending["id1"]
 
         assert entry["attention_access_count"] == 6
@@ -72,22 +72,21 @@ class TestAggregation:
         at.record_access("coll_b", "id1", {"count": 3})
 
         with at._lock:
-            # pg_store is collection-agnostic: keyed by point_id only
-            assert len(at._pending) == 2  # id1 (merged), id2
-            assert at._pending["id1"]["count"] == 3  # last-writer-wins: coll_b overwrites coll_a
+            assert len(at._pending) == 2
+            assert at._pending["id1"]["count"] == 3
             assert at._pending["id2"]["count"] == 2
 
 
 class TestFlush:
-    """flush_now drains pending and calls batch_update_points."""
+    """flush_now drains pending and calls pg.update_payload."""
 
     def test_flush_builds_batch_ops(self, monkeypatch):
-        """flush_now groups by collection, calls batch_update_points once per collection."""
+        """flush_now calls pg.update_payload once per pending point."""
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
-        mock_qdrant = MagicMock()
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(return_value=True)
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         at.record_access("codi_memories", "id1", {"count": 1})
         at.record_access("codi_memories", "id2", {"count": 2})
@@ -95,47 +94,47 @@ class TestFlush:
 
         stats = at.flush_now("test")
 
-        assert mock_qdrant.batch_update_points.call_count == 2
-        calls = mock_qdrant.batch_update_points.call_args_list
+        assert mock_update.call_count == 3
+        called_ids = {c.args[0] for c in mock_update.call_args_list}
+        assert called_ids == {"id1", "id2", "id3"}
 
-        collections_called = {c.kwargs["collection_name"] for c in calls}
-        assert collections_called == {"codi_memories", "codi_semantic"}
-
-        # Find the episodic call
-        for call in calls:
-            if call.kwargs["collection_name"] == "codi_memories":
-                ops = call.kwargs["update_operations"]
-                assert len(ops) == 2
+        for call in mock_update.call_args_list:
+            pid, payload = call.args
+            if pid == "id1":
+                assert payload == {"count": 1}
+            elif pid == "id2":
+                assert payload == {"count": 2}
+            elif pid == "id3":
+                assert payload == {"obs": "t1"}
 
         assert stats["flushed"] == 3
         assert stats["flush_count"] == 1
         assert stats["pending"] == 0
 
     def test_chunking(self, monkeypatch):
-        """More than MAX_OPS_PER_BATCH items split into multiple calls."""
+        """More than MAX_OPS_PER_BATCH items are all flushed across chunks."""
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
         monkeypatch.setattr(at, "MAX_OPS_PER_BATCH", 5)
-        mock_qdrant = MagicMock()
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(return_value=True)
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         for i in range(12):
             at.record_access("coll", f"id{i}", {"v": i})
 
-        at.flush_now("test")
+        stats = at.flush_now("test")
 
-        # 12 items / 5 per chunk = 3 calls
-        assert mock_qdrant.batch_update_points.call_count == 3
+        assert mock_update.call_count == 12
+        assert stats["flushed"] == 12
 
     def test_failure_does_not_crash(self, monkeypatch):
-        """Qdrant error increments dropped/errors but doesn't raise."""
+        """pg.update_payload error increments dropped/errors but doesn't raise."""
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
-        mock_qdrant = MagicMock()
-        mock_qdrant.batch_update_points.side_effect = RuntimeError("network")
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(side_effect=RuntimeError("network"))
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         at.record_access("coll", "id1", {"v": 1})
         at.record_access("coll", "id2", {"v": 2})
@@ -150,12 +149,12 @@ class TestFlush:
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
-        mock_qdrant = MagicMock()
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(return_value=True)
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         stats = at.flush_now("test")
 
-        mock_qdrant.batch_update_points.assert_not_called()
+        mock_update.assert_not_called()
         assert stats["flush_count"] == 0
 
 
@@ -167,8 +166,8 @@ class TestSpreading:
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
-        mock_qdrant = MagicMock()
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(return_value=True)
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         updates = {"id1": 0.7, "id2": 0.8, "id3": 0.55}
         at.record_spreading("codi_memories", updates, last_accessed="2026-01-01T00:00")
@@ -177,17 +176,12 @@ class TestSpreading:
 
         stats = at.flush_now("test")
 
-        assert mock_qdrant.batch_update_points.call_count == 1
-        call = mock_qdrant.batch_update_points.call_args
-        ops = call.kwargs["update_operations"]
-        assert len(ops) == 3
+        assert mock_update.call_count == 3
 
-        # Verify payload structure
         payloads = {}
-        for op in ops:
-            sp = op.set_payload
-            pid = sp.points[0]
-            payloads[pid] = sp.payload
+        for call in mock_update.call_args_list:
+            pid, payload = call.args
+            payloads[pid] = payload
 
         assert payloads["id1"]["attention_salience"] == 0.7
         assert payloads["id2"]["attention_salience"] == 0.8
@@ -200,21 +194,16 @@ class TestLegacyMode:
     """Legacy mode bypasses aggregator."""
 
     def test_legacy_calls_set_payload_directly(self, monkeypatch):
-        """In legacy mode, record_access calls qdrant.set_payload directly."""
+        """In legacy mode, record_access calls pg.update_payload directly."""
         import modules.access_tracking as at
         from unittest.mock import MagicMock
 
         monkeypatch.setattr(at, "ACCESS_TRACKING_MODE", "legacy")
-        mock_qdrant = MagicMock()
-        monkeypatch.setattr("modules.config.qdrant", mock_qdrant)
+        mock_update = MagicMock(return_value=True)
+        monkeypatch.setattr(at, "pg", MagicMock(update_payload=mock_update))
 
         at.record_access("coll", "id1", {"count": 1})
 
-        mock_qdrant.set_payload.assert_called_once_with(
-            collection_name="coll",
-            payload={"count": 1},
-            points=["id1"],
-        )
-        # Aggregator should be empty
+        mock_update.assert_called_once_with("id1", {"count": 1})
         with at._lock:
             assert len(at._pending) == 0

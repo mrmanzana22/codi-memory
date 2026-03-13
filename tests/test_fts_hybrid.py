@@ -116,45 +116,48 @@ class TestGetTextsByIds:
 # ============================================================
 
 class TestSearchWithFtsContent:
-    def _mock_memory_search(self, monkeypatch):
-        """Mock memory.search to return fake results with compressed text."""
-        fake_results = {
-            "results": [
-                {"id": "test-a", "memory": "compressed version A", "score": 0.95},
-                {"id": "test-b", "memory": "compressed version B", "score": 0.80},
-                {"id": "test-c", "memory": "compressed version C", "score": 0.70},
-            ]
-        }
+    """Post PG-migration: search_with_fts_content wraps pg.search().
+
+    PG stores original text natively (no mem0 compression overlay needed).
+    These tests verify the pg.search delegation works correctly.
+    """
+
+    def _mock_pg_search(self, monkeypatch, fake_results):
+        """Mock pg.search to return fake results."""
         import modules.memory_smart as ms
-        monkeypatch.setattr(ms.memory, "search", lambda **kwargs: fake_results)
-        return fake_results
+        monkeypatch.setattr(ms.pg, "search", lambda *a, **kw: fake_results)
 
     def test_replaces_text(self, monkeypatch):
-        """FTS text replaces mem0 compressed text."""
+        """PG returns original text (no compression artifact)."""
         from modules.memory_smart import search_with_fts_content
 
-        self._mock_memory_search(monkeypatch)
-        _insert_test_rows([
-            ("test-a", "ORIGINAL full text A with details", "general", "experienced", "high"),
-            ("test-b", "ORIGINAL full text B with details", "general", "told", "medium"),
-        ])
+        fake_results = {
+            "results": [
+                {"id": "test-a", "memory": "ORIGINAL full text A with details", "score": 0.95},
+                {"id": "test-b", "memory": "ORIGINAL full text B with details", "score": 0.80},
+                {"id": "test-c", "memory": "Original text C", "score": 0.70},
+            ]
+        }
+        self._mock_pg_search(monkeypatch, fake_results)
 
         results = search_with_fts_content(query="test", user_id="u1", limit=3)
         r = results["results"]
 
         assert r[0]["memory"] == "ORIGINAL full text A with details"
         assert r[1]["memory"] == "ORIGINAL full text B with details"
-        # test-c not in FTS, keeps compressed
-        assert r[2]["memory"] == "compressed version C"
+        assert r[2]["memory"] == "Original text C"
 
     def test_preserves_ranking(self, monkeypatch):
         """id and score stay untouched."""
         from modules.memory_smart import search_with_fts_content
 
-        self._mock_memory_search(monkeypatch)
-        _insert_test_rows([
-            ("test-a", "Original A", "general", "experienced", "medium"),
-        ])
+        fake_results = {
+            "results": [
+                {"id": "test-a", "memory": "Original A", "score": 0.95},
+                {"id": "test-b", "memory": "Original B", "score": 0.80},
+            ]
+        }
+        self._mock_pg_search(monkeypatch, fake_results)
 
         results = search_with_fts_content(query="test", user_id="u1", limit=3)
         r = results["results"]
@@ -165,30 +168,26 @@ class TestSearchWithFtsContent:
         assert r[1]["score"] == 0.80
 
     def test_fallback_on_fts_miss(self, monkeypatch):
-        """When FTS has no match, mem0 text is kept."""
+        """When pg.search returns no results, empty list returned."""
         from modules.memory_smart import search_with_fts_content
 
-        self._mock_memory_search(monkeypatch)
-        # Don't insert any FTS rows
+        self._mock_pg_search(monkeypatch, {"results": []})
 
         results = search_with_fts_content(query="test", user_id="u1", limit=3)
-        r = results["results"]
-
-        assert r[0]["memory"] == "compressed version A"
-        assert r[1]["memory"] == "compressed version B"
+        assert results == {"results": []}
 
     def test_empty_results(self, monkeypatch):
         """Empty/None results pass through."""
         from modules.memory_smart import search_with_fts_content
         import modules.memory_smart as ms
 
-        monkeypatch.setattr(ms.memory, "search", lambda **kwargs: {"results": []})
+        monkeypatch.setattr(ms.pg, "search", lambda *a, **kw: {"results": []})
         results = search_with_fts_content(query="nothing", user_id="u1", limit=3)
         assert results == {"results": []}
 
-        monkeypatch.setattr(ms.memory, "search", lambda **kwargs: None)
+        monkeypatch.setattr(ms.pg, "search", lambda *a, **kw: None)
         results = search_with_fts_content(query="nothing", user_id="u1", limit=3)
-        assert results is None
+        assert results == {"results": []}
 
 
 # ============================================================

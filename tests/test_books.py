@@ -62,9 +62,11 @@ class TestCargarLibrosDeQdrant:
 
     def test_with_libro_points(self, patch_externals, books_file):
         from modules.books import _cargar_libros_de_qdrant
-        fake_qdrant = patch_externals["qdrant"]
+        fake_pg = patch_externals["pg"]
 
-        libro_point = FakeQdrantPoint("lib-1", {
+        # Pre-populate FakePG with a libro point (pg migration: books use pg.scroll now)
+        fake_pg.add_point("codi_memories", "lib-1", {
+            'data': 'LIBRO: TRADING - Libro de trading',
             'category': 'libro',
             'libro_key': 'trading',
             'nombre': 'TRADING',
@@ -73,17 +75,6 @@ class TestCargarLibrosDeQdrant:
             'estado': 'activo',
             'siguiente_paso': 'Siguiente paso',
         })
-
-        call_count = [0]
-        original_scroll = fake_qdrant.scroll
-
-        def mock_scroll(collection_name, scroll_filter=None, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return ([libro_point], None)
-            return ([], None)
-
-        fake_qdrant.scroll = mock_scroll
 
         data = _cargar_libros_de_qdrant()
         assert "trading" in data["libros"]

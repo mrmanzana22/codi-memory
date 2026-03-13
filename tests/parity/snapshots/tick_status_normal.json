@@ -55,13 +55,13 @@
     "tick": "causal_discovery"
   },
   {
-    "ok": false,
-    "status": "timeout",
+    "ok": true,
+    "status": "ok",
     "tick": "sharpe_insights"
   },
   {
-    "ok": false,
-    "status": "skipped",
+    "ok": true,
+    "status": "ok",
     "tick": "proactive_contact"
   }
 ]

@@ -106,36 +106,30 @@ def mock_external_deps(monkeypatch):
 
 @pytest.fixture
 def mock_tick_deps(monkeypatch):
-    """Mock the heavy dependencies called by tick functions."""
-    # Mock consolidation (avoids OpenAI/Qdrant)
+    """Mock all tick functions to avoid external dependencies (pg_store, Qdrant, Ollama).
+
+    After the PostgreSQL migration, individual tick functions reach pg_store,
+    Qdrant, Ollama, and other external services.  Mocking at the tick-function
+    level keeps this test focused on sleep-loop mechanics (ordering, budget,
+    report generation) rather than individual tick behaviour.
+    """
+    from modules.sleep_loop import TICK_ORDER
+
+    def _make_tick_mock(name):
+        def tick_fn(budget_ms):
+            return {"tick": name, "ok": True, "detail": "mocked", "elapsed_ms": 10}
+        return tick_fn
+
+    for tick_name in TICK_ORDER:
+        monkeypatch.setattr(
+            f"modules.sleep_loop._tick_{tick_name}",
+            _make_tick_mock(tick_name),
+        )
+
+    # Also mock world model prioritization for deterministic ordering
     monkeypatch.setattr(
-        "modules.consolidation.run_consolidation",
-        lambda scope="full", lookback_hours=24: "light consolidation: 0 clusters"
-    )
-    # Mock salience decay (avoids Qdrant)
-    monkeypatch.setattr(
-        "modules.consciousness.apply_salience_decay",
-        lambda decay_rate=0.05: "Decayed 5 memories"
-    )
-    # Mock emotional decay
-    monkeypatch.setattr(
-        "modules.consciousness.apply_emotional_decay",
-        lambda: "PAD decayed toward baseline"
-    )
-    # Mock intention maintenance
-    monkeypatch.setattr(
-        "modules.prospective.apply_intention_maintenance",
-        lambda: None
-    )
-    # Mock FTS queue
-    monkeypatch.setattr(
-        "modules.memory_smart.process_fts_queue",
-        lambda limit=50: {"processed": 0, "succeeded": 0, "failed": 0}
-    )
-    # Mock health check
-    monkeypatch.setattr(
-        "modules.consciousness._verificar_salud_memoria_interna",
-        lambda: {"ok": True, "total_memories": 42, "message": "OK"}
+        "modules.sleep_loop.SleepWorldModel.prioritize_ticks",
+        lambda self, eligible, conn=None: eligible,
     )
 
 

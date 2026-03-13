@@ -478,6 +478,10 @@ def _acquire_lock() -> bool:
     import fcntl
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # Already holding the lock in this process
+    if _lock_fd is not None:
+        return False
+
     try:
         _lock_fd = open(LOCK_FILE, 'w')
         fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

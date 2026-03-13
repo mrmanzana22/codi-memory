@@ -69,7 +69,7 @@ class TestAddMemory:
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
         from modules.memory_core import add_memory
         add_memory("My favorite color is blue", category="identidad")
-        all_mems = patch_externals["mem0"].get_all()
+        all_mems = patch_externals["pg"].get_all_raw()
         assert len(all_mems["results"]) >= 1
 
     def test_sync_add_indexes_fts(self, patch_externals, monkeypatch):
@@ -105,11 +105,11 @@ class TestAddMemory:
         assert "job_id" in parsed
 
     def test_add_error_returns_message(self, patch_externals, monkeypatch):
-        """When mem0 raises, add_memory returns error string."""
+        """When pg.add raises, add_memory returns error string."""
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
         def broken_add(*args, **kwargs):
-            raise RuntimeError("mem0 is down")
-        patch_externals["mem0"].add = broken_add
+            raise RuntimeError("pg is down")
+        patch_externals["pg"].add = broken_add
         from modules.memory_core import add_memory
         result = add_memory("should fail", category="general")
         assert "error" in result.lower()
@@ -122,15 +122,26 @@ class TestAddMemory:
 class TestSearchMemory:
     """Contract: search_memory returns formatted results or 'no results' msg."""
 
+    @staticmethod
+    def _mock_embed(monkeypatch):
+        """Mock _embed_text to avoid OPENAI_API_KEY requirement in tests."""
+        dummy_embedding = [0.01] * 1536
+        monkeypatch.setattr(
+            "modules.consolidation_common._embed_text",
+            lambda text: dummy_embedding,
+        )
+
     def test_search_returns_results(self, patch_externals, monkeypatch):
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
+        self._mock_embed(monkeypatch)
         from modules.memory_core import add_memory, search_memory
         add_memory("The project uses FastAPI for the backend", category="aprendizaje")
         result = search_memory("FastAPI")
-        # Should find something (FakeMem0 does substring match)
+        # Should find something (FakePG does substring match)
         assert "FastAPI" in result or "encontr" in result.lower()
 
-    def test_search_empty_returns_no_results(self, patch_externals):
+    def test_search_empty_returns_no_results(self, patch_externals, monkeypatch):
+        self._mock_embed(monkeypatch)
         from modules.memory_core import search_memory
         result = search_memory("xyznonexistent12345")
         # Either "no encontre" or empty results
@@ -138,6 +149,7 @@ class TestSearchMemory:
 
     def test_search_emits_event(self, patch_externals, monkeypatch, clean_event_bus):
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
+        self._mock_embed(monkeypatch)
         from modules.memory_core import add_memory, search_memory
         add_memory("event tracking test", category="general")
         search_memory("event tracking")
@@ -147,6 +159,7 @@ class TestSearchMemory:
     def test_search_returns_multiple(self, patch_externals, monkeypatch):
         """Adding multiple memories and searching returns multiple results."""
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
+        self._mock_embed(monkeypatch)
         from modules.memory_core import add_memory, search_memory
         for i in range(5):
             add_memory(f"test memory number {i}", category="general")
@@ -156,10 +169,11 @@ class TestSearchMemory:
         assert len(lines) >= 2  # At least some results come back
 
     def test_search_error_returns_message(self, patch_externals, monkeypatch):
-        """When mem0.search raises, search_memory returns error or no-results."""
+        """When pg raises, search_memory returns error or no-results."""
         def broken_search(*args, **kwargs):
             raise RuntimeError("search is down")
-        patch_externals["mem0"].search = broken_search
+        # Patch the embedding function to raise (search_memory calls _embed_text first)
+        monkeypatch.setattr("modules.memory_core._embed_text", broken_search, raising=False)
         from modules.memory_core import search_memory
         result = search_memory("anything")
         # search_memory catches exceptions -- returns either error msg or no-results
@@ -178,13 +192,13 @@ class TestDeleteMemory:
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "off")
         from modules.memory_core import add_memory, delete_memory
         add_memory("to be deleted", category="general")
-        # Get the mem_id from FakeMem0
-        all_mems = patch_externals["mem0"].get_all()
+        # Get the mem_id from FakePG
+        all_mems = patch_externals["pg"].get_all_raw()
         mem_id = all_mems["results"][0]["id"]
         result = delete_memory(mem_id)
         assert "eliminado" in result.lower()
         # Verify it's gone
-        remaining = patch_externals["mem0"].get_all()
+        remaining = patch_externals["pg"].get_all_raw()
         assert len(remaining["results"]) == 0
 
     def test_delete_with_guard_requires_token(self, patch_externals, monkeypatch):
@@ -209,21 +223,19 @@ class TestClearAllMemories:
     """Contract: clear_all removes everything."""
 
     def test_clear_all_removes_all(self, patch_externals, monkeypatch):
+        """clear_all_memories is permanently disabled after 2026-03-03 incident."""
         monkeypatch.setenv("CODI_WRITE_MODE", "sync")
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "off")
-        from modules.memory_core import add_memory, clear_all_memories
-        add_memory("mem 1", category="general")
-        add_memory("mem 2", category="general")
+        from modules.memory_core import clear_all_memories
         result = clear_all_memories()
-        assert "eliminado" in result.lower()
-        remaining = patch_externals["mem0"].get_all()
-        assert len(remaining["results"]) == 0
+        assert "bloqueado" in result.lower() or "deshabilitado" in result.lower()
 
     def test_clear_all_with_guard_requires_token(self, patch_externals, monkeypatch):
+        """clear_all_memories is permanently blocked regardless of guard state."""
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         from modules.memory_core import clear_all_memories
         result = clear_all_memories()
-        assert "confirm_token" in result.lower() or "guard" in result.lower()
+        assert "bloqueado" in result.lower() or "deshabilitado" in result.lower()
 
 
 # ============================================================
@@ -239,8 +251,8 @@ class TestGetAllMemories:
         assert "no hay" in result.lower() or "0" in result or "mostrando" in result.lower()
 
     def test_returns_populated_list(self, patch_externals):
-        # Pre-populate qdrant with a point
-        patch_externals["qdrant"].add_point(
+        # Pre-populate pg with a point
+        patch_externals["pg"].add_point(
             "codi_memories", "test-id-1",
             {"data": "hello world", "category": "general"}
         )
@@ -262,7 +274,7 @@ class TestSearchByOwnership:
         assert "no encontr" in result.lower()
 
     def test_returns_filtered_results(self, patch_externals):
-        patch_externals["qdrant"].add_point(
+        patch_externals["pg"].add_point(
             "codi_memories", "own-1",
             {"data": "test memory", "ownership_source": "experienced",
              "ownership_confidence": 0.9, "narrative_importance": "high"}
@@ -298,8 +310,8 @@ class TestUpdateImportance:
         assert "debe ser" in result.lower()
 
     def test_valid_update_returns_confirmation(self, patch_externals, monkeypatch):
-        # Pre-populate qdrant
-        patch_externals["qdrant"].add_point(
+        # Pre-populate pg
+        patch_externals["pg"].add_point(
             "codi_memories", "upd-full-id",
             {"data": "updatable", "narrative_importance": "low"}
         )

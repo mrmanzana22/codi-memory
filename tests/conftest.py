@@ -8,11 +8,13 @@ Fixtures:
   - fresh_db: explicit clean DB path (alias for _isolate_sqlite's db)
   - fake_mem0: in-memory mem0 stub (no network, no embeddings)
   - fake_qdrant: in-memory QdrantClient stub (no network)
-  - patch_externals: replaces mem0 + qdrant in modules.config with fakes
+  - fake_pg: in-memory PGMemoryStore stub (replaces pg_store.pg)
+  - patch_externals: replaces mem0 + qdrant + pg in modules with fakes
 """
 
 import sys
 import os
+import uuid
 from datetime import datetime
 from typing import Dict
 
@@ -317,20 +319,328 @@ def fake_qdrant():
 
 
 # ============================================================
+# FAKE PG (PostgreSQL store stub -- replaces pg_store.pg)
+# ============================================================
+
+class _FakeCollectionInfo:
+    """Mimics pg_store.CollectionInfo."""
+    def __init__(self, points_count: int = 0):
+        self.points_count = points_count
+
+
+class _FakePGPoint:
+    """Mimics pg_store.Point for FakePG results."""
+    def __init__(self, id: str, payload: dict = None, score: float = 0.0, vector=None):
+        self.id = id
+        self.payload = payload or {}
+        self.score = score
+        self.vector = vector
+
+
+class FakePG:
+    """In-memory stub for pg_store.PGMemoryStore.
+
+    Implements the same interface as PGMemoryStore but stores everything
+    in a dict. No network, no PostgreSQL, no embeddings.
+    Search uses simple substring matching (no vectors).
+    """
+
+    def __init__(self):
+        self._store: Dict[str, dict] = {}
+        self._counter = 0
+
+    def add(
+        self,
+        content: str,
+        category: str = "general",
+        source: str = "experienced",
+        importance: str = "medium",
+        embedding=None,
+        is_semantic: bool = False,
+        confidence: float = 0.5,
+        evidence_count: int = 0,
+        metadata: dict = None,
+        emotion_p: float = 0.0,
+        emotion_a: float = 0.0,
+        emotion_d: float = 0.0,
+    ) -> dict:
+        self._counter += 1
+        mem_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        self._store[mem_id] = {
+            "id": mem_id,
+            "content": content,
+            "category": category,
+            "source": source,
+            "importance": importance,
+            "is_semantic": is_semantic,
+            "confidence": confidence,
+            "evidence_count": evidence_count,
+            "metadata": metadata or {},
+            "emotion_p": emotion_p,
+            "emotion_a": emotion_a,
+            "emotion_d": emotion_d,
+            "created_at": now,
+            "updated_at": now,
+            "last_accessed_at": now,
+            "activation_score": 0.0,
+            "access_count": 0,
+            "storage_strength": 1.0,
+            "retrieval_strength": 1.0,
+            "is_dormant": False,
+            "dormant_at": "",
+            "reactivation_count": 0,
+        }
+        return {"results": [{"id": mem_id, "created_at": now}]}
+
+    def search(
+        self, query: str, limit: int = 5, embedding=None,
+        is_semantic=None, w_vector=0.4, w_fts=0.15, w_activation=0.45,
+        include_dormant=False,
+    ) -> dict:
+        results = []
+        for mem_id, mem in self._store.items():
+            if is_semantic is not None and mem.get("is_semantic") != is_semantic:
+                continue
+            query_words = query.lower().split()
+            text = mem["content"].lower()
+            if any(w in text for w in query_words):
+                results.append({
+                    "id": mem_id,
+                    "memory": mem["content"],
+                    "score": 0.8,
+                    "category": mem.get("category", "general"),
+                    "source": mem.get("source", "experienced"),
+                    "importance": mem.get("importance", "medium"),
+                    "is_semantic": mem.get("is_semantic", False),
+                    "confidence": mem.get("confidence", 0.5),
+                    "evidence_count": mem.get("evidence_count", 0),
+                })
+        return {"results": results[:limit]}
+
+    def delete(self, memory_id: str) -> bool:
+        if memory_id in self._store:
+            del self._store[memory_id]
+            return True
+        return False
+
+    def get_by_ids(self, ids: list, with_vectors: bool = False) -> list:
+        result = []
+        for mid in ids:
+            mid_str = str(mid)
+            if mid_str in self._store:
+                mem = self._store[mid_str]
+                result.append(_FakePGPoint(
+                    id=mid_str,
+                    payload=self._make_payload(mem),
+                ))
+        return result
+
+    def scroll(
+        self, filters=None, limit: int = 50, offset: int = 0,
+        is_semantic=None, with_vectors: bool = False, order_by: str = "created_at DESC",
+    ) -> tuple:
+        points = []
+        for mem_id, mem in self._store.items():
+            if is_semantic is not None and mem.get("is_semantic") != is_semantic:
+                continue
+            if filters:
+                match = True
+                for k, v in filters.items():
+                    if k in ("category", "source", "importance"):
+                        if mem.get(k) != v:
+                            match = False
+                            break
+                    elif k == "ownership_source":
+                        if mem.get("source") != v:
+                            match = False
+                            break
+                    elif k == "narrative_importance":
+                        if mem.get("importance") != v:
+                            match = False
+                            break
+                if not match:
+                    continue
+            points.append(_FakePGPoint(
+                id=mem_id,
+                payload=self._make_payload(mem),
+            ))
+        return (points[:limit], None)
+
+    def count(self, is_semantic=None) -> _FakeCollectionInfo:
+        c = 0
+        for mem in self._store.values():
+            if is_semantic is not None and mem.get("is_semantic") != is_semantic:
+                continue
+            c += 1
+        return _FakeCollectionInfo(c)
+
+    def update_payload(self, memory_id: str, updates: dict) -> bool:
+        if memory_id in self._store:
+            mem = self._store[memory_id]
+            for k, v in updates.items():
+                if k in mem:
+                    mem[k] = v
+                else:
+                    meta = mem.setdefault("metadata", {})
+                    meta[k] = v
+            return True
+        return False
+
+    def query_vector(
+        self, embedding, limit: int = 10, is_semantic=None,
+        score_threshold=None, with_vectors=False, include_dormant=False,
+    ) -> list:
+        """Return all stored memories as fake vector results (score=0.8).
+
+        Tests that need empty results should clear the store first.
+        """
+        results = []
+        for mem_id, mem in self._store.items():
+            if is_semantic is not None and mem.get("is_semantic") != is_semantic:
+                continue
+            results.append(_FakePGPoint(
+                id=mem_id,
+                payload=self._make_payload(mem),
+                score=0.8,
+            ))
+        return results[:limit]
+
+    def search_fts(self, query: str, limit: int = 20) -> list:
+        """Substring-based FTS stub on internal store.
+
+        Returns [{memory_id, content, category, source, bm25_rank}].
+        Returns empty by default (search_fts in memory_smart falls back to SQLite FTS).
+        """
+        if not query or not query.strip():
+            return []
+        results = []
+        query_words = query.lower().split()
+        for mem_id, mem in self._store.items():
+            text = mem.get("content", "").lower()
+            if any(w in text for w in query_words):
+                results.append({
+                    "memory_id": mem_id,
+                    "content": mem["content"],
+                    "category": mem.get("category", "general"),
+                    "source": mem.get("source", "experienced"),
+                    "bm25_rank": -5.0,
+                })
+        return results[:limit]
+
+    def search_vault(self, embedding, limit: int = 5) -> list:
+        return []
+
+    def reactivate_memory(self, *args, **kwargs) -> bool:
+        return False
+
+    def get_all(self, limit: int = 500, is_semantic=None) -> list:
+        points, _ = self.scroll(is_semantic=is_semantic, limit=limit)
+        return points
+
+    def _make_payload(self, mem: dict) -> dict:
+        """Build a Point-compatible payload dict from internal store."""
+        payload = {
+            "data": mem.get("content", ""),
+            "category": mem.get("category", "general"),
+            "source": mem.get("source", "experienced"),
+            "narrative_importance": mem.get("importance", "medium"),
+            "importance": mem.get("importance", "medium"),
+            "confidence": mem.get("confidence", 0.5),
+            "evidence_count": mem.get("evidence_count", 0),
+            "memory_type": "semantic" if mem.get("is_semantic") else "episodic",
+            "is_semantic": mem.get("is_semantic", False),
+            "created_at": mem.get("created_at", ""),
+            "updated_at": mem.get("updated_at", ""),
+            "last_accessed_at": mem.get("last_accessed_at", ""),
+            "attention_salience": mem.get("activation_score", 0.0),
+            "activation_score": mem.get("activation_score", 0.0),
+            "attention_access_count": mem.get("access_count", 0),
+            "access_count": mem.get("access_count", 0),
+            "storage_strength": mem.get("storage_strength", 1.0),
+            "retrieval_strength": mem.get("retrieval_strength", 1.0),
+            "is_dormant": mem.get("is_dormant", False),
+            "dormant_at": mem.get("dormant_at", ""),
+            "reactivation_count": mem.get("reactivation_count", 0),
+            "emotion_p": mem.get("emotion_p", 0.0),
+            "emotion_a": mem.get("emotion_a", 0.0),
+            "emotion_d": mem.get("emotion_d", 0.0),
+            "user_id": "hare",
+            "ownership_source": mem.get("source", "experienced"),
+            "ownership_confidence": 0.9 if mem.get("source") == "experienced" else 0.7,
+        }
+        # Merge extra metadata
+        meta = mem.get("metadata", {})
+        if isinstance(meta, dict):
+            for k, v in meta.items():
+                if k not in payload:
+                    payload[k] = v
+        return payload
+
+    # Test helper methods (backward-compatible with FakeQdrant.add_point)
+    def add_point(self, collection_name: str, id: str, payload: dict):
+        """Pre-populate a point for tests (backward compat with FakeQdrant)."""
+        self._store[id] = {
+            "id": id,
+            "content": payload.get("data", payload.get("content", "")),
+            "category": payload.get("category", "general"),
+            "source": payload.get("ownership_source", payload.get("source", "experienced")),
+            "importance": payload.get("narrative_importance", payload.get("importance", "medium")),
+            "is_semantic": payload.get("is_semantic", False),
+            "confidence": payload.get("confidence", 0.5),
+            "evidence_count": payload.get("evidence_count", 0),
+            "metadata": payload,
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat(),
+            "last_accessed_at": datetime.now().isoformat(),
+            "activation_score": 0.0,
+            "access_count": 0,
+            "storage_strength": 1.0,
+            "retrieval_strength": 1.0,
+            "is_dormant": False,
+            "dormant_at": "",
+            "reactivation_count": 0,
+            "emotion_p": 0.0,
+            "emotion_a": 0.0,
+            "emotion_d": 0.0,
+        }
+
+    def get_all_raw(self) -> dict:
+        """Return all memories in mem0-compatible format for test assertions."""
+        results = []
+        for mem_id, mem in self._store.items():
+            results.append({
+                "id": mem_id,
+                "memory": mem["content"],
+                "metadata": mem.get("metadata", {}),
+            })
+        return {"results": results}
+
+
+@pytest.fixture
+def fake_pg():
+    """Fresh FakePG instance."""
+    return FakePG()
+
+
+# ============================================================
 # COMBINED PATCH: replace externals in modules.config
 # ============================================================
 
 @pytest.fixture
-def patch_externals(monkeypatch, fake_mem0, fake_qdrant):
-    """Patch memory + qdrant in modules.config AND all importing modules.
+def patch_externals(monkeypatch, fake_mem0, fake_qdrant, fake_pg):
+    """Patch memory + qdrant + pg in modules.config AND all importing modules.
 
     Handles Python's import-aliasing: modules that do
     'from modules.config import memory' get a local ref
     that config-level patching won't reach.
+
+    Post PG migration: pg (FakePG) is the primary mock.
+    mem0 and qdrant are kept for backward compatibility with older tests.
     """
     import modules.config as cfg
 
-    # Patch at config level (for anyone using cfg.memory)
+    # Patch at config level (for anyone using cfg.memory / cfg.qdrant)
     monkeypatch.setattr(cfg, "memory", fake_mem0)
     monkeypatch.setattr(cfg, "qdrant", fake_qdrant)
 
@@ -356,8 +666,72 @@ def patch_externals(monkeypatch, fake_mem0, fake_qdrant):
         except Exception:
             pass
 
+    # Patch pg (PGMemoryStore) in pg_store module and all modules that import it
+    monkeypatch.setattr("modules.pg_store.pg", fake_pg)
+    _modules_with_pg = [
+        "modules.memory_core",
+        "modules.memory_smart",
+        "modules.consolidation",
+        "modules.reconsolidation",
+        "modules.semantic_store",
+        "modules.maintenance",
+        "modules.flush",
+        "modules.utils",
+        "modules.books",
+        "modules.self_model",
+        "modules.emotion",
+        "modules.curiosity",
+        "modules.wiring",
+        "modules.workspace",
+        "modules.access_tracking",
+        "modules.forgetting",
+        "modules.spreading",
+        "modules.narrative",
+        "modules.prediction",
+        "modules.retrieval_metadata",
+        "modules.sleep_loop",
+        "modules.lifecycle",
+        "modules.sharpe",
+        "modules.sharpe_insights",
+        "modules.classify_edges",
+        "modules.learning",
+    ]
+    for mod_path in _modules_with_pg:
+        try:
+            monkeypatch.setattr(f"{mod_path}.pg", fake_pg, raising=False)
+        except Exception:
+            pass
+
+    # Mock _embed_text to avoid OpenAI API calls in tests.
+    # Functions like search_memory() and search_with_fts_content() call
+    # _embed_text directly (not through pg), so we must mock it.
+    _dummy_embedding = [0.1] * 1536
+    _dummy_embedding_tuple = tuple(_dummy_embedding)
+    monkeypatch.setattr(
+        "modules.consolidation_common._embed_text",
+        lambda text: _dummy_embedding,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.consolidation_common._embed_text_cached",
+        lambda text: _dummy_embedding_tuple,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "modules.pg_store._embed_text",
+        lambda text: _dummy_embedding,
+        raising=False,
+    )
+    # Also patch in memory_core where it's imported directly
+    monkeypatch.setattr(
+        "modules.memory_core._embed_text",
+        lambda text: _dummy_embedding,
+        raising=False,
+    )
+
     return {
         "mem0": fake_mem0,
         "qdrant": fake_qdrant,
+        "pg": fake_pg,
         "db_path": cfg.FTS_DB_PATH,
     }

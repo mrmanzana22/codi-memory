@@ -167,25 +167,28 @@ def _insert_checkpoint(db_path, **overrides):
 # FAKE QDRANT (for Bucket 4)
 # ============================================================
 
-class FakeQdrantPoint:
-    """Minimal point mimic for Qdrant scroll results."""
+class FakePoint:
+    """Minimal point mimic for pg.scroll results."""
     def __init__(self, point_id, payload):
         self.id = point_id
         self.payload = payload
 
 
-class FakeQdrant:
-    """Minimal Qdrant fake for homeostasis tests."""
+class FakePg:
+    """Minimal pg_store fake for homeostasis tests.
+
+    Matches the modules.pg_store.pg interface used by apply_salience_decay:
+      - scroll(filters=, limit=, is_semantic=, offset=) -> (points, next_offset)
+      - batch_update_dormant(ids) -> count
+    """
     def __init__(self, points):
         self.points = points
-        self.payloads_set = []
 
-    def scroll(self, collection_name, scroll_filter=None, limit=100,
-               with_payload=True, with_vectors=False, offset=None):
+    def scroll(self, filters=None, limit=50, is_semantic=None, offset=0, **kwargs):
         return (self.points, None)
 
-    def set_payload(self, collection_name, payload, points):
-        self.payloads_set.append({"payload": payload, "points": points})
+    def batch_update_dormant(self, ids):
+        return 0
 
 
 # ============================================================
@@ -252,23 +255,30 @@ class TestCheckpointFidelity:
         assert stored[1]["priority"] == "critical"
         assert "2026-03-01" in stored[1]["expiry"]
 
-    def test_checkpoint_captures_wm_items(self, continuity_db, mock_external_deps):
+    def test_checkpoint_captures_wm_items(self, continuity_db, mock_external_deps, monkeypatch):
         """Top 15 WM items, content truncated to 200 chars, wm_active_count correct."""
         from modules.session_bridge import checkpoint_session_close
         from modules.config import now_col as _now_col
 
-        # Insert 18 WM items (should only capture 15)
-        conn = sqlite3.connect(continuity_db)
-        now = _now_col().isoformat()
+        # Build 18 fake WM items (simulating what wm_get_active_items returns)
+        fake_items = []
         for i in range(18):
             content = f"WM item {i}: " + "x" * 250  # >200 chars
-            conn.execute(
-                "INSERT INTO working_memory (content, topic, relevance, added_at, active) "
-                "VALUES (?, 'test', ?, ?, 1)",
-                (content, 0.9 - i * 0.01, now)
-            )
-        conn.commit()
-        conn.close()
+            fake_items.append({
+                "content": content[:200],
+                "topic": "test",
+                "relevance": round(0.9 - i * 0.01, 2),
+            })
+
+        # Monkeypatch WM functions so checkpoint reads from test data (not live PG)
+        monkeypatch.setattr(
+            "modules.working_memory.wm_get_active_count",
+            lambda: 18,
+        )
+        monkeypatch.setattr(
+            "modules.working_memory.wm_get_active_items",
+            lambda limit=15: fake_items[:limit],
+        )
 
         result = checkpoint_session_close(session_summary="wm test", source="flush")
         assert result["ok"] is True
@@ -458,53 +468,89 @@ class TestSynapticHomeostasis:
     def test_salience_decay_reduces_medium(self, monkeypatch):
         """apply_salience_decay() reduces salience of non-critical/non-high memories.
 
-        Production code now uses a Qdrant filter (must_not critical/high)
-        to pre-filter. FakeQdrant returns all points regardless, so all 3
-        get flat-fallback decay (no timing data). Updated expectations to
-        match: all points are decayed by flat decay_rate.
+        Production code uses pg.scroll() with filters and then batch SQL updates.
+        FakePg returns all points regardless, so all 3 get flat-fallback decay
+        (no timing data). We capture the batch SQL to verify new salience values.
         """
         points = [
-            FakeQdrantPoint("m1", {"attention_salience": 0.6, "narrative_importance": "medium"}),
-            FakeQdrantPoint("m2", {"attention_salience": 0.4, "narrative_importance": "medium"}),
-            FakeQdrantPoint("m3", {"attention_salience": 0.8, "narrative_importance": "high"}),
+            FakePoint("m1", {"attention_salience": 0.6, "narrative_importance": "medium"}),
+            FakePoint("m2", {"attention_salience": 0.4, "narrative_importance": "medium"}),
+            FakePoint("m3", {"attention_salience": 0.8, "narrative_importance": "high"}),
         ]
-        fake = FakeQdrant(points)
-        monkeypatch.setattr("modules.consciousness.qdrant", fake)
-        monkeypatch.setattr("modules.workspace.qdrant", fake, raising=False)
-        monkeypatch.setattr("modules.config.qdrant", fake)
+        fake_pg = FakePg(points)
+        monkeypatch.setattr("modules.workspace.pg", fake_pg)
+
+        # Force skip_pages=0 so we don't skip our test batch
+        monkeypatch.setattr("random.randint", lambda a, b: 0)
+
+        # Mock config_pg.get_conn to capture batch SQL updates
+        captured_updates = []
+
+        class FakeCursor:
+            def executemany(self, sql, params):
+                captured_updates.extend(params)
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        class FakeConn:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def transaction(self):
+                return FakeTransaction()
+            def executemany(self, sql, params):
+                captured_updates.extend(params)
+
+        monkeypatch.setattr("modules.config_pg.get_conn", lambda: FakeConn())
 
         from modules.consciousness import apply_salience_decay
         result = apply_salience_decay(decay_rate=0.05)
 
-        # FakeQdrant ignores scroll_filter, so all 3 points are processed.
-        # In production, m3 (high importance) would be filtered out by Qdrant.
-        assert len(fake.payloads_set) == 3, f"Expected 3 set_payload calls (FakeQdrant doesn't filter), got {len(fake.payloads_set)}"
-        # Check the new values (flat decay: salience - 0.05)
-        for call in fake.payloads_set:
-            new_sal = call["payload"]["attention_salience"]
-            point_id = call["points"][0]
-            if point_id == "m1":
-                assert abs(new_sal - 0.55) < 0.01
-            elif point_id == "m2":
-                assert abs(new_sal - 0.35) < 0.01
-            elif point_id == "m3":
-                assert abs(new_sal - 0.75) < 0.01
+        # FakePg doesn't filter, so all 3 points are processed with flat decay.
+        assert len(captured_updates) == 3, f"Expected 3 batch updates, got {len(captured_updates)}"
+        # Each update tuple is (salience, ss, rs, now, memory_id)
+        update_by_id = {u[4]: u[0] for u in captured_updates}
+        assert abs(update_by_id["m1"] - 0.55) < 0.01, f"m1: {update_by_id['m1']}"
+        assert abs(update_by_id["m2"] - 0.35) < 0.01, f"m2: {update_by_id['m2']}"
+        assert abs(update_by_id["m3"] - 0.75) < 0.01, f"m3: {update_by_id['m3']}"
 
     def test_salience_decay_respects_floor(self, monkeypatch):
-        """Salience never drops below 0.1."""
+        """Salience never drops below 0.1 (FADEM_FLOOR)."""
         points = [
-            FakeQdrantPoint("m1", {"attention_salience": 0.12, "narrative_importance": "low"}),
+            FakePoint("m1", {"attention_salience": 0.12, "narrative_importance": "low"}),
         ]
-        fake = FakeQdrant(points)
-        monkeypatch.setattr("modules.consciousness.qdrant", fake)
-        monkeypatch.setattr("modules.workspace.qdrant", fake, raising=False)
-        monkeypatch.setattr("modules.config.qdrant", fake)
+        fake_pg = FakePg(points)
+        monkeypatch.setattr("modules.workspace.pg", fake_pg)
+
+        # Force skip_pages=0
+        monkeypatch.setattr("random.randint", lambda a, b: 0)
+
+        # Mock config_pg.get_conn to capture batch SQL updates
+        captured_updates = []
+
+        class FakeConn:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def transaction(self):
+                return self
+            def executemany(self, sql, params):
+                captured_updates.extend(params)
+
+        monkeypatch.setattr("modules.config_pg.get_conn", lambda: FakeConn())
 
         from modules.consciousness import apply_salience_decay
         apply_salience_decay(decay_rate=0.05)
 
-        assert len(fake.payloads_set) == 1
-        new_sal = fake.payloads_set[0]["payload"]["attention_salience"]
+        assert len(captured_updates) == 1, f"Expected 1 update, got {len(captured_updates)}"
+        # Update tuple: (salience, ss, rs, now, memory_id)
+        new_sal = captured_updates[0][0]
         assert new_sal >= 0.1, f"Salience {new_sal} below floor 0.1"
 
     def test_emotional_decay_toward_baseline(self, monkeypatch, clean_pad):
@@ -706,7 +752,7 @@ class TestStateDependentRetrieval:
 
         # Mock 1: _verificar_salud_memoria_interna -> healthy
         monkeypatch.setattr(
-            "modules.consciousness._verificar_salud_memoria_interna",
+            "modules.lifecycle._verificar_salud_memoria_interna",
             lambda: {"ok": True, "total_memories": 100, "message": "OK"}
         )
 
@@ -722,19 +768,17 @@ class TestStateDependentRetrieval:
             lambda: []
         )
 
-        # Mock 4: qdrant.scroll -> empty (no critical memories to display)
-        fake_qdrant = FakeQdrant([])
-        monkeypatch.setattr("modules.consciousness.qdrant", fake_qdrant)
+        # Mock 4: pg_store.pg -> mock (no critical memories to display)
+        mock_pg = MagicMock()
+        mock_pg.scroll.return_value = ([], None)
+        mock_pg.count.return_value = MagicMock(points_count=100)
+        mock_pg.search.return_value = {"results": []}
+        monkeypatch.setattr("modules.lifecycle.pg", mock_pg)
 
-        # Mock 5: memory.search -> empty
-        mock_memory = MagicMock()
-        mock_memory.search.return_value = {"results": []}
-        monkeypatch.setattr("modules.consciousness.memory", mock_memory)
-
-        # Mock 6: load_session_state fallback -> None (imported locally from modules.flush)
+        # Mock 5: load_session_state fallback -> None (imported locally from modules.flush)
         monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
 
-        # Mock 7: event_bus.emit -> no-op
+        # Mock 6: event_bus.emit -> no-op
         from modules.events import event_bus
         monkeypatch.setattr(event_bus, "emit", lambda *a, **kw: None)
 
@@ -760,7 +804,7 @@ class TestStateDependentRetrieval:
         self._setup_despertar_mocks(monkeypatch, continuity_db)
 
         from modules.consciousness import despertar_codi
-        result_text = despertar_codi()
+        result_text = despertar_codi(verbose=True)
 
         assert "SESSION BRIDGE" in result_text
         trigger = _emotional_state['current'].get('trigger', '')
@@ -871,18 +915,18 @@ class TestGoldenE2E:
     def _setup_despertar_mocks(self, monkeypatch, continuity_db):
         """Minimal mocks for despertar_codi (same pattern as Bucket 7)."""
         monkeypatch.setattr(
-            "modules.consciousness._verificar_salud_memoria_interna",
+            "modules.lifecycle._verificar_salud_memoria_interna",
             lambda: {"ok": True, "total_memories": 100, "message": "OK"}
         )
         monkeypatch.setattr("modules.triggers._load_triggers", lambda: [])
         monkeypatch.setattr("modules.maintenance._verificar_tareas_vencidas", lambda: [])
 
-        fake_qdrant = FakeQdrant([])
-        monkeypatch.setattr("modules.consciousness.qdrant", fake_qdrant)
-
-        mock_memory = MagicMock()
-        mock_memory.search.return_value = {"results": []}
-        monkeypatch.setattr("modules.consciousness.memory", mock_memory)
+        # Mock pg_store.pg (replaces old qdrant + memory mocks)
+        mock_pg = MagicMock()
+        mock_pg.scroll.return_value = ([], None)
+        mock_pg.count.return_value = MagicMock(points_count=100)
+        mock_pg.search.return_value = {"results": []}
+        monkeypatch.setattr("modules.lifecycle.pg", mock_pg)
 
         monkeypatch.setattr("modules.flush.load_session_state", lambda: None)
 
@@ -928,11 +972,11 @@ class TestGoldenE2E:
             lambda limit=10: []
         )
 
-        # Step 4: Call despertar_codi
+        # Step 4: Call despertar_codi (verbose=True to get SESSION BRIDGE section)
         self._setup_despertar_mocks(monkeypatch, continuity_db)
 
         from modules.consciousness import despertar_codi
-        wake_text = despertar_codi()
+        wake_text = despertar_codi(verbose=True)
 
         # === GROUNDING ASSERTIONS ===
 

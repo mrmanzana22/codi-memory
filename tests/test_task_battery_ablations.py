@@ -37,14 +37,13 @@ class TestAblationSpreading:
         """When _auto_connect_neighbors is disabled, no related_memories are set.
 
         Mirror of: TestGraphAndSpreading::test_auto_connect_creates_related_memories
-        Expected: qdrant.set_payload is NOT called (no connections created).
+        Expected: pg.update_payload is NOT called (no connections created).
         """
         from modules.memory_smart import _auto_connect_neighbors
 
-        with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant:
+        with patch('modules.memory_smart.pg') as mock_pg:
 
-            mock_mem.search.return_value = {
+            mock_pg.search.return_value = {
                 "results": [
                     {"id": "neighbor-1", "score": 0.85, "memory": "related 1"},
                     {"id": "neighbor-2", "score": 0.72, "memory": "related 2"},
@@ -56,8 +55,8 @@ class TestAblationSpreading:
                 from modules.memory_smart import _auto_connect_neighbors as ablated
                 ablated("new-id", "test content")
 
-        # DEGRADATION CHECK: set_payload was NOT called (no connections)
-        mock_qdrant.set_payload.assert_not_called()
+        # DEGRADATION CHECK: update_payload was NOT called (no connections)
+        mock_pg.update_payload.assert_not_called()
 
 
 # ============================================================
@@ -171,29 +170,28 @@ class TestAblationGWT:
         """
         from modules.memory_core import search_memory
         from modules.competition import CompetitionResult
+        from modules.pg_store import Point
 
         def _fake_activation(**kwargs):
             return SimpleNamespace(total=0.0)
 
-        fake_vector_results = {
-            "results": [
-                {"id": "high-1", "score": 0.9, "memory": "WINNER_DOCKER_TEXT"},
-                {"id": "low-1", "score": 0.2, "memory": "LOSER_PIZZA_TEXT"},
-            ]
-        }
-
-        p_high = MagicMock()
-        p_high.id = "high-1"
-        p_high.payload = {
-            "data": "WINNER_DOCKER_TEXT", "created_at": "",
-            "ownership_source": "x", "narrative_importance": "medium",
-        }
-        p_low = MagicMock()
-        p_low.id = "low-1"
-        p_low.payload = {
-            "data": "LOSER_PIZZA_TEXT", "created_at": "",
-            "ownership_source": "x", "narrative_importance": "medium",
-        }
+        # pg.query_vector returns list of Point objects
+        p_high = Point(
+            id="high-1",
+            payload={
+                "data": "WINNER_DOCKER_TEXT", "created_at": "",
+                "ownership_source": "x", "narrative_importance": "medium",
+            },
+            score=0.9,
+        )
+        p_low = Point(
+            id="low-1",
+            payload={
+                "data": "LOSER_PIZZA_TEXT", "created_at": "",
+                "ownership_source": "x", "narrative_importance": "medium",
+            },
+            score=0.2,
+        )
 
         # ABLATION: competition returns ALL candidates as winners (passthrough)
         def passthrough_competition(candidates, **kwargs):
@@ -207,13 +205,16 @@ class TestAblationGWT:
         with patch("modules.memory_core.search_semantic", return_value=[]), \
              patch("modules.memory_core.search_fts", return_value=[]), \
              patch("modules.memory_core.compute_unified_activation", side_effect=_fake_activation), \
-             patch("modules.memory_core.memory") as mock_memory, \
-             patch("modules.memory_core.qdrant") as mock_qdrant, \
+             patch("modules.memory_core.pg") as mock_pg, \
+             patch("modules.consolidation_common._embed_text", return_value=[0.1] * 1536), \
              patch("modules.competition.run_workspace_competition", side_effect=passthrough_competition):
 
-            mock_memory.search.return_value = fake_vector_results
-            mock_qdrant.retrieve.return_value = [p_high, p_low]
-            mock_qdrant.set_payload.return_value = True
+            # pg.query_vector returns Point list (vector search)
+            mock_pg.query_vector.return_value = [p_high, p_low]
+            # pg.get_by_ids returns Point list (payload prefetch)
+            mock_pg.get_by_ids.return_value = [p_high, p_low]
+            # pg.search_vault returns empty (no dormant memories)
+            mock_pg.search_vault.return_value = []
 
             out = search_memory("docker", limit=5)
 
@@ -288,20 +289,20 @@ class TestAblationReconsolidation:
     """Disable reconsolidation, verify old trace persists unchanged."""
 
     def test_without_correct_memory_no_upsert(self):
-        """When correct_memory is ablated, qdrant.upsert is never called.
+        """When correct_memory is ablated, pg.upsert is never called.
 
         Mirror of: TestReconsolidation::test_correct_memory_upserts_new_vector
         Expected: No upsert (old vector survives, no re-embedding).
         """
         # ABLATION: correct_memory is a no-op that returns a message
-        with patch('modules.reconsolidation.qdrant') as mock_qdrant:
+        with patch('modules.reconsolidation.pg') as mock_pg:
             with patch('modules.consolidation.correct_memory',
                        return_value="[ABLATED] No reconsolidation"):
                 from modules.consolidation import correct_memory
                 result = correct_memory("full-uuid-123", "Docker ya no es recomendado")
 
         # DEGRADATION CHECK: no upsert (old trace NOT destroyed)
-        mock_qdrant.upsert.assert_not_called()
+        mock_pg.upsert.assert_not_called()
         assert "ABLATED" in result, "Ablated path should indicate no reconsolidation"
 
     def test_without_correct_memory_confidence_unchanged(self):

@@ -351,7 +351,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         if hits:
             add_result("working_memory_hits", json.dumps(hits, ensure_ascii=False), {"hits": len(hits)})
             pretty_lines.append("## Working Memory (matches)\n" + "\n".join([f"- {h.get('content','')}" for h in hits[:10]]))
-    except (OSError, json.JSONDecodeError, TypeError, AttributeError) as exc:
+    except Exception as exc:
         _logger.warning("recall() working memory scan failed: %s", exc)
         partial_sources.append("working_memory")
         add_result(

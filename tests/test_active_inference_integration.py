@@ -183,35 +183,35 @@ class TestEventHandlers:
     @patch("modules.active_inference_integration._maybe_persist")
     def test_on_memory_stored(self, mock_persist, mock_observe):
         from modules.active_inference_integration import _on_memory_stored
-        _on_memory_stored({"memory_id": "abc"})
+        _on_memory_stored("memory_stored", {"memory_id": "abc"})
         mock_observe.assert_called_once_with("store")
 
     @patch("modules.active_inference_integration.observe_and_record")
     @patch("modules.active_inference_integration._maybe_persist")
     def test_on_memory_retrieved(self, mock_persist, mock_observe):
         from modules.active_inference_integration import _on_memory_retrieved
-        _on_memory_retrieved({"query": "test"})
+        _on_memory_retrieved("memory_retrieved", {"query": "test"})
         mock_observe.assert_called_once_with("retrieve")
 
     @patch("modules.active_inference_integration.observe_and_record")
     @patch("modules.active_inference_integration._maybe_persist")
     def test_on_consolidation_complete(self, mock_persist, mock_observe):
         from modules.active_inference_integration import _on_consolidation_complete
-        _on_consolidation_complete({})
+        _on_consolidation_complete("consolidation_complete", {})
         mock_observe.assert_called_once_with("consolidate")
 
     @patch("modules.active_inference_integration.observe_and_record")
     @patch("modules.active_inference_integration._maybe_persist")
     def test_on_prediction_error_high(self, mock_persist, mock_observe):
         from modules.active_inference_integration import _on_prediction_error
-        _on_prediction_error({"surprise": 0.8})
+        _on_prediction_error("prediction_error", {"surprise": 0.8})
         mock_observe.assert_called_once_with("explore")
 
     @patch("modules.active_inference_integration.observe_and_record")
     @patch("modules.active_inference_integration._maybe_persist")
     def test_on_prediction_error_low(self, mock_persist, mock_observe):
         from modules.active_inference_integration import _on_prediction_error
-        _on_prediction_error({"surprise": 0.2})
+        _on_prediction_error("prediction_error", {"surprise": 0.2})
         mock_observe.assert_called_once_with("attend")
 
     def test_persist_interval(self):

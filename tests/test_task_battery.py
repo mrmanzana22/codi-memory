@@ -86,7 +86,7 @@ class TestReconsolidation:
     Sevenster 2013: PE is prerequisite for reconsolidation."""
 
     def test_correct_memory_upserts_new_vector(self):
-        """correct_memory must call qdrant.upsert (not set_payload).
+        """correct_memory must call pg.upsert (re-embed, not post-it patch).
 
         The embedding vector must change to match new content.
         Old trace is destroyed, not patched with a post-it.
@@ -102,27 +102,33 @@ class TestReconsolidation:
 
         new_vector = [0.9] * 1536  # Different from any existing
 
-        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+        with patch('modules.reconsolidation.pg') as mock_pg, \
              patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
              patch('modules.reconsolidation._embed_text', return_value=new_vector), \
+             patch('modules.destructive_guard.is_guard_enabled', return_value=False), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
 
-            mock_qdrant.retrieve.return_value = [mock_point]
+            mock_pg.get_by_ids.return_value = [mock_point]
             mock_conn = MagicMock()
             mock_conn_fn.return_value = mock_conn
 
             result = correct_memory("full-uuid-123", "Docker ya no es recomendado", force=True)
 
-        # BEHAVIORAL ASSERT: upsert called (not set_payload)
-        mock_qdrant.upsert.assert_called_once()
-        upsert_call = mock_qdrant.upsert.call_args
-        points = upsert_call[1]["points"] if "points" in (upsert_call[1] or {}) else upsert_call[0][0] if upsert_call[0] else []
-        assert len(points) == 1, "Should upsert exactly 1 point"
+        # BEHAVIORAL ASSERT: pg.upsert called with new vector and payload
+        mock_pg.upsert.assert_called_once()
+        upsert_call = mock_pg.upsert.call_args
+
+        # pg.upsert(full_id, new_vector, updated_payload) - positional args
+        call_args = upsert_call[0] if upsert_call[0] else ()
+        upserted_id = call_args[0]
+        upserted_vector = call_args[1]
+        upserted_payload = call_args[2]
+
+        assert upserted_id == "full-uuid-123", "Should upsert the same memory ID"
 
         # Vector is the NEW embedding, not the old one
-        point = points[0]
-        assert point.vector == new_vector, "Vector should be re-embedded with new content"
-        assert point.payload["data"] == "Docker ya no es recomendado", \
+        assert upserted_vector == new_vector, "Vector should be re-embedded with new content"
+        assert upserted_payload["data"] == "Docker ya no es recomendado", \
             "Payload data should be the correction text"
 
     def test_correct_memory_decrements_confidence(self):
@@ -140,21 +146,23 @@ class TestReconsolidation:
             "created_at": "2026-01-01T00:00:00",
         }
 
-        with patch('modules.reconsolidation.qdrant') as mock_qdrant, \
+        with patch('modules.reconsolidation.pg') as mock_pg, \
              patch('modules.reconsolidation._consolidation_conn') as mock_conn_fn, \
              patch('modules.reconsolidation._embed_text', return_value=[0.1] * 1536), \
+             patch('modules.destructive_guard.is_guard_enabled', return_value=False), \
              patch('modules.utils.resolve_memory_id', return_value="full-uuid-123"):
 
-            mock_qdrant.retrieve.return_value = [mock_point]
+            mock_pg.get_by_ids.return_value = [mock_point]
             mock_conn = MagicMock()
             mock_conn_fn.return_value = mock_conn
 
             result = correct_memory("full-uuid-123", "Docker ya no es recomendado", force=True)
 
         # BEHAVIORAL ASSERT: confidence decreased
-        upsert_call = mock_qdrant.upsert.call_args
-        points = upsert_call[1]["points"] if "points" in (upsert_call[1] or {}) else upsert_call[0][0]
-        new_confidence = points[0].payload["confidence"]
+        upsert_call = mock_pg.upsert.call_args
+        # pg.upsert(full_id, new_vector, updated_payload) - positional args
+        upserted_payload = upsert_call[0][2]
+        new_confidence = upserted_payload["confidence"]
         assert new_confidence < 0.8, f"Confidence should decrease from 0.8, got {new_confidence}"
 
 
@@ -316,11 +324,9 @@ class TestGraphAndSpreading:
         """
         from modules.memory_smart import _auto_connect_neighbors
 
-        with patch('modules.memory_smart.memory') as mock_mem, \
-             patch('modules.memory_smart.qdrant') as mock_qdrant, \
-             patch('modules.config.qdrant', mock_qdrant):
+        with patch('modules.memory_smart.pg') as mock_pg:
 
-            mock_mem.search.return_value = {
+            mock_pg.search.return_value = {
                 "results": [
                     {"id": "neighbor-1", "score": 0.85, "memory": "related content 1"},
                     {"id": "neighbor-2", "score": 0.72, "memory": "related content 2"},
@@ -331,10 +337,14 @@ class TestGraphAndSpreading:
 
             _auto_connect_neighbors("new-mem-id", "test content about Docker")
 
-        # BEHAVIORAL ASSERT: set_payload called with related_memories
-        mock_qdrant.set_payload.assert_called_once()
-        call_kwargs = mock_qdrant.set_payload.call_args[1]
-        connections = call_kwargs["payload"]["related_memories"]
+        # BEHAVIORAL ASSERT: update_payload called with related_memories
+        mock_pg.update_payload.assert_called_once()
+        call_args = mock_pg.update_payload.call_args
+        # pg.update_payload(new_id, {payload}) - positional args
+        updated_id = call_args[0][0]
+        updates = call_args[0][1]
+        connections = updates["related_memories"]
+        assert updated_id == "new-mem-id", "Should update the new memory's payload"
         assert len(connections) == 3, f"Should connect to 3 neighbors (max), got {len(connections)}"
         assert "low-score" not in connections, "Should not connect below min score threshold"
 
@@ -419,39 +429,41 @@ class TestGWTAutomatic:
         """
         from types import SimpleNamespace
         from modules.memory_core import search_memory
+        from modules.pg_store import Point
 
         def _fake_activation(**kwargs):
             return SimpleNamespace(total=0.0)
 
-        fake_vector_results = {
-            "results": [
-                {"id": "high-1", "score": 0.9, "memory": "WINNER_DOCKER_TEXT"},
-                {"id": "low-1", "score": 0.2, "memory": "LOSER_PIZZA_TEXT"},
-            ]
-        }
-
-        p_high = MagicMock()
-        p_high.id = "high-1"
-        p_high.payload = {
-            "data": "WINNER_DOCKER_TEXT", "created_at": "",
-            "ownership_source": "x", "narrative_importance": "medium",
-        }
-        p_low = MagicMock()
-        p_low.id = "low-1"
-        p_low.payload = {
-            "data": "LOSER_PIZZA_TEXT", "created_at": "",
-            "ownership_source": "x", "narrative_importance": "medium",
-        }
+        # pg.query_vector returns list of Point objects
+        p_high = Point(
+            id="high-1",
+            payload={
+                "data": "WINNER_DOCKER_TEXT", "created_at": "",
+                "ownership_source": "x", "narrative_importance": "medium",
+            },
+            score=0.9,
+        )
+        p_low = Point(
+            id="low-1",
+            payload={
+                "data": "LOSER_PIZZA_TEXT", "created_at": "",
+                "ownership_source": "x", "narrative_importance": "medium",
+            },
+            score=0.2,
+        )
 
         with patch("modules.memory_core.search_semantic", return_value=[]), \
              patch("modules.memory_core.search_fts", return_value=[]), \
              patch("modules.memory_core.compute_unified_activation", side_effect=_fake_activation), \
-             patch("modules.memory_core.memory") as mock_memory, \
-             patch("modules.memory_core.qdrant") as mock_qdrant:
+             patch("modules.memory_core.pg") as mock_pg, \
+             patch("modules.consolidation_common._embed_text", return_value=[0.1] * 1536):
 
-            mock_memory.search.return_value = fake_vector_results
-            mock_qdrant.retrieve.return_value = [p_high, p_low]
-            mock_qdrant.set_payload.return_value = True
+            # pg.query_vector returns Point list (vector search)
+            mock_pg.query_vector.return_value = [p_high, p_low]
+            # pg.get_by_ids returns Point list (payload prefetch)
+            mock_pg.get_by_ids.return_value = [p_high, p_low]
+            # pg.search_vault returns empty (no dormant memories)
+            mock_pg.search_vault.return_value = []
 
             out = search_memory("docker", limit=5)
 

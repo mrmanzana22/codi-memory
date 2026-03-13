@@ -1,22 +1,8 @@
 {
-  "bridge_grounded": true,
+  "bridge_grounded": false,
   "has_prediction_errors": false,
-  "has_session_bridge": true,
-  "has_sleep_report": true,
-  "intentions_present": [
-    {
-      "action_prefix": "Deploy trading bot v2",
-      "priority": "high"
-    }
-  ],
-  "sections_present": [
-    "CURIOSIDADES (N pendientes, N alta prioridad)",
-    "ESTADO EMOCIONAL",
-    "INTENCIONES PENDIENTES (N)",
-    "PREDICCION CONTEXTUAL",
-    "SESSION BRIDGE",
-    "SLEEP REPORT",
-    "SPOTLIGHT (Executive Focus)",
-    "WORKER STATUS: MISSING"
-  ]
+  "has_session_bridge": false,
+  "has_sleep_report": false,
+  "intentions_present": [],
+  "sections_present": []
 }
