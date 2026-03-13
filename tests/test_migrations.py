@@ -54,7 +54,7 @@ class TestEmptyDbBaseline:
             assert v in result["applied"], f"Migration {v} should be applied"
         # 022 is postgres-only and should be skipped
         assert "022" in result["skipped"], "Migration 022 (postgres-only) should be skipped"
-        assert result["current_version"] == "025"
+        assert result["current_version"] == "026"
 
         conn = sqlite3.connect(db_path)
         tables = {r[0] for r in conn.execute(

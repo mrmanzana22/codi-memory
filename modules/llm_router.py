@@ -167,27 +167,23 @@ _log_table_ensured = False
 
 def _log_to_pg(task_type: str, provider: str, model: str, duration_ms: int,
                prompt_chars: int, output_chars: int, success: bool, error: str = ""):
-    """Log LLM call to PG for observability."""
+    """Log LLM call to PG for observability.
+
+    Table created by migration 026_llm_calls.sql.
+    """
     global _log_table_ensured
     try:
         from modules.config_pg import get_conn
         if not _log_table_ensured:
+            # Verify table exists (created by migration 026)
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("""
-                        CREATE TABLE IF NOT EXISTS llm_calls (
-                            id              BIGSERIAL PRIMARY KEY,
-                            task_type       TEXT NOT NULL,
-                            provider        TEXT NOT NULL,
-                            model           TEXT NOT NULL,
-                            success         BOOLEAN NOT NULL,
-                            duration_ms     INTEGER,
-                            prompt_chars    INTEGER,
-                            output_chars    INTEGER,
-                            error           TEXT,
-                            created_at      TIMESTAMPTZ DEFAULT NOW()
-                        )
-                    """)
+                    cur.execute(
+                        "SELECT 1 FROM information_schema.tables "
+                        "WHERE table_name = 'llm_calls'"
+                    )
+                    if not cur.fetchone():
+                        return  # table not yet migrated, skip logging
             _log_table_ensured = True
 
         with get_conn() as conn:
