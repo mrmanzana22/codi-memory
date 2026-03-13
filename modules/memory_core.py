@@ -63,8 +63,8 @@ def restore_memories() -> str:
                         metadata=full_metadata,
                     )
                     restored += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    _logger.warning("Error restoring individual memory from backup: %s", e)
 
         return f"Restauradas {restored} memorias desde backup"
     except Exception as e:
@@ -110,8 +110,8 @@ def _add_memory_sync(content: str, category: str, source: str, importance: str) 
                     emotional_valence = 'positive'
                 elif pleasure < -0.3:
                     emotional_valence = 'negative'
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning("Error computing emotional state for memory enrichment: %s", e)
 
             created_now = now_iso()
             ownership_metadata = {
@@ -147,8 +147,8 @@ def _add_memory_sync(content: str, category: str, source: str, importance: str) 
         try:
             from modules.memory_smart import _auto_connect_neighbors
             _auto_connect_neighbors(mem_id, content)
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Error auto-connecting memory graph neighbors: %s", e)
 
     try:
         event_bus.emit(Events.MEMORY_STORED, {
@@ -158,8 +158,8 @@ def _add_memory_sync(content: str, category: str, source: str, importance: str) 
             'source': source,
             'importance': importance,
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.warning("Error emitting MEMORY_STORED event: %s", e)
 
     return f"Memoria guardada con ownership: {result}"
 
@@ -236,8 +236,8 @@ def add_memory(content: str, category: str = "general",
                     async_job_id=enqueue_result["job_id"],
                     async_status=enqueue_result["status"],
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                _logger.warning("Error recording sync metadata for add_memory: %s", e)
 
         return result_str
     except Exception as e:
@@ -304,8 +304,8 @@ def _score_semantic_fact(fact: dict, current_pleasure: float = 0.0) -> float:
             hours_ago = max(0.1, (datetime.now(_tz.utc) - last_dt).total_seconds() / 3600)
             # Sigmoid-like decay: 1.0 at 0h, ~0.5 at 72h, ~0.1 at 720h (30d)
             recency = 1.0 / (1.0 + (hours_ago / 72.0))
-        except Exception:
-            pass
+        except Exception as e:
+            _logger.warning("Error computing recency score from last_observed timestamp: %s", e)
 
     # 5. PAD mood-congruent bias (reuse same function, neutral default for semantic)
     pad_bias = compute_pad_retrieval_bias("neutral", current_pleasure)
