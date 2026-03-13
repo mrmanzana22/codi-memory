@@ -329,8 +329,11 @@ def enrich_with_ownership(memory_id: str, category: str, content: str,
             'created_at': created_now,
             'self_reference': self_ref,
             'pad_at_encoding': pad_at_encoding,       # 3C: State-dependent retrieval
+            'emotion_p': pad_at_encoding["P"],         # PG column: pleasure at encoding
+            'emotion_a': pad_at_encoding["A"],         # PG column: arousal at encoding
+            'emotion_d': pad_at_encoding["D"],         # PG column: dominance at encoding
             'temporal_context': temporal_context,      # 3D: Temporal metadata
-            '_v': 4.0  # Phase 3: SDR + temporal context
+            '_v': 4.1  # Phase 3: SDR + temporal + PG emotion columns
         }
         if causal_links:
             ownership_metadata['causal_links'] = causal_links

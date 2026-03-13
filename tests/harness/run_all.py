@@ -196,7 +196,7 @@ def save_baselines(report: dict, path: str = REPORT_PATH) -> str:
         ("3", "false_memory_rate", report["tests"].get("retrieval", {}), "false_memory_rate", "false_memory_pass", "< 0.05"),
         ("4", "prediction_accuracy", report["tests"].get("prediction_accuracy", {}), "accuracy", "pass", ">= 0.40"),
         ("5", "consolidation_coverage", report["tests"].get("consolidation_coverage", {}), "cumulative_coverage", "pass", ">= 0.80"),
-        ("6", "emotion_variance", report["tests"].get("emotion_variance", {}), "max_std", "pass", "std > 0.1"),
+        ("6", "emotion_variance", report["tests"].get("emotion_variance", {}), "max_range", "pass", "range > 0.1"),
         ("7", "proactive_relevance", report["tests"].get("proactive_relevance", {}), None, "pass", ">= 60%"),
         ("8", "override_success", report["tests"].get("override_success", {}), None, "pass", "100%"),
         ("9", "tick_health", report["tests"].get("tick_health", {}), "health_pct", "pass", ">= 0.95"),

@@ -39,7 +39,7 @@ from modules.config_pg import get_conn as get_pg_conn
 from modules.consolidation_common import (
     _embed_text, _cosine_similarity,
     init_consolidation_db, get_embed_cache_info, _get_oai,
-    _embed_text_cached, _try_ollama,
+    _embed_text_cached,
     _consolidation_conn,  # noqa: F401 - re-exported for self_model, assessment
 )
 from modules.utils import now_iso
@@ -642,19 +642,11 @@ def _llm_classify_edges(ids: list, texts: list) -> tuple:
     _DEFAULT_CONF = {"causes": 0.8, "enables": 0.7, "prevents": 0.8, "co_occurs": 0.5}
 
     try:
-        from modules.consolidation_common import _get_oai, _try_ollama
+        from modules.llm_router import llm_complete
 
-        # Ollama → OpenAI mini fallback
-        if (ollama_result := _try_ollama("edge_classify", prompt)) is not None:
-            raw = ollama_result
-        else:
-            response = _get_oai().chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=300,
-            )
-            raw = response.choices[0].message.content.strip()
+        raw = llm_complete("edge_classify", prompt)
+        if not raw:
+            return {}, {}
 
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -1100,19 +1092,12 @@ def _phase_extraction(clusters: list) -> list:
         prompt = _build_extraction_prompt(topic, episodes_block, len(texts))
 
         try:
-            from modules.consolidation_common import _get_oai, _try_ollama
+            from modules.llm_router import llm_complete
 
-            # Ollama → OpenAI mini fallback
-            if (ollama_result := _try_ollama("semantic_extract", prompt)) is not None:
-                raw = ollama_result
-            else:
-                response = _get_oai().chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    max_tokens=1500,
-                )
-                raw = response.choices[0].message.content.strip()
+            raw = llm_complete("semantic_extract", prompt)
+            if not raw:
+                _logger.warning("[consolidation] LLM failed for semantic_extract")
+                return
 
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
@@ -1204,19 +1189,11 @@ Episodes:
 {episodes_block}"""
 
     try:
-        from modules.consolidation_common import _get_oai, _try_ollama
+        from modules.llm_router import llm_complete
 
-        # Ollama → OpenAI mini fallback
-        if (ollama_result := _try_ollama("self_extract", prompt)) is not None:
-            raw = ollama_result
-        else:
-            response = _get_oai().chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000,
-            )
-            raw = response.choices[0].message.content.strip()
+        raw = llm_complete("self_extract", prompt)
+        if not raw:
+            return []
 
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -1553,17 +1530,8 @@ def _phase_compression(scope: str = "full") -> dict:
         prompt = COMPRESSION_PROMPT.format(n=len(members), episodes=episodes_block)
 
         try:
-            # Ollama → OpenAI mini fallback
-            if (ollama_result := _try_ollama("compress_episodes", prompt)) is not None:
-                summary = ollama_result
-            else:
-                response = _get_oai().chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
-                    max_tokens=500,
-                )
-                summary = response.choices[0].message.content.strip()
+            from modules.llm_router import llm_complete
+            summary = llm_complete("compress_episodes", prompt)
 
             if not summary or len(summary) < 30:
                 continue
@@ -1830,17 +1798,11 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
         )
 
         try:
-            # Ollama → OpenAI mini fallback
-            if (ollama_result := _try_ollama("compress_checkpoints", prompt)) is not None:
-                summary_text = ollama_result
-            else:
-                resp = oai.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
-                    temperature=0.3,
-                )
-                summary_text = resp.choices[0].message.content.strip()
+            from modules.llm_router import llm_complete
+            summary_text = llm_complete("compress_checkpoints", prompt)
+            if not summary_text:
+                _logger.warning("LLM failed for checkpoint compression %s", date)
+                continue
         except Exception as e:
             _logger.error("Checkpoint compression LLM failed for %s: %s", date, e)
             continue

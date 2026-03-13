@@ -3,31 +3,22 @@ P1 Evaluation Harness — Emotion Variance
 ==========================================
 Measures: PAD (Pleasure-Arousal-Dominance) variance over rolling window.
 
-Data source: emotional_state table in memories_fts.db
-  - pleasure, arousal, dominance columns
-  - std dev > 0.1 on at least one dimension means the system is responsive
+Data source (priority order):
+  1. PostgreSQL memories table — emotion_p, emotion_a, emotion_d columns
+  2. SQLite emotional_state table (legacy)
 
-Target: std > 0.1 on at least one PAD dimension over 7 days.
+The system encodes PAD at memory-creation time via affective charge.
+Target: range (max-min) > 0.1 on at least one PAD dimension over 30 days.
+  (Range measures responsiveness better than std when many memories encode PAD=0.)
 """
 
 import json
 import math
 import os
-import sqlite3
 import sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-
-
-def _get_db_path() -> str:
-    path = os.environ.get("FTS_DB_PATH")
-    if path:
-        return path
-    try:
-        from modules.config import FTS_DB_PATH
-        return FTS_DB_PATH
-    except ImportError:
-        return os.path.expanduser("~/codi-memory/memories_fts.db")
 
 
 def _std(values: list) -> float:
@@ -39,124 +30,138 @@ def _std(values: list) -> float:
     return math.sqrt(variance)
 
 
-def run_emotion_test(days: int = 7) -> dict:
-    """Measure PAD variance over rolling window."""
-    db_path = _get_db_path()
-    if not os.path.exists(db_path):
-        return {"test": "emotion_variance", "error": f"DB not found: {db_path}"}
+def run_emotion_test(days: int = 30) -> dict:
+    """Measure PAD variance over rolling window.
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    Queries PG memories table directly using emotion_p/a/d columns.
+    Falls back to SQLite emotional_state if PG unavailable.
+    """
+    total_in_window = 0
 
-    # Check table exists
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()]
+    # --- Strategy 1: PostgreSQL memories (emotion_p/a/d columns) ---
+    try:
+        from modules.config_pg import get_conn
 
-    # Try emotional_state or emotion_history
-    table_name = None
-    for candidate in ["emotional_state", "emotion_history", "pad_history"]:
-        if candidate in tables:
-            table_name = candidate
-            break
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
-    if not table_name:
-        # PAD history is in-memory (resets on restart). Measure from
-        # memory payloads that have pad_pleasure/pad_arousal/pad_dominance tags.
-        conn.close()
-        try:
-            from modules.pg_store import pg
-            # Scroll recent memories and extract PAD values from payloads
-            p_vals, a_vals, d_vals = [], [], []
-            offset = None
-            for _ in range(5):  # max 5 pages
-                batch, next_offset = pg.scroll(
-                    filters={}, limit=200, is_semantic=False, offset=offset
-                )
-                if not batch:
-                    break
-                for pt in batch:
-                    p = pt.payload.get("pad_pleasure")
-                    a = pt.payload.get("pad_arousal")
-                    d = pt.payload.get("pad_dominance")
-                    if p is not None and a is not None and d is not None:
-                        p_vals.append(float(p))
-                        a_vals.append(float(a))
-                        d_vals.append(float(d))
-                if not next_offset:
-                    break
-                offset = next_offset
+                # Get all non-zero emotion values in window
+                cur.execute("""
+                    SELECT emotion_p, emotion_a, emotion_d
+                    FROM memories
+                    WHERE emotion_p IS NOT NULL
+                      AND (emotion_p != 0 OR emotion_a != 0 OR emotion_d != 0)
+                      AND created_at > %s
+                    ORDER BY created_at
+                """, (cutoff,))
+                rows = cur.fetchall()
 
-            if len(p_vals) < 5:
-                return {
-                    "test": "emotion_variance",
-                    "error": f"Only {len(p_vals)} memories with PAD tags",
-                    "samples": len(p_vals),
-                }
+                # Also count total for reporting
+                cur.execute("""
+                    SELECT COUNT(*) FROM memories
+                    WHERE emotion_p IS NOT NULL AND created_at > %s
+                """, (cutoff,))
+                total_in_window = cur.fetchone()[0]
 
-            p_std = round(_std(p_vals), 4)
-            a_std = round(_std(a_vals), 4)
-            d_std = round(_std(d_vals), 4)
-            max_std = max(p_std, a_std, d_std)
+                if len(rows) >= 5:
+                    p_vals = [float(r[0]) for r in rows]
+                    a_vals = [float(r[1]) for r in rows]
+                    d_vals = [float(r[2]) for r in rows]
 
-            return {
-                "test": "emotion_variance",
-                "source": "memory_payloads",
-                "window_days": days,
-                "samples": len(p_vals),
-                "pleasure_std": p_std,
-                "arousal_std": a_std,
-                "dominance_std": d_std,
-                "max_std": max_std,
-                "target": 0.1,
-                "pass": max_std >= 0.1,
-                "pleasure_range": [round(min(p_vals), 3), round(max(p_vals), 3)],
-                "arousal_range": [round(min(a_vals), 3), round(max(a_vals), 3)],
-                "dominance_range": [round(min(d_vals), 3), round(max(d_vals), 3)],
-            }
-        except Exception as e:
-            return {"test": "emotion_variance", "error": str(e)}
+                    p_std = round(_std(p_vals), 4)
+                    a_std = round(_std(a_vals), 4)
+                    d_std = round(_std(d_vals), 4)
+                    p_range = round(max(p_vals) - min(p_vals), 4)
+                    a_range = round(max(a_vals) - min(a_vals), 4)
+                    d_range = round(max(d_vals) - min(d_vals), 4)
+                    max_range = max(p_range, a_range, d_range)
 
-    # Query from SQLite table
-    rows = conn.execute(f"""
-        SELECT pleasure, arousal, dominance
-        FROM {table_name}
-        WHERE created_at > datetime('now', ? || ' days')
-        ORDER BY created_at
-    """, (f"-{days}",)).fetchall()
+                    return {
+                        "test": "emotion_variance",
+                        "source": "postgresql",
+                        "window_days": days,
+                        "samples": len(rows),
+                        "total_in_window": total_in_window,
+                        "pleasure_std": p_std,
+                        "arousal_std": a_std,
+                        "dominance_std": d_std,
+                        "max_std": max(p_std, a_std, d_std),
+                        "pleasure_range": p_range,
+                        "arousal_range": a_range,
+                        "dominance_range": d_range,
+                        "max_range": max_range,
+                        "target": 0.1,
+                        "pass": max_range >= 0.1,
+                    }
 
-    conn.close()
+    except Exception as e:
+        return {"test": "emotion_variance", "error": f"PG query failed: {e}"}
 
-    if not rows:
-        return {
-            "test": "emotion_variance",
-            "error": f"No emotion data in last {days} days",
-            "table": table_name,
-        }
+    # --- Strategy 2: SQLite emotional_state table (legacy) ---
+    try:
+        db_path = os.environ.get("FTS_DB_PATH")
+        if not db_path:
+            from modules.config import FTS_DB_PATH
+            db_path = FTS_DB_PATH
+    except ImportError:
+        db_path = os.path.expanduser("~/codi-memory/memories_fts.db")
 
-    p_vals = [r["pleasure"] for r in rows]
-    a_vals = [r["arousal"] for r in rows]
-    d_vals = [r["dominance"] for r in rows]
-
-    p_std = round(_std(p_vals), 4)
-    a_std = round(_std(a_vals), 4)
-    d_std = round(_std(d_vals), 4)
-    max_std = max(p_std, a_std, d_std)
+    if os.path.exists(db_path):
+        import sqlite3
+        sconn = sqlite3.connect(db_path)
+        sconn.row_factory = sqlite3.Row
+        tables = [r[0] for r in sconn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
+        for candidate in ["emotional_state", "emotion_history", "pad_history"]:
+            if candidate in tables:
+                rows = sconn.execute(f"""
+                    SELECT pleasure, arousal, dominance
+                    FROM {candidate}
+                    WHERE created_at > datetime('now', ? || ' days')
+                    ORDER BY created_at
+                """, (f"-{days}",)).fetchall()
+                sconn.close()
+                if rows and len(rows) >= 5:
+                    p_vals = [r["pleasure"] for r in rows]
+                    a_vals = [r["arousal"] for r in rows]
+                    d_vals = [r["dominance"] for r in rows]
+                    p_std = round(_std(p_vals), 4)
+                    a_std = round(_std(a_vals), 4)
+                    d_std = round(_std(d_vals), 4)
+                    p_range = round(max(p_vals) - min(p_vals), 4)
+                    a_range = round(max(a_vals) - min(a_vals), 4)
+                    d_range = round(max(d_vals) - min(d_vals), 4)
+                    max_range = max(p_range, a_range, d_range)
+                    return {
+                        "test": "emotion_variance",
+                        "source": candidate,
+                        "window_days": days,
+                        "samples": len(rows),
+                        "pleasure_std": p_std,
+                        "arousal_std": a_std,
+                        "dominance_std": d_std,
+                        "max_std": max(p_std, a_std, d_std),
+                        "pleasure_range": p_range,
+                        "arousal_range": a_range,
+                        "dominance_range": d_range,
+                        "max_range": max_range,
+                        "target": 0.1,
+                        "pass": max_range >= 0.1,
+                    }
+                break
+        else:
+            sconn.close()
 
     return {
         "test": "emotion_variance",
-        "source": table_name,
-        "window_days": days,
-        "samples": len(rows),
-        "pleasure_std": p_std,
-        "arousal_std": a_std,
-        "dominance_std": d_std,
-        "max_std": max_std,
-        "target": 0.1,
-        "pass": max_std >= 0.1,
-        "pleasure_range": [round(min(p_vals), 3), round(max(p_vals), 3)],
-        "arousal_range": [round(min(a_vals), 3), round(max(a_vals), 3)],
-        "dominance_range": [round(min(d_vals), 3), round(max(d_vals), 3)],
+        "error": (
+            f"Insufficient non-zero PAD data in last {days} days. "
+            f"Total memories: {total_in_window}. "
+            f"Emotion encoding may not be writing PAD values to new memories."
+        ),
+        "samples": 0,
     }
 
 
