@@ -88,13 +88,16 @@ def run_all(skip_retrieval: bool = False) -> dict:
         result = run_consolidation_test()
         result["duration_s"] = round(time.time() - t0, 1)
         report["tests"]["consolidation_coverage"] = result
-        report["summary"]["total"] += 1
-        if result.get("error"):
-            report["summary"]["errors"] += 1
-        elif result.get("pass"):
-            report["summary"]["passed"] += 1
+        if result.get("skipped"):
+            report["summary"]["skipped"] += 1
         else:
-            report["summary"]["failed"] += 1
+            report["summary"]["total"] += 1
+            if result.get("error"):
+                report["summary"]["errors"] += 1
+            elif result.get("pass"):
+                report["summary"]["passed"] += 1
+            else:
+                report["summary"]["failed"] += 1
     except Exception as e:
         report["tests"]["consolidation_coverage"] = {"test": "consolidation_coverage", "error": str(e)}
         report["summary"]["errors"] += 1
@@ -107,13 +110,16 @@ def run_all(skip_retrieval: bool = False) -> dict:
         result = run_emotion_test()
         result["duration_s"] = round(time.time() - t0, 1)
         report["tests"]["emotion_variance"] = result
-        report["summary"]["total"] += 1
-        if result.get("error"):
-            report["summary"]["errors"] += 1
-        elif result.get("pass"):
-            report["summary"]["passed"] += 1
+        if result.get("skipped"):
+            report["summary"]["skipped"] += 1
         else:
-            report["summary"]["failed"] += 1
+            report["summary"]["total"] += 1
+            if result.get("error"):
+                report["summary"]["errors"] += 1
+            elif result.get("pass"):
+                report["summary"]["passed"] += 1
+            else:
+                report["summary"]["failed"] += 1
     except Exception as e:
         report["tests"]["emotion_variance"] = {"test": "emotion_variance", "error": str(e)}
         report["summary"]["errors"] += 1

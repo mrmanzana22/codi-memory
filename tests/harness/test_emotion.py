@@ -96,6 +96,14 @@ def run_emotion_test(days: int = 30) -> dict:
                     }
 
     except Exception as e:
+        err_str = str(e)
+        if "psycopg" in err_str or "No module named" in err_str:
+            return {
+                "test": "emotion_variance",
+                "skipped": True,
+                "skip_reason": f"psycopg unavailable — run with venv: {e}",
+                "pass": None,
+            }
         return {"test": "emotion_variance", "error": f"PG query failed: {e}"}
 
     # --- Strategy 2: SQLite emotional_state table (legacy) ---

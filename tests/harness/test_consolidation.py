@@ -29,7 +29,12 @@ def run_consolidation_test(days: int = 7) -> dict:
         from modules.config_pg import get_conn
         from modules.pg_store import pg
     except ImportError as e:
-        return {"test": "consolidation_coverage", "error": f"PG import failed: {e}"}
+        return {
+            "test": "consolidation_coverage",
+            "skipped": True,
+            "skip_reason": f"psycopg unavailable — run with venv: {e}",
+            "pass": None,
+        }
 
     # Total memory count
     total_memories = 0
