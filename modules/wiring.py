@@ -511,7 +511,7 @@ def _on_prediction_error(event_name: str, data: dict):
     elif raw_confidence is not None:
         error_magnitude = raw_confidence
     else:
-        error_magnitude = 0.5
+        error_magnitude = 0.0
     topic = data.get("topic", "unknown")
     # Build keywords from available data
     actual_keywords = data.get("actual_keywords", [])
@@ -1045,7 +1045,7 @@ def _register_proactive_handlers():
     def _on_high_prediction_error(event_name: str, data: dict):
         """Notify on very high prediction errors (something unexpected)."""
         try:
-            surprise = data.get("surprise_value", 0)
+            surprise = data.get("error_magnitude", data.get("confidence", 0.0))
             if surprise >= 0.8:
                 from modules.notifier import notify_hare
                 topic = data.get("topic", "desconocido")

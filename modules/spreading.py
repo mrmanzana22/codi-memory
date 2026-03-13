@@ -28,9 +28,9 @@ from modules.secret_redact import redact_secrets
 
 _logger = logging.getLogger(__name__)
 
-# SQLite edge index for bidirectional lookup
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_EDGE_DB = os.path.join(_BASE_DIR, "memories_fts.db")
+# SQLite edge index for bidirectional lookup — uses config FTS_DB_PATH
+# (instance-aware: each tenant has its own SQLite directory)
+from modules.config import FTS_DB_PATH as _EDGE_DB
 
 # Lateral inhibition parameters (Desimone & Duncan 1995)
 _INHIBITION_K = 5            # Top-k winners retain full activation
@@ -45,6 +45,7 @@ _EDGE_TYPE_WEIGHT = {
     'prevents': -0.5,     # A prevents B -> INHIBITORY (S2-6)
     'co_occurs': 0.0,     # Mere co-occurrence = ZERO spreading (S2-5, item 1.4)
     'confounded': 0.0,    # Confounded = do not propagate
+    'similarity': 0.5,    # Semantic similarity (payload: related_to, related_memories)
 }
 
 
@@ -212,7 +213,7 @@ def _get_incoming_neighbors(conn, point_id: str, limit: int = None) -> list:
         "SELECT from_id, edge_type, COALESCE(strength, 0.5) FROM spreading_edges WHERE to_id = ? LIMIT ?",
         (point_id, limit)
     ).fetchall()
-    return [(r[0], r[1] or 'outgoing', float(r[2])) for r in rows]
+    return [(r[0], r[1] or 'co_occurs', float(r[2])) for r in rows]
 
 
 # ============================================================
