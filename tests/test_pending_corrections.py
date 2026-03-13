@@ -116,7 +116,12 @@ class TestQueueCorrectionSuggestion:
         conn.close()
 
         expires_dt = datetime.fromisoformat(expires)
-        expected = datetime.now() + timedelta(hours=24)
+        # now_col() returns timezone-aware (Colombia TZ), so compare with aware datetime
+        if expires_dt.tzinfo is not None:
+            from modules.config import now_col
+            expected = now_col() + timedelta(hours=24)
+        else:
+            expected = datetime.now() + timedelta(hours=24)
         # Should be within 1 minute of expected
         delta = abs((expires_dt - expected).total_seconds())
         assert delta < 60

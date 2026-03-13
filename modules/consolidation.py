@@ -40,6 +40,7 @@ from modules.consolidation_common import (
     _embed_text, _cosine_similarity,
     init_consolidation_db, get_embed_cache_info, _get_oai,
     _embed_text_cached, _try_ollama,
+    _consolidation_conn,  # noqa: F401 - re-exported for self_model, assessment
 )
 from modules.utils import now_iso
 from modules.bmr import bmr_should_consolidate, bmr_should_prune

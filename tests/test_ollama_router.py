@@ -203,9 +203,10 @@ class TestModelSelection:
         assert TASK_MODEL_MAP["edge_classify"] == "qwen3.5:4b"
         assert TASK_MODEL_MAP["compress_checkpoints"] == "qwen3.5:4b"
 
-    def test_reasoning_uses_deepseek(self):
-        assert TASK_MODEL_MAP["resolve_curiosity"] == "deepseek-r1:7b"
-        assert TASK_MODEL_MAP["study_complex"] == "deepseek-r1:7b"
+    def test_reasoning_uses_expected_model(self):
+        # All tasks consolidated to qwen3.5:4b (2026-03-09)
+        assert TASK_MODEL_MAP["resolve_curiosity"] == "qwen3.5:4b"
+        assert TASK_MODEL_MAP["study_complex"] == "qwen3.5:4b"
 
 
 # ──────────────────────────────────────────────

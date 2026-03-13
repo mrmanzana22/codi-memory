@@ -4,7 +4,7 @@ RETRIEVAL REGRESSION TESTS - Golden queries for search quality
 ==============================================================
 Deterministic tests that verify search_memory scoring doesn't degrade.
 
-Each test sets up a controlled memory universe (mocked qdrant + mem0),
+Each test sets up a controlled memory universe (mocked pgvector via pg_store),
 runs a query, and asserts specific ranking/scoring properties.
 
 If these tests break after a code change, the retrieval pipeline has regressed.
@@ -26,11 +26,13 @@ from modules.events import event_bus, Events
 # HELPERS: Build controlled memory universes
 # ============================================================
 
-def _make_point(mid, data, **extra):
-    """Create a mock Qdrant point with payload."""
-    p = MagicMock()
-    p.id = mid
-    p.payload = {
+def _make_point(mid, data, score=0.0, **extra):
+    """Create a pg_store.Point-compatible object for mocking.
+
+    Used both for pg.query_vector() results (with score) and
+    pg.get_by_ids() results (for payload lookup).
+    """
+    payload = {
         "data": data,
         "ownership_source": extra.get("source", "experienced"),
         "narrative_importance": extra.get("importance", "medium"),
@@ -47,7 +49,7 @@ def _make_point(mid, data, **extra):
             "last_accessed", "access_timestamps", "salience", "valence", "pad"
         )},
     }
-    return p
+    return SimpleNamespace(id=mid, payload=payload, score=score, vector=None)
 
 
 def _fake_activation(**kwargs):
@@ -55,11 +57,28 @@ def _fake_activation(**kwargs):
     return SimpleNamespace(total=0.3)
 
 
-def _patch_search(vector_results, qdrant_points, semantic_results=None,
+_FAKE_EMBEDDING = [0.0] * 1536
+
+
+def _patch_search(vector_results, points, semantic_results=None,
                   bm25_results=None, activation_fn=None):
     """Context manager that patches all search_memory dependencies.
 
-    Returns the patches dict for use in assertions.
+    Adapts to the pgvector migration:
+    - pg.query_vector() returns Point objects (replaces memory.search)
+    - pg.get_by_ids() returns Point objects (replaces qdrant.retrieve)
+    - pg.update_payload() is a no-op (replaces qdrant.set_payload)
+    - pg.search_vault() returns [] (vault probe)
+    - _embed_text returns a fake embedding
+    - _get_retrieval_weights returns defaults (avoids PG)
+
+    Args:
+        vector_results: dict with "results" key, each entry has id/score/memory.
+            These are converted to Point objects for pg.query_vector().
+        points: list of Point-like objects used for pg.get_by_ids() payload lookup.
+        semantic_results: list of semantic fact dicts for search_semantic.
+        bm25_results: list of BM25 result dicts for search_fts.
+        activation_fn: callable(**kwargs) -> SimpleNamespace(total=float).
     """
     from contextlib import contextmanager
 
@@ -68,18 +87,47 @@ def _patch_search(vector_results, qdrant_points, semantic_results=None,
         act_fn = activation_fn or _fake_activation
         patches = {}
 
-        with patch("modules.memory_core.memory") as mock_mem, \
-             patch("modules.memory_core.qdrant") as mock_qdrant, \
+        # Convert vector_results dict to Point objects for pg.query_vector()
+        query_vector_points = []
+        if vector_results and vector_results.get("results"):
+            for r in vector_results["results"]:
+                # Find matching point from points list for payload
+                matching_point = None
+                for p in points:
+                    if p.id == r["id"]:
+                        matching_point = p
+                        break
+                if matching_point:
+                    pt = SimpleNamespace(
+                        id=r["id"],
+                        payload=matching_point.payload,
+                        score=r.get("score", 0.0),
+                        vector=None,
+                    )
+                else:
+                    pt = SimpleNamespace(
+                        id=r["id"],
+                        payload={"data": r.get("memory", "")},
+                        score=r.get("score", 0.0),
+                        vector=None,
+                    )
+                query_vector_points.append(pt)
+
+        # Build a mock for the pg object
+        mock_pg = MagicMock()
+        mock_pg.query_vector.return_value = query_vector_points
+        mock_pg.get_by_ids.return_value = points
+        mock_pg.update_payload.return_value = True
+        mock_pg.search_vault.return_value = []
+
+        with patch("modules.memory_core.pg", mock_pg), \
+             patch("modules.consolidation_common._embed_text", return_value=_FAKE_EMBEDDING), \
              patch("modules.memory_core.search_fts", return_value=bm25_results or []), \
              patch("modules.memory_core.search_semantic", return_value=semantic_results or []), \
-             patch("modules.memory_core.compute_unified_activation", side_effect=act_fn):
+             patch("modules.memory_core.compute_unified_activation", side_effect=act_fn), \
+             patch("modules.memory_core._get_retrieval_weights", return_value=(0.40, 0.15, 0.45)):
 
-            mock_mem.search.return_value = vector_results
-            mock_qdrant.retrieve.return_value = qdrant_points
-            mock_qdrant.set_payload.return_value = True
-
-            patches["memory"] = mock_mem
-            patches["qdrant"] = mock_qdrant
+            patches["pg"] = mock_pg
             yield patches
 
     return _ctx()
@@ -107,8 +155,8 @@ class TestRankingByVectorScore:
             ]
         }
         points = [
-            _make_point("docker-1", "Docker is great for deploy"),
-            _make_point("pizza-1", "Pizza was delicious"),
+            _make_point("docker-1", "Docker is great for deploy", score=0.95),
+            _make_point("pizza-1", "Pizza was delicious", score=0.40),
         ]
 
         with _patch_search(vector_results, points):
@@ -135,9 +183,9 @@ class TestRankingByVectorScore:
             ]
         }
         points = [
-            _make_point("a", "MEMORY_ALPHA"),
-            _make_point("b", "MEMORY_BETA"),
-            _make_point("c", "MEMORY_GAMMA"),
+            _make_point("a", "MEMORY_ALPHA", score=0.92),
+            _make_point("b", "MEMORY_BETA", score=0.65),
+            _make_point("c", "MEMORY_GAMMA", score=0.30),
         ]
 
         with _patch_search(vector_results, points):
@@ -174,8 +222,8 @@ class TestActivationBoost:
             ]
         }
         points = [
-            _make_point("frequent", "FREQUENT_MEMORY", access_count=50),
-            _make_point("rare", "RARE_MEMORY", access_count=0),
+            _make_point("frequent", "FREQUENT_MEMORY", score=0.55, access_count=50),
+            _make_point("rare", "RARE_MEMORY", score=0.75, access_count=0),
         ]
 
         call_count = [0]
@@ -236,7 +284,7 @@ class TestSemanticFactFormat:
                 {"id": "ep-1", "score": 0.85, "memory": "EPISODIC_DOCKER"},
             ]
         }
-        ep_points = [_make_point("ep-1", "EPISODIC_DOCKER")]
+        ep_points = [_make_point("ep-1", "EPISODIC_DOCKER", score=0.85)]
 
         semantic_results = [
             {
@@ -274,7 +322,7 @@ class TestOutputMetadataFormat:
             ]
         }
         points = [
-            _make_point("m1", "Trading analysis completed",
+            _make_point("m1", "Trading analysis completed", score=0.9,
                        source="experienced", importance="high"),
         ]
 
@@ -365,7 +413,7 @@ class TestEdgeCases:
                 {"id": "solo", "score": 0.88, "memory": "SOLO_MEMORY"},
             ]
         }
-        points = [_make_point("solo", "SOLO_MEMORY")]
+        points = [_make_point("solo", "SOLO_MEMORY", score=0.88)]
 
         with _patch_search(vector_results, points):
             out = search_memory("solo test", limit=1)
@@ -394,7 +442,7 @@ class TestScoreFormula:
                 {"id": "scored", "score": 0.80, "memory": "SCORED_MEMORY"},
             ]
         }
-        points = [_make_point("scored", "SCORED_MEMORY")]
+        points = [_make_point("scored", "SCORED_MEMORY", score=0.80)]
 
         def fixed_activation(**kwargs):
             return SimpleNamespace(total=0.5)

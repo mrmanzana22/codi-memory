@@ -39,7 +39,8 @@ class TestRedactSecrets:
         assert redact_secrets("") == ""
 
     def test_non_string_passthrough(self):
-        assert redact_secrets(123) == 123
+        # Non-string inputs are converted to str for redaction safety
+        assert redact_secrets(123) == "123"
 
     def test_redact_exception(self):
         exc = Exception("Failed with key sk-proj-abc123def456ghi789jkl012mno345pqr678stu901vwx234")

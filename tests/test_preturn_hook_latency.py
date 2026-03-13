@@ -304,8 +304,11 @@ class TestSQLiteOperationLatency:
         avg = sum(times) / len(times)
         assert avg < 20.0, f"search_fts averaged {avg:.2f}ms, budget: 20ms"
 
-    def test_get_working_memory_under_5ms(self, temp_fts_db):
+    def test_get_working_memory_under_5ms(self, temp_fts_db, monkeypatch):
         """Working memory fetch should be <5ms (simple SELECT)."""
+        import hooks.preturn_inject as _pi
+        # Force SQLite path (skip PG) for latency test
+        monkeypatch.setattr(_pi, "_use_pg_wm", False)
         from hooks.preturn_inject import get_working_memory
         conn = sqlite3.connect(temp_fts_db)
         conn.execute("PRAGMA journal_mode=WAL")

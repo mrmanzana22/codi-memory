@@ -22,14 +22,85 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import inspect
 import json
+import re
 import sqlite3
 import pytest
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FTS_MIGRATIONS_DIR = os.path.join(PROJECT_ROOT, "migrations")
 PROSPECTIVE_MIGRATIONS_DIR = os.path.join(PROJECT_ROOT, "migrations_prospective")
+
+
+# ---------------------------------------------------------------------------
+# Adapter: wraps a SQLite connection so PG-native module code can run in tests.
+# Translates %s -> ?, NOW() -> datetime('now'), and provides
+# cursor(row_factory=dict_row) that returns dict-like rows.
+# ---------------------------------------------------------------------------
+
+def _pg_to_sqlite_sql(sql: str) -> str:
+    """Translate common PostgreSQL SQL idioms to SQLite equivalents."""
+    sql = sql.replace("%s", "?")
+    sql = re.sub(r"\bNOW\(\)", "datetime('now')", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"::text", "", sql)
+    sql = re.sub(r"\bLEAST\(", "MIN(", sql, flags=re.IGNORECASE)
+    return sql
+
+
+class _DictCursor:
+    """Minimal dict-row cursor wrapping a SQLite connection."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cursor = conn.cursor()
+
+    def execute(self, sql, params=None):
+        sql = _pg_to_sqlite_sql(sql)
+        self._cursor.execute(sql, params or ())
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        if row is None:
+            return None
+        cols = [d[0] for d in self._cursor.description]
+        return dict(zip(cols, row))
+
+    def fetchall(self):
+        rows = self._cursor.fetchall()
+        if not rows:
+            return []
+        cols = [d[0] for d in self._cursor.description]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def close(self):
+        self._cursor.close()
+
+
+class PgCompatSqliteConn:
+    """Wraps a SQLite connection to accept psycopg-style %s params and NOW()."""
+
+    def __init__(self, sqlite_conn):
+        self._conn = sqlite_conn
+
+    def execute(self, sql, params=None):
+        sql = _pg_to_sqlite_sql(sql)
+        return self._conn.execute(sql, params or ())
+
+    @contextmanager
+    def cursor(self, row_factory=None):
+        cur = _DictCursor(self._conn)
+        try:
+            yield cur
+        finally:
+            cur.close()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
 
 
 # ============================================================
@@ -46,15 +117,33 @@ class TestCC1CriticalIntentionReachesSpotlight:
         db_path = str(tmp_path / "prospective.db")
         apply_migrations(db_path, migrations_dir=PROSPECTIVE_MIGRATIONS_DIR)
 
-        conn = sqlite3.connect(db_path)
-        conn.execute("PRAGMA journal_mode=WAL")
+        raw_conn = sqlite3.connect(db_path)
+        raw_conn.execute("PRAGMA journal_mode=WAL")
+
+        # Recreate intention_log with DEFAULT for created_at so PG-native
+        # INSERT (which omits created_at, relying on DEFAULT NOW()) works.
+        raw_conn.executescript("""
+            CREATE TABLE IF NOT EXISTS intention_log_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                intention_id TEXT NOT NULL,
+                event TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO intention_log_new SELECT * FROM intention_log;
+            DROP TABLE intention_log;
+            ALTER TABLE intention_log_new RENAME TO intention_log;
+            CREATE INDEX IF NOT EXISTS idx_intention_log_intention ON intention_log(intention_id);
+        """)
+
+        conn = PgCompatSqliteConn(raw_conn)
 
         # Inject into prospective module
         import modules.prospective as pm
         monkeypatch.setattr(pm, '_conn', conn)
 
         yield conn
-        conn.close()
+        raw_conn.close()
 
     def test_mark_triggered_pushes_critical_to_workspace(self, prospective_conn, monkeypatch):
         """Triggering a critical intention calls update_workspace_spotlight."""

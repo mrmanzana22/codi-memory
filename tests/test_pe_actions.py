@@ -51,56 +51,31 @@ def clean_pe_state(monkeypatch):
 
 @pytest.fixture
 def prospective_db(tmp_path, monkeypatch):
-    """Set up a temp prospective DB for intention tests."""
-    import sqlite3
-    db_path = str(tmp_path / "prospective_test.db")
-    conn = sqlite3.connect(db_path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS intentions (
-            id TEXT PRIMARY KEY,
-            action TEXT NOT NULL,
-            action_type TEXT DEFAULT 'remind',
-            trigger_type TEXT DEFAULT 'event',
-            trigger_spec TEXT DEFAULT '{}',
-            cue_focality TEXT DEFAULT 'focal',
-            priority TEXT DEFAULT 'medium',
-            status TEXT DEFAULT 'pending',
-            activation REAL DEFAULT 0.7,
-            created_at TEXT,
-            triggered_at TEXT,
-            completed_at TEXT,
-            expiry TEXT,
-            snooze_until TEXT,
-            context_at_creation TEXT DEFAULT '',
-            creator TEXT DEFAULT 'codi',
-            recurrence TEXT,
-            recurrence_spec TEXT,
-            check_count INTEGER DEFAULT 0,
-            partial_match_count INTEGER DEFAULT 0,
-            last_checked_at TEXT,
-            last_maintained_at TEXT,
-            goal_id TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS intention_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            intention_id TEXT NOT NULL,
-            event TEXT NOT NULL,
-            detail TEXT,
-            created_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    """Mock PG-based prospective module for PE action tests.
 
-    # Monkeypatch prospective module to use this DB
+    Post PG-migration: prospective.py uses PostgreSQL, so we mock
+    create_intention and check_intention_exists instead of SQLite.
+    Tracks created intentions in a list for assertions.
+    """
+    created_intentions = []
+
+    def _mock_create_intention(**kwargs):
+        created_intentions.append(kwargs)
+        return {"id": f"mock-{len(created_intentions)}", "ok": True}
+
+    def _mock_check_intention_exists(context_pattern):
+        # Search created intentions for matching context
+        for intent in created_intentions:
+            ctx = intent.get("context", "")
+            if context_pattern in ctx:
+                return True
+        return False
+
     from modules import prospective
-    monkeypatch.setattr(prospective, "PROSPECTIVE_DB_PATH", db_path)
-    # Reset cached connection
-    monkeypatch.setattr(prospective, "_conn", None)
+    monkeypatch.setattr(prospective, "create_intention", _mock_create_intention)
+    monkeypatch.setattr(prospective, "check_intention_exists", _mock_check_intention_exists)
 
-    return db_path
+    return created_intentions
 
 
 # ============================================================
@@ -170,7 +145,6 @@ class TestPEIntentionDedupe:
         """First PE -> intention created. Second same topic -> skipped."""
         monkeypatch.setenv("CODI_PE_ACTIONS", "on")
 
-        import sqlite3
         from modules.pe_actions import pe_prospective_handler
 
         # First call: should create intention
@@ -180,22 +154,17 @@ class TestPEIntentionDedupe:
             "confidence": 0.8,
         })
 
-        conn = sqlite3.connect(prospective_db)
-        count1 = conn.execute("SELECT COUNT(*) FROM intentions").fetchone()[0]
-        conn.close()
-        assert count1 == 1
+        # prospective_db is the list of created intentions (mocked)
+        assert len(prospective_db) == 1
 
-        # Second call: same topic, same day -> dedupe
+        # Second call: same topic, same day -> dedupe (check_intention_exists finds it)
         pe_prospective_handler(Events.PREDICTION_ERROR, {
             "topic": "fullempaques_bug",
             "intensity": "high",
             "confidence": 0.8,
         })
 
-        conn = sqlite3.connect(prospective_db)
-        count2 = conn.execute("SELECT COUNT(*) FROM intentions").fetchone()[0]
-        conn.close()
-        assert count2 == 1  # Still 1 — deduped
+        assert len(prospective_db) == 1  # Still 1 — deduped
 
 
 # ============================================================
@@ -209,7 +178,6 @@ class TestPELowIntensity:
         """intensity=low -> H2 skips."""
         monkeypatch.setenv("CODI_PE_ACTIONS", "on")
 
-        import sqlite3
         from modules.pe_actions import pe_prospective_handler
 
         pe_prospective_handler(Events.PREDICTION_ERROR, {
@@ -218,16 +186,13 @@ class TestPELowIntensity:
             "confidence": 0.3,
         })
 
-        conn = sqlite3.connect(prospective_db)
-        count = conn.execute("SELECT COUNT(*) FROM intentions").fetchone()[0]
-        conn.close()
-        assert count == 0
+        # prospective_db is the list of created intentions (mocked)
+        assert len(prospective_db) == 0
 
     def test_pe_medium_does_not_create_intention(self, monkeypatch, prospective_db):
         """intensity=medium -> H2 skips (only high triggers action)."""
         monkeypatch.setenv("CODI_PE_ACTIONS", "on")
 
-        import sqlite3
         from modules.pe_actions import pe_prospective_handler
 
         pe_prospective_handler(Events.PREDICTION_ERROR, {
@@ -236,10 +201,8 @@ class TestPELowIntensity:
             "confidence": 0.6,
         })
 
-        conn = sqlite3.connect(prospective_db)
-        count = conn.execute("SELECT COUNT(*) FROM intentions").fetchone()[0]
-        conn.close()
-        assert count == 0
+        # prospective_db is the list of created intentions (mocked)
+        assert len(prospective_db) == 0
 
 
 # ============================================================

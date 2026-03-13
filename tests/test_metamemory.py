@@ -187,8 +187,11 @@ class TestFeelingOfKnowing:
             conn.commit()
 
             result = feeling_of_knowing("trading", wm_conn=conn)
-            # S1-01: Base Beta(1,1)=0.5 + wm_boost 0.12 = 0.62
-            assert result["fok_score"] >= 0.6
+            # S1-01: Base Beta(1,1)=0.5 + wm_boost 0.12 = 0.62 (familiarity)
+            # Sprint 9.3: Dual-process blends familiarity with accessibility,
+            # so final FOK is lower than pure familiarity. WM boost still
+            # pushes above the no-WM baseline (~0.5).
+            assert result["fok_score"] > 0.5
             assert "wm(" in result["basis"]
             conn.close()
         finally:

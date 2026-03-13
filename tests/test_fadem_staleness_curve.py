@@ -49,7 +49,13 @@ def expected_decay_factor(hours: float, importance: str = "medium",
 
     Formula: R(t) = (1 + alpha * t)^(-beta)
     Matches the implementation in forgetting.py exactly.
+
+    Critical memories never decay (P0 Bug #3 fix).
     """
+    # Critical memories never decay — matches implementation
+    if importance == "critical":
+        return 1.0
+
     imp = FADEM_IMPORTANCE.get(importance, 0.5)
     lambda_i = FADEM_LAMBDA_BASE * math.exp(-FADEM_MU * imp)
     alpha = lambda_i * FADEM_PL_SCALE

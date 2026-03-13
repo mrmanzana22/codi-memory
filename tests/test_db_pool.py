@@ -80,7 +80,7 @@ class TestDbPool:
             close_thread_connections()
 
     def test_pragmas_are_set_correctly(self, tmp_path):
-        """Connection should have WAL, synchronous=NORMAL, busy_timeout=5000, foreign_keys=ON."""
+        """Connection should have WAL, synchronous=NORMAL, busy_timeout=30000, foreign_keys=ON."""
         from modules.db_pool import get_conn, close_thread_connections
 
         db_path = str(tmp_path / "test.db")
@@ -96,7 +96,7 @@ class TestDbPool:
             assert sync == 1, f"Expected synchronous=1 (NORMAL), got {sync}"
 
             timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
-            assert timeout == 10000, f"Expected busy_timeout=10000, got {timeout}"
+            assert timeout == 30000, f"Expected busy_timeout=30000, got {timeout}"
 
             fk = conn.execute("PRAGMA foreign_keys").fetchone()[0]
             assert fk == 1, f"Expected foreign_keys=1 (ON), got {fk}"

@@ -179,6 +179,12 @@ class TestRecallNoUpdateLowSignal(unittest.TestCase):
         results = [{"text": "this is critical for the system", "source": "search"}]
         self.assertTrue(should_update_from_recall(results))
 
+    def test_three_results_triggers_update(self):
+        results = [
+            {"text": "memory 1", "source": "search", "meta": {"hits": 3}},
+        ]
+        self.assertTrue(should_update_from_recall(results))
+
     def test_bloqueo_keyword_triggers_update(self):
         results = [{"text": "hay un bloqueo en prod", "source": "search"}]
         self.assertTrue(should_update_from_recall(results))
