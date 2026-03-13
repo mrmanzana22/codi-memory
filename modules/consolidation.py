@@ -1568,24 +1568,8 @@ def _phase_compression(scope: str = "full") -> dict:
                 continue
 
             # Create compressed memory
-            new_id = str(uuid.uuid4())
             original_ids = [m["id"] for m in members]
             embedding = _embed_text(summary)
-
-            payload = {
-                "data": summary,
-                "user_id": USER_ID,
-                "category": "episodio",
-                "narrative_importance": "medium",
-                "narrative_themes": [topic],
-                "memory_type": "compressed_episodic",
-                "compressed_from": original_ids,
-                "compression_ratio": f"{len(original_ids)}:1",
-                "created_at": now,
-                "consolidation_status": "consolidated",
-                "attention_access_count": 0,
-                "_v": 4.1,
-            }
 
             meta = {
                 "narrative_themes": [topic],
@@ -1595,7 +1579,7 @@ def _phase_compression(scope: str = "full") -> dict:
                 "consolidation_status": "consolidated",
                 "_v": 4.1,
             }
-            pg.add(
+            add_result = pg.add(
                 content=summary,
                 category="episodio",
                 importance="medium",
@@ -1603,13 +1587,14 @@ def _phase_compression(scope: str = "full") -> dict:
                 is_semantic=False,
                 metadata=meta,
             )
+            actual_id = add_result["results"][0]["id"]
             summaries_created += 1
 
             # Mark originals as compressed
             for oid in original_ids:
                 pg.update_payload(oid, {
                     "consolidated_compressed": True,
-                    "compressed_into": new_id,
+                    "compressed_into": actual_id,
                 })
                 episodes_archived += 1
 
@@ -1859,7 +1844,6 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
             _logger.error("Checkpoint compression LLM failed for %s: %s", date, e)
             continue
 
-        summary_id = str(uuid.uuid4())
         original_ids = [m["id"] for m in members]
 
         summary_vec = _embed_text(summary_text)
@@ -1876,7 +1860,7 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
             "consolidated_compressed": False,
             "_v": 4.1,
         }
-        pg.add(
+        add_result = pg.add(
             content=summary_text,
             category="checkpoint",
             importance="medium",
@@ -1884,6 +1868,7 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
             is_semantic=False,
             metadata=meta,
         )
+        actual_id = add_result["results"][0]["id"]
         summaries_created += 1
 
         # Mark originals as compressed
@@ -1891,7 +1876,7 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
             try:
                 pg.update_payload(oid, {
                     "consolidated_compressed": True,
-                    "compressed_into": summary_id,
+                    "compressed_into": actual_id,
                 })
             except Exception:
                 pass

@@ -750,6 +750,10 @@ def get_current_state() -> SystemState:
     except ImportError as exc:
         _logger.warning("Active inference state read: working memory unavailable: %s", exc)
 
+    # Derive uncertainty from live PE (fallback stays 0.5)
+    if pe_magnitude > 0.0:
+        uncertainty = min(1.0, pe_magnitude * 1.2)
+
     # Read emotional state
     try:
         from modules.config import _emotional_state
