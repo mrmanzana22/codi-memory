@@ -547,7 +547,7 @@ def queue_correction_suggestion(
     import json
     try:
         conn = _consolidation_conn()
-        now = datetime.now()
+        now = now_col()
         expires = now + timedelta(hours=window_hours)
 
         cursor = conn.execute("""

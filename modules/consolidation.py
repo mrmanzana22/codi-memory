@@ -28,12 +28,10 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 from modules.config import (
-    SEMANTIC_COLLECTION,
     COLLECTION_NAME,
     USER_ID,
     CONSOLIDATION_CLUSTER_MIN_SIZE,
     CONSOLIDATION_SIMILARITY_THRESHOLD,
-    CONSOLIDATION_SEMANTIC_DEDUP_THRESHOLD,
     CONSOLIDATION_MAX_EPISODES_PER_RUN,
 )
 from modules.pg_store import pg
@@ -908,7 +906,7 @@ def _phase_cross_topic_bridges(clusters: list) -> int:
         if not ids:
             continue
         try:
-            pts = pg.get_by_ids(ids)
+            pts = pg.get_by_ids(ids, with_vectors=True)
             vecs = [p.vector for p in pts if getattr(p, "vector", None)]
             if vecs:
                 centroid = [sum(v[i] for v in vecs) / len(vecs) for i in range(len(vecs[0]))]

@@ -353,9 +353,6 @@ if __name__ == "__main__":
                 if not isinstance(origen, str) or len(origen) > 64:
                     return JSONResponse({"error": "origen invalido"}, status_code=400)
 
-                if not mensaje:
-                    return JSONResponse({"error": "mensaje requerido"}, status_code=400)
-
                 # Guardar recordatorio
                 data = _cargar_recordatorios()
                 data['pendientes'].append({
@@ -516,7 +513,10 @@ if __name__ == "__main__":
                 query = request.query_params.get('q', '')
                 if len(query) > 512:
                     return JSONResponse({'error': 'query demasiado largo'}, status_code=413)
-                limit = int(request.query_params.get('limit', 5))
+                try:
+                    limit = int(request.query_params.get('limit', 5))
+                except (ValueError, TypeError):
+                    limit = 5
                 limit = max(1, min(20, limit))
 
                 if not query:

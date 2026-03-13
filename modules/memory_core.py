@@ -10,7 +10,7 @@ from datetime import datetime
 
 _logger = logging.getLogger(__name__)
 
-from modules.config import USER_ID, COLLECTION_NAME, SEMANTIC_COLLECTION, BACKUP_FILE, now_iso, classify_topic as _classify_topic
+from modules.config import USER_ID, COLLECTION_NAME, BACKUP_FILE, now_iso, classify_topic as _classify_topic
 from modules.pg_store import pg
 from modules.config_pg import get_conn as get_pg_conn
 from modules.secret_redact import redact_secrets
@@ -297,10 +297,11 @@ def _score_semantic_fact(fact: dict, current_pleasure: float = 0.0) -> float:
     last_observed = fact.get("last_observed", "")
     if last_observed:
         try:
+            from datetime import timezone as _tz
             last_dt = datetime.fromisoformat(str(last_observed).replace("Z", "+00:00"))
-            if last_dt.tzinfo:
-                last_dt = last_dt.replace(tzinfo=None)
-            hours_ago = max(0.1, (datetime.now() - last_dt).total_seconds() / 3600)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=_tz.utc)
+            hours_ago = max(0.1, (datetime.now(_tz.utc) - last_dt).total_seconds() / 3600)
             # Sigmoid-like decay: 1.0 at 0h, ~0.5 at 72h, ~0.1 at 720h (30d)
             recency = 1.0 / (1.0 + (hours_ago / 72.0))
         except Exception:
@@ -426,7 +427,7 @@ def search_memory(query: str, limit: int = 5) -> str:
             fok_control = metacognitive_control(query, fts_db_path=FTS_DB_PATH)
             confidence_flag = fok_control.get("confidence_flag", "")
             limit_multiplier = fok_control.get("adjusted_limit", 1)
-            limit = min(limit * limit_multiplier, 50)  # cap to prevent cascade blowup
+            limit = int(min(limit * limit_multiplier, 50))  # cap to prevent cascade blowup
             # Emit runtime evidence for HOT-3 scoring (Block 1995)
             try:
                 from modules.events import event_bus, Events
@@ -767,7 +768,6 @@ def search_memory(query: str, limit: int = 5) -> str:
         # ============================================================
 
         retrieved_ids = [item["id"] for item in merged]
-        from modules.access_tracking import record_access
         ts = now_iso()
         for item in merged:
             mid = item["id"]

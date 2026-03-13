@@ -13,7 +13,7 @@ Design: Pure logic, no Qdrant/SQLite dependencies. Fully unit-testable.
 State reading happens at the boundary (get_current_state()).
 
 Key equations:
-  G(a) = -pragmatic(a) + epistemic(a) + cost(a)
+  G(a) = -pragmatic(a) - epistemic(a) + cost(a)
   pragmatic = -D_KL[Q(o|a) || P(o)]  (outcomes close to preferences)
   epistemic = H[Q(s|a)] - E[H[Q(s|o,a)]]  (information gain)
   P(a) = softmax(-gamma * G(a))  (policy selection)
@@ -360,7 +360,7 @@ class GenerativeModel:
         Falls back to uniform if no observations for this (s, a) pair.
         """
         key = (state.as_tuple(), action.name)
-        counts = self._transition_counts[key]
+        counts = self._transition_counts.get(key)
 
         if not counts:
             # No data: uniform prior over known states

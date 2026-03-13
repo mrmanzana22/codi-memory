@@ -272,7 +272,8 @@ def _build_where(filters: Optional[dict], params: list, is_semantic: Optional[bo
         elif key == "narrative_themes":
             # JSONB array containment: metadata->'narrative_themes' @> '["theme"]'
             clauses.append("metadata->'narrative_themes' @> %s::jsonb")
-            params.append(f'["{value}"]')
+            import json as _json
+            params.append(_json.dumps([value]))
         elif key == "metadata_key":
             # {"metadata_key": {"key": "k", "value": "v"}}
             if isinstance(value, dict):

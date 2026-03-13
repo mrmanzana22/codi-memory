@@ -210,7 +210,6 @@ def _auto_importance_from_text(content: str, access_count: int = 0,
 
 def _is_trivial_content(text: str) -> bool:
     """Detect trivial content: dates, numbers, short status lines."""
-    import re
     # Pure date/time patterns
     if re.match(r'^(Date:\s*)?[\d\-/T:\.Z\s]+$', text):
         return True

@@ -186,8 +186,9 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
 def get_prediction_accuracy() -> str:
     """Analiza la precision de mis predicciones pasadas."""
     try:
-        predictions = _predictive_state.get('predictions', [])
-        surprises = _predictive_state.get('surprises', [])
+        with _state_lock:
+            predictions = list(_predictive_state.get('predictions', []))
+            surprises = list(_predictive_state.get('surprises', []))
         lines = [f"# ANALISIS DE PRECISION PREDICTIVA\n"]
 
         if not predictions and not surprises:
