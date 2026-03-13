@@ -277,13 +277,13 @@ class TestClampLimit:
         assert clamp_fts_limit(20) == 20
 
     def test_clamp_zero(self):
-        assert clamp_fts_limit(0) == FTS_MAX_RESULTS
+        assert clamp_fts_limit(0) == 1
 
     def test_clamp_negative(self):
-        assert clamp_fts_limit(-5) == FTS_MAX_RESULTS
+        assert clamp_fts_limit(-5) == 1
 
     def test_clamp_non_int(self):
-        assert clamp_fts_limit("abc") == FTS_MAX_RESULTS
+        assert clamp_fts_limit("abc") == 1
 
 
 # ============================================================

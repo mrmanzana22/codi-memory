@@ -9,9 +9,15 @@ Validates:
   - Sanitized URL logging (no creds leaked)
 """
 
+import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
+
+# Ensure qdrant_client is available even if not installed
+_mock_qdrant_module = MagicMock()
+if "qdrant_client" not in sys.modules:
+    sys.modules["qdrant_client"] = _mock_qdrant_module
 
 import modules.config as config
 
@@ -33,7 +39,7 @@ class TestQdrantApiKey:
         monkeypatch.setattr(config, "QDRANT_API_KEY", "test-secret-key-123")
 
         mock_client = MagicMock()
-        with patch("modules.config.QdrantClient", return_value=mock_client) as mock_cls:
+        with patch("qdrant_client.QdrantClient", return_value=mock_client) as mock_cls:
             result = config.get_qdrant()
 
         mock_cls.assert_called_once_with(
@@ -49,7 +55,7 @@ class TestQdrantApiKey:
         monkeypatch.setattr(config, "QDRANT_API_KEY", "")
 
         mock_client = MagicMock()
-        with patch("modules.config.QdrantClient", return_value=mock_client) as mock_cls:
+        with patch("qdrant_client.QdrantClient", return_value=mock_client) as mock_cls:
             config.get_qdrant()
 
         mock_cls.assert_called_once_with(
@@ -77,7 +83,7 @@ class TestRemoteGuardrail:
         monkeypatch.setenv("CODI_ALLOW_INSECURE_QDRANT", "1")
 
         mock_client = MagicMock()
-        with patch("modules.config.QdrantClient", return_value=mock_client):
+        with patch("qdrant_client.QdrantClient", return_value=mock_client):
             result = config.get_qdrant()
 
         assert result is mock_client
@@ -89,7 +95,7 @@ class TestRemoteGuardrail:
         monkeypatch.delenv("CODI_ALLOW_INSECURE_QDRANT", raising=False)
 
         mock_client = MagicMock()
-        with patch("modules.config.QdrantClient", return_value=mock_client):
+        with patch("qdrant_client.QdrantClient", return_value=mock_client):
             result = config.get_qdrant()
 
         assert result is mock_client
@@ -101,7 +107,7 @@ class TestRemoteGuardrail:
         monkeypatch.delenv("CODI_ALLOW_INSECURE_QDRANT", raising=False)
 
         mock_client = MagicMock()
-        with patch("modules.config.QdrantClient", return_value=mock_client):
+        with patch("qdrant_client.QdrantClient", return_value=mock_client):
             result = config.get_qdrant()
 
         assert result is mock_client

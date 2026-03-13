@@ -175,14 +175,14 @@ class TestDeleteMemoryGuarded:
     def test_delete_memory_guard_disabled_executes(self, monkeypatch):
         """T4: Guard off -> executes directly."""
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "off")
-        mock_mem = MagicMock()
+        mock_pg = MagicMock()
         mock_fts = MagicMock()
-        with patch("modules.memory_core.memory", mock_mem), \
+        with patch("modules.memory_core.pg", mock_pg), \
              patch("modules.memory_core.delete_memory_fts", mock_fts):
             from modules.memory_core import delete_memory
             result = delete_memory("test-id")
         assert "eliminado" in result.lower()
-        mock_mem.delete.assert_called_once_with(memory_id="test-id")
+        mock_pg.delete.assert_called_once_with("test-id")
 
     def test_delete_memory_valid_token_executes(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
@@ -192,47 +192,43 @@ class TestDeleteMemoryGuarded:
         fp = compute_fingerprint("delete_memory", memory_id="test-id")
         token = request_confirmation("delete_memory", fp)
 
-        mock_mem = MagicMock()
+        mock_pg = MagicMock()
         mock_fts = MagicMock()
-        with patch("modules.memory_core.memory", mock_mem), \
+        with patch("modules.memory_core.pg", mock_pg), \
              patch("modules.memory_core.delete_memory_fts", mock_fts):
             result = delete_memory("test-id", confirm_token=token)
         assert "eliminado" in result.lower()
-        mock_mem.delete.assert_called_once()
+        mock_pg.delete.assert_called_once()
 
 
 class TestClearAllMemoriesGuarded:
-    """Integration tests: clear_all_memories with guard."""
+    """Integration tests: clear_all_memories is permanently blocked."""
 
-    def test_clear_blocked_returns_token(self, monkeypatch):
+    def test_clear_permanently_blocked(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         from modules.memory_core import clear_all_memories
         result = clear_all_memories()
-        assert "GUARD" in result
-        assert "confirm_token=" in result
+        assert "BLOQUEADO" in result
 
-    def test_clear_dry_run(self, monkeypatch):
+    def test_clear_blocked_even_with_dry_run(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         from modules.memory_core import clear_all_memories
         result = clear_all_memories(dry_run=True)
-        assert "DRY RUN" in result
-        assert "TODAS" in result
+        assert "BLOQUEADO" in result
 
-    def test_clear_legacy_code_blocked_by_default(self, monkeypatch):
+    def test_clear_blocked_with_legacy_code(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         monkeypatch.delenv("CODI_DESTRUCTIVE_LEGACY", raising=False)
         from modules.memory_core import clear_all_memories
         result = clear_all_memories(confirm_code="DELETE_ALL_MEMORIES")
-        assert "ya no es suficiente" in result
+        assert "BLOQUEADO" in result
 
-    def test_clear_legacy_code_works_when_enabled(self, monkeypatch):
+    def test_clear_blocked_even_with_legacy_enabled(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         monkeypatch.setenv("CODI_DESTRUCTIVE_LEGACY", "on")
-        mock_mem = MagicMock()
-        with patch("modules.memory_core.memory", mock_mem):
-            from modules.memory_core import clear_all_memories
-            result = clear_all_memories(confirm_code="DELETE_ALL_MEMORIES")
-        assert "eliminados" in result.lower()
+        from modules.memory_core import clear_all_memories
+        result = clear_all_memories(confirm_code="DELETE_ALL_MEMORIES")
+        assert "BLOQUEADO" in result
 
 
 class TestDeleteByContentGuarded:
@@ -240,13 +236,13 @@ class TestDeleteByContentGuarded:
 
     def test_delete_by_content_preview_with_token(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
-        mock_mem = MagicMock()
-        mock_mem.search.return_value = {
+        mock_pg = MagicMock()
+        mock_pg.search.return_value = {
             "results": [
                 {"id": "mem-1", "memory": "test memory content", "score": 0.95}
             ]
         }
-        with patch("modules.memory_core.memory", mock_mem):
+        with patch("modules.memory_core.pg", mock_pg):
             from modules.memory_core import delete_by_content
             result = delete_by_content("test query")
         assert "PREVIEW" in result
@@ -255,11 +251,11 @@ class TestDeleteByContentGuarded:
     def test_delete_by_content_legacy_confirm_blocked(self, monkeypatch):
         monkeypatch.setenv("CODI_DESTRUCTIVE_GUARD", "on")
         monkeypatch.delenv("CODI_DESTRUCTIVE_LEGACY", raising=False)
-        mock_mem = MagicMock()
-        mock_mem.search.return_value = {
+        mock_pg = MagicMock()
+        mock_pg.search.return_value = {
             "results": [{"id": "m1", "memory": "x", "score": 0.9}]
         }
-        with patch("modules.memory_core.memory", mock_mem):
+        with patch("modules.memory_core.pg", mock_pg):
             from modules.memory_core import delete_by_content
             result = delete_by_content("test", confirm=True)
         assert "ya no es suficiente" in result

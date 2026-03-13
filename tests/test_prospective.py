@@ -7,7 +7,7 @@ Run: python3 -m pytest tests/test_prospective.py -v
 import sys
 import os
 import json
-import sqlite3
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
@@ -199,14 +199,14 @@ class TestStaleCleanup:
             priority="medium",
             expiry=past,
         )
-        conn = pm._get_conn()
-        pm._expire_stale(conn, datetime.now())
-        conn.commit()
+        with pm.get_conn() as conn:
+            pm._expire_stale(conn, datetime.now())
+            conn.commit()
 
-        row = conn.execute(
-            "SELECT status FROM intentions WHERE id = ?", (result["id"],)
-        ).fetchone()
-        assert row[0] == "expired", f"Should be expired, got {row[0]}"
+            row = conn.execute(
+                "SELECT status FROM intentions WHERE id = %s", (result["id"],)
+            ).fetchone()
+            assert row[0] == "expired", f"Should be expired, got {row[0]}"
 
 
 # ============================================================
@@ -218,17 +218,18 @@ class TestThresholdFiltering:
         """Intention below its priority threshold should not trigger."""
         pm = isolated_db
         # Create intention then manually set activation below threshold
+        unique_action = f"Verify threshold filtering {_uuid.uuid4().hex[:8]}"
         result = pm.create_intention(
-            action="Low activation test",
+            action=unique_action,
             trigger_type="event",
             trigger_spec='{"keywords": ["lowtest"]}',
             priority="medium",
         )
-        conn = pm._get_conn()
-        conn.execute(
-            "UPDATE intentions SET activation = 0.10 WHERE id = ?", (result["id"],)
-        )
-        conn.commit()
+        with pm.get_conn() as conn:
+            conn.execute(
+                "UPDATE intentions SET activation = 0.10 WHERE id = %s", (result["id"],)
+            )
+            conn.commit()
 
         triggered = pm.check_intentions("lowtest keyword match")
         assert len(triggered) == 0, "Below-threshold intention should not trigger"
@@ -242,22 +243,23 @@ class TestWMPush:
     def test_mark_triggered_pushes_to_wm(self, isolated_db):
         """_mark_triggered should push to working memory."""
         pm = isolated_db
+        unique_action = f"Notify team about deployment {_uuid.uuid4().hex[:8]}"
         result = pm.create_intention(
-            action="WM push test",
+            action=unique_action,
             trigger_type="event",
             trigger_spec='{"keywords": ["wmtest"]}',
             priority="high",
         )
-        conn = pm._get_conn()
-        with patch("modules.working_memory.push_to_working_memory") as mock_wm, \
-             patch("modules.consciousness.update_workspace_spotlight"):
-            pm._mark_triggered(conn, result["id"], "test detail", datetime.now().isoformat())
-            mock_wm.assert_called_once()
-            call_kwargs = mock_wm.call_args
-            assert "INTENCION DISPARADA" in call_kwargs[1].get("content", call_kwargs[0][0] if call_kwargs[0] else "")
-            assert call_kwargs[1].get("topic") == "intention_triggered" or \
-                   (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "intention_triggered")
-            # The push happens via import inside _mark_triggered
+        with pm.get_conn() as conn:
+            with patch("modules.working_memory.push_to_working_memory") as mock_wm, \
+                 patch("modules.consciousness.update_workspace_spotlight"):
+                pm._mark_triggered(conn, result["id"], "test detail", datetime.now())
+                mock_wm.assert_called_once()
+                call_kwargs = mock_wm.call_args
+                assert "INTENCION DISPARADA" in call_kwargs[1].get("content", call_kwargs[0][0] if call_kwargs[0] else "")
+                assert call_kwargs[1].get("topic") == "intention_triggered" or \
+                       (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "intention_triggered")
+                # The push happens via import inside _mark_triggered
 
 
 # ============================================================
@@ -268,51 +270,56 @@ class TestRecurrence:
     def test_recurring_daily_creates_next(self, isolated_db):
         """Triggering a daily recurring intention should create a new one."""
         pm = isolated_db
+        unique_action = f"Review server health metrics {_uuid.uuid4().hex[:8]}"
         result = pm.create_intention(
-            action="Daily check",
+            action=unique_action,
             trigger_type="time",
             trigger_spec='{"trigger_time": "2026-02-13T10:00:00"}',
             priority="medium",
             recurrence="daily",
+            context='{"note": "test recurrence context"}',
         )
-        conn = pm._get_conn()
-        now_str = datetime.now().isoformat()
+        with pm.get_conn() as conn:
+            now_dt = datetime.now()
 
-        with patch("modules.working_memory.push_to_working_memory"):
-            with patch("modules.consciousness.update_workspace_spotlight"):
-                pm._mark_triggered(conn, result["id"], "time match", now_str)
-                conn.commit()
+            with patch("modules.working_memory.push_to_working_memory"):
+                with patch("modules.consciousness.update_workspace_spotlight"):
+                    pm._mark_triggered(conn, result["id"], "time match", now_dt)
+                    conn.commit()
 
-        # Check that a new pending intention was created
-        rows = conn.execute(
-            "SELECT id, status, trigger_spec FROM intentions WHERE action = 'Daily check'"
-        ).fetchall()
-        statuses = [r[1] for r in rows]
-        assert "triggered" in statuses, "Original should be triggered"
-        assert "pending" in statuses, "New recurrence should be pending"
-        assert len(rows) == 2, f"Should have 2 rows, got {len(rows)}"
+            # Check that a new pending intention was created
+            rows = conn.execute(
+                "SELECT id, status, trigger_spec FROM intentions WHERE action = %s",
+                (unique_action,)
+            ).fetchall()
+            statuses = [r[1] for r in rows]
+            assert "triggered" in statuses, "Original should be triggered"
+            assert "pending" in statuses, "New recurrence should be pending"
+            assert len(rows) == 2, f"Should have 2 rows, got {len(rows)}"
 
     def test_non_recurring_no_new_instance(self, isolated_db):
         """Non-recurring intention should NOT create new instance."""
         pm = isolated_db
+        unique_action = f"Send quarterly report {_uuid.uuid4().hex[:8]}"
         result = pm.create_intention(
-            action="One-time task",
+            action=unique_action,
             trigger_type="event",
             trigger_spec='{"keywords": ["onetime"]}',
             priority="low",
         )
-        conn = pm._get_conn()
-        now_str = datetime.now().isoformat()
+        with pm.get_conn() as conn:
+            now_dt = datetime.now()
 
-        with patch("modules.working_memory.push_to_working_memory"):
-            with patch("modules.consciousness.update_workspace_spotlight"):
-                pm._mark_triggered(conn, result["id"], "keyword match", now_str)
-                conn.commit()
+            with patch("modules.working_memory.push_to_working_memory"):
+                with patch("modules.consciousness.update_workspace_spotlight"):
+                    pm._mark_triggered(conn, result["id"], "keyword match", now_dt)
+                    conn.commit()
 
-        rows = conn.execute(
-            "SELECT id FROM intentions WHERE action = 'One-time task'"
-        ).fetchall()
-        assert len(rows) == 1, f"Should have 1 row, got {len(rows)}"
+            rows = conn.execute(
+                "SELECT id FROM intentions WHERE action = %s",
+                (unique_action,)
+            ).fetchall()
+            assert len(rows) == 1, f"Should have 1 row, got {len(rows)}"
 
 
 # ============================================================
