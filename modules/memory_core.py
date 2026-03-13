@@ -828,6 +828,7 @@ def search_memory(query: str, limit: int = 5) -> str:
                 'semantic_count': semantic_count,
                 'top_activation': merged[0]['activation'] if merged else 0,
                 'retrieved_ids': retrieved_ids,
+                'source': 'search_memory',
             })
         except Exception:
             pass

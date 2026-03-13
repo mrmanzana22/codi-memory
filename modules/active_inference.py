@@ -476,13 +476,18 @@ def compute_efe(
     state: SystemState,
     action: Action,
     model: GenerativeModel,
+    weights: dict = None,
 ) -> float:
     """Compute Expected Free Energy G(a) for a single action.
 
-    G(a) = -pragmatic(a) - epistemic(a) + cost(a)
+    G(a) = -(w_prag * pragmatic) - (w_epist * epistemic) + (w_cost * cost)
 
     Lower G = better action. Active inference selects policies that
     minimize expected free energy (Friston 2017, Parr & Friston 2019).
+
+    CX-13: When weights dict is provided (from PAD emotional state),
+    component weights are modulated (Doya 2008 framework, Vinckier 2018).
+    Default weights are all 1.0 (original behavior).
 
     Components:
         pragmatic: alignment with preferred outcomes (exploit)
@@ -502,16 +507,24 @@ def compute_efe(
     # Cost penalty (normalized 0-1)
     cost = action.cost
 
-    # G = -pragmatic - epistemic + cost  (Friston 2017)
-    # Lower G = more pragmatic, more exploratory, less costly
-    return -pragmatic - epistemic + cost
+    # CX-13: Apply PAD-modulated weights (Doya 2008, Vinckier 2018)
+    w_prag = 1.0
+    w_epist = 1.0
+    w_cost = 1.0
+    if weights:
+        w_prag = weights.get("w_pragmatic", 1.0)
+        w_epist = weights.get("w_epistemic", 1.0)
+        w_cost = weights.get("w_cost", 1.0)
+
+    # G = -(w_prag * pragmatic) - (w_epist * epistemic) + (w_cost * cost)
+    return -(w_prag * pragmatic) - (w_epist * epistemic) + (w_cost * cost)
 
 
 def select_action(
     state: SystemState,
     model: GenerativeModel,
     actions: List[Action] = None,
-    temperature: float = EFE_SOFTMAX_TEMPERATURE,
+    temperature: float = None,
     include_options: bool = None,  # None = auto: True only when actions=None
     deterministic: bool = False,
 ) -> Tuple[object, Dict[str, float]]:
@@ -525,11 +538,22 @@ def select_action(
     Friston 2017: Active inference agents select the action (policy)
     with lowest expected free energy. Temperature controls exploration.
 
+    CX-6: When temperature is None, uses meta-confidence-modulated temperature
+    from wiring.get_meta_efe_temperature() (Boldt 2019, Gershman 2018).
+
     Track 2: deterministic=True returns argmin(EFE) directly (no sampling).
 
     Returns:
         (selected_action_or_option, {name: efe_value}) — option or Action
     """
+    # CX-6: Resolve temperature from metacognitive confidence (Boldt 2019)
+    if temperature is None:
+        try:
+            from modules.wiring import get_meta_efe_temperature
+            temperature = get_meta_efe_temperature() or EFE_SOFTMAX_TEMPERATURE
+        except Exception:
+            temperature = EFE_SOFTMAX_TEMPERATURE
+
     custom_actions_provided = actions is not None
     if actions is None:
         actions = ALL_ACTIONS
@@ -541,10 +565,20 @@ def select_action(
     if include_options is None:
         include_options = not custom_actions_provided
 
+    # CX-13: Compute PAD-modulated EFE weights once (Doya 2008, Vinckier 2018)
+    pad_weights = None
+    try:
+        from modules.wiring import compute_pad_efe_weights
+        pad_weights = compute_pad_efe_weights(
+            model_observations=model._total_observations if model else 0
+        )
+    except Exception:
+        pass  # Graceful degradation: weights=None → default 1.0
+
     # Compute EFE for each primitive action
     efes = {}
     for action in actions:
-        efes[action.name] = compute_efe(state, action, model)
+        efes[action.name] = compute_efe(state, action, model, weights=pad_weights)
 
     # Sprint 6.5: Include available options in competition
     option_efes = {}

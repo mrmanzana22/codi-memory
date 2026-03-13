@@ -27,11 +27,12 @@ Usage:
 import atexit
 import inspect
 import logging
+import math
 import os
 import sqlite3
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime
 from modules.config import now_iso
 
@@ -65,6 +66,7 @@ class Events:
     CURIOSITY_RESOLVED = 'curiosity_resolved'                                    # Curiosity discovery saved to long-term memory
     MEMORY_VAULTED = 'memory_vaulted'
     MEMORY_REACTIVATED = 'memory_reactivated'
+    ACTION_SELECTED = 'action_selected'                                         # CX-22: L7→L5 action monitoring (all 4 architectures)
 
 
 class EventBus:
@@ -88,6 +90,11 @@ class EventBus:
         self._last_flush = time.monotonic()
         atexit.register(self._flush_counts)
         self._handler_modes = {}  # (event_name, handler) -> "data_only" | "event_and_data"
+        # Fase 0: Handler latency instrumentation (Evaluation Harness)
+        self._handler_latencies = defaultdict(list)  # handler_name -> [latency_ms, ...]
+        self._latency_max_samples = 500  # Keep last N per handler
+        # Fase 0: Cascade trace log — ring buffer for event chain reconstruction
+        self._cascade_log = deque(maxlen=200)
 
     @staticmethod
     def _get_handler_mode(handler: callable) -> str:
@@ -174,8 +181,11 @@ class EventBus:
         if should_flush:
             self._flush_counts()
 
-        # Call handlers outside the lock
+        # Call handlers outside the lock (instrumented for Evaluation Harness)
+        tid = data.get("trace_id", "")
         for handler, handler_mode in handlers:
+            handler_name = getattr(handler, '__qualname__', None) or getattr(handler, '__name__', repr(handler))
+            t0 = time.monotonic()
             try:
                 if handler_mode == "data_only":
                     handler(data)
@@ -183,6 +193,21 @@ class EventBus:
                     handler(event_name, data)
             except Exception as e:
                 _logger.error("Error in handler %r for %s: %s", handler, event_name, e)
+            finally:
+                latency_ms = (time.monotonic() - t0) * 1000
+                # Record latency sample
+                samples = self._handler_latencies[handler_name]
+                samples.append(latency_ms)
+                if len(samples) > self._latency_max_samples:
+                    del samples[:len(samples) - self._latency_max_samples]
+                # Cascade trace entry
+                self._cascade_log.append({
+                    'trace_id': tid,
+                    'event': event_name,
+                    'handler': handler_name,
+                    'latency_ms': round(latency_ms, 3),
+                    'ts': entry['timestamp'],
+                })
 
     def get_history(self, limit: int = 20) -> list:
         """Get recent event history for debugging."""
@@ -197,6 +222,55 @@ class EventBus:
                 for event, handlers in self._handlers.items()
                 if handlers
             }
+
+    # ============================================================
+    # HANDLER LATENCY & CASCADE INSTRUMENTATION (Fase 0 - Eval Harness)
+    # ============================================================
+
+    def get_handler_latencies(self) -> dict:
+        """Return P50/P95/P99 latency stats per handler (ms).
+
+        Returns dict: {handler_name: {p50, p95, p99, count, total_ms}}
+        """
+        result = {}
+        for handler_name, samples in self._handler_latencies.items():
+            if not samples:
+                continue
+            sorted_s = sorted(samples)
+            n = len(sorted_s)
+            result[handler_name] = {
+                'p50': sorted_s[int(n * 0.50)],
+                'p95': sorted_s[min(int(n * 0.95), n - 1)],
+                'p99': sorted_s[min(int(n * 0.99), n - 1)],
+                'count': n,
+                'total_ms': round(sum(sorted_s), 2),
+            }
+        return result
+
+    def get_cascade_log(self, trace_id: str = None, limit: int = 50) -> list:
+        """Return cascade trace entries, optionally filtered by trace_id.
+
+        Each entry: {trace_id, event, handler, latency_ms, ts}
+        Use trace_id filter to reconstruct a full event chain.
+        """
+        entries = list(self._cascade_log)
+        if trace_id:
+            entries = [e for e in entries if e.get('trace_id') == trace_id]
+        return entries[-limit:]
+
+    def get_slow_handlers(self, threshold_ms: float = 10.0) -> list:
+        """Return handlers with P95 latency above threshold."""
+        stats = self.get_handler_latencies()
+        return [
+            {'handler': name, **s}
+            for name, s in stats.items()
+            if s['p95'] > threshold_ms
+        ]
+
+    def reset_instrumentation(self):
+        """Clear latency samples and cascade log. Used between harness tests."""
+        self._handler_latencies.clear()
+        self._cascade_log.clear()
 
     # ============================================================
     # PERSISTENT EVIDENCE (Phase 5.5 - Block 1995)

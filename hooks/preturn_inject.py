@@ -1389,6 +1389,30 @@ def _generate_prediction(conn, prompt, wm_topics=None, backward_msg=None):
             for t in wm_topics[:3]:
                 forward_counts[t] = forward_counts.get(t, 0) + 1
 
+        # CX-7: Causal DAG → weak informative priors (Pearl 2009, Bramley 2017)
+        # WARNING: NOTEARS discovers correlation, not causation (Kaiser & Sipos 2022)
+        # Uses WEAK priors only (kappa=0.1) — Markov signal must dominate
+        DAG_PRIOR_KAPPA = 0.1  # WEAK coupling — do NOT increase without A/B testing
+        try:
+            dag_row = conn.execute(
+                "SELECT w_matrix, topics FROM causal_discovery_state ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if dag_row:
+                dag_W = json.loads(dag_row[0])
+                dag_topics = json.loads(dag_row[1])
+                if current_topic in dag_topics:
+                    from_idx = dag_topics.index(current_topic)
+                    for j, to_topic in enumerate(dag_topics):
+                        if to_topic == current_topic or to_topic not in forward_counts:
+                            continue
+                        w_ij = dag_W[from_idx][j] if from_idx < len(dag_W) and j < len(dag_W[from_idx]) else 0
+                        if abs(w_ij) > 0.1:  # Edge threshold
+                            # Multiplicative weak prior (Waldmann & Holyoak 1992)
+                            factor = 1.0 + DAG_PRIOR_KAPPA * w_ij
+                            forward_counts[to_topic] = max(0.01, forward_counts[to_topic] * factor)
+        except Exception:
+            pass  # DAG priors are advisory — never block prediction
+
         # Normalize to probability distribution
         fwd_total = sum(forward_counts.values()) or 1
         forward_dist = {t: forward_counts.get(t, LAPLACE_ALPHA) / fwd_total for t in all_topics}

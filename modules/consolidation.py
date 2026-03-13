@@ -177,6 +177,7 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         if consolidated_ids:
             pruning = _phase_pruning(consolidated_ids)
             result["episodes_pruned"] = pruning.get("marked_consolidated", 0)
+            result["consolidated_ids"] = consolidated_ids  # CX-4b: for SS boost in wiring
 
     # Phase 6: Compression (full scope only)
     compression_result = _phase_compression(scope=scope)

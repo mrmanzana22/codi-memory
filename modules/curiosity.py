@@ -34,6 +34,9 @@ from modules.pg_store import pg
 IG_MIN_OBSERVATIONS = 5     # Min observations before computing IG for a domain
 IG_EXPLOITATION_THRESHOLD = 0.1  # Below this IG, domain is "learned" → exploit
 
+# MIN-1: Curiosity queue hard cap (feedforward inhibition analog, Tononi 2006)
+MAX_PENDING_CURIOSITIES = 15
+
 __all__ = [
     "detectar_sorpresa",
     "analizar_patron_trabajo",
@@ -312,6 +315,22 @@ def push_curiosidad(tema: str, prioridad: str = "media", categoria: str = "gener
             item_id = item.get("id", 0)
             if item_id > max_id:
                 max_id = item_id
+
+        # MIN-1: Competitive pruning when queue is full (feedforward inhibition)
+        if len(data["pendientes"]) >= MAX_PENDING_CURIOSITIES:
+            prioridad_orden = {"baja": 0, "media": 1, "alta": 2}
+            sorted_items = sorted(
+                data["pendientes"],
+                key=lambda x: (
+                    prioridad_orden.get(x.get("prioridad", "media"), 1),
+                    x.get("agregada", ""),
+                ),
+            )
+            removed = sorted_items[0]
+            data["pendientes"].remove(removed)
+            data.setdefault("exploradas", []).append(
+                {**removed, "resuelto": now_short(), "razon": "pruned_by_cap"}
+            )
 
         nueva = {
             "id": max_id + 1,
@@ -722,6 +741,19 @@ def resolve_curiosidad(curiosidad_id: int, outcome: str = "discovery",
 
         data["pendientes"] = remaining
         data.setdefault("exploradas", []).append(target)
+
+        # Bug fix: Emit CURIOSITY_RESOLVED for CX-2 and CX-11 (was missing)
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.CURIOSITY_RESOLVED, {
+                "question": target.get("pregunta", ""),
+                "category": target.get("categoria", "general"),
+                "outcome": outcome,
+                "answer_length": len(description),
+                "curiosity_id": curiosidad_id,
+            })
+        except Exception:
+            pass
 
         # If discovery, also record in descubrimientos with link
         if outcome == "discovery" and description:

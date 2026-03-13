@@ -551,6 +551,24 @@ def recommend_action(deterministic: bool = True) -> Dict:
         # Recommend step 0 — step advances in observe_and_record(), not here
         first_action = _active_option.policy_fn(state, 0)
         _pending_recommended = first_action.name
+
+        # CX-22: Emit option selection for metacognitive monitoring (L7→L5)
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.ACTION_SELECTED, {
+                "action": first_action.name,
+                "efe_scores": {k: round(v, 4) for k, v in efes.items()},
+                "efe_spread": round(max(efes.values()) - min(efes.values()), 4) if efes else 0.0,
+                "temperature": temperature,
+                "state_topic": state.topic,
+                "state_uncertainty": state.uncertainty,
+                "model_observations": model.observation_count,
+                "is_option": True,
+                "option_name": selected.name,
+            })
+        except Exception:
+            pass
+
         return {
             "recommended": first_action.name,
             "description": f"[Starting option: {selected.name}] {first_action.description}",
@@ -585,7 +603,7 @@ def recommend_action(deterministic: bool = True) -> Dict:
     else:
         rationale = f"Stable state. '{best_name}' has lowest EFE (G={best_g:.3f})."
 
-    return {
+    result = {
         "recommended": action.name,
         "description": action.description,
         "efe_scores": {k: round(v, 4) for k, v in efes.items()},
@@ -602,3 +620,20 @@ def recommend_action(deterministic: bool = True) -> Dict:
         "option_step": 0,
         "active_option": None,
     }
+
+    # CX-22: Emit action selection for metacognitive monitoring (L7→L5)
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.ACTION_SELECTED, {
+            "action": action.name,
+            "efe_scores": result["efe_scores"],
+            "efe_spread": round(max(efes.values()) - min(efes.values()), 4) if efes else 0.0,
+            "temperature": temperature,
+            "state_topic": state.topic,
+            "state_uncertainty": state.uncertainty,
+            "model_observations": model.observation_count,
+        })
+    except Exception:
+        pass
+
+    return result
