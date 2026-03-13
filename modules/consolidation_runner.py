@@ -133,8 +133,15 @@ def acquire_lock() -> bool:
     return True
 
 
-def run(lookback_hours: int = 24):
-    """Run full consolidation with lock management."""
+def run(lookback_hours: int = 24, scope: str = "full"):
+    """Run consolidation with lock management.
+
+    Args:
+        lookback_hours: How far back to look for unconsolidated episodes.
+        scope: "full" (all 7 phases, ~2-30min) or "light" (clustering
+               + graph edges only, ~13-76s).  Both share the same lock
+               to prevent concurrent access to Qdrant/spreading_edges.
+    """
     if not acquire_lock():
         _logger.info("Exiting: could not acquire lock")
         return
@@ -143,17 +150,17 @@ def run(lookback_hours: int = 24):
     try:
         from modules.consolidation import run_consolidation
 
-        _logger.info("Starting full consolidation (lookback=%dh)", lookback_hours)
-        report = run_consolidation(scope="full", lookback_hours=lookback_hours)
+        _logger.info("Starting %s consolidation (lookback=%dh)", scope, lookback_hours)
+        report = run_consolidation(scope=scope, lookback_hours=lookback_hours)
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        _logger.info("Completed in %dms: %s", duration_ms, report[:200])
-        _write_status("success", report[:500], duration_ms)
+        _logger.info("Completed %s in %dms: %s", scope, duration_ms, report[:200])
+        _write_status("success", f"[{scope}] {report[:480]}", duration_ms)
 
     except Exception as e:
         duration_ms = int((time.monotonic() - start) * 1000)
-        _logger.error("Failed after %dms: %s", duration_ms, e)
-        _write_status("error", str(e)[:500], duration_ms)
+        _logger.error("Failed %s after %dms: %s", scope, duration_ms, e)
+        _write_status("error", f"[{scope}] {str(e)[:480]}", duration_ms)
         raise
 
     finally:
@@ -162,7 +169,9 @@ def run(lookback_hours: int = 24):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Full consolidation background runner")
+    parser = argparse.ArgumentParser(description="Consolidation background runner")
     parser.add_argument("--lookback", type=int, default=24, help="Lookback hours")
+    parser.add_argument("--scope", choices=["full", "light"], default="full",
+                        help="Consolidation scope (default: full)")
     args = parser.parse_args()
-    run(lookback_hours=args.lookback)
+    run(lookback_hours=args.lookback, scope=args.scope)

@@ -449,7 +449,7 @@ TICK_MIN_MS = {
 
 # Hard cap per tick: prevents heavy ticks from starving the budget
 TICK_MAX_MS = {
-    "consolidation": 30000,      # was 6000 — light takes 13-76s (1.4s/candidate)
+    "consolidation": 15000,      # was 30000 — reduced to prevent budget cascade starvation
     "causal_discovery": 10000,   # was 5000
     "curiosity": 20000,          # was 5000 — N+1 fix (#140) drops to ~2s, LLM gen needs margin
     "curiosity_resolve": 20000,  # was 10000 — web search(2-8s) + Ollama(5-15s) needs margin
@@ -923,68 +923,68 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
     return result
 
 
-def _dispatch_full_consolidation() -> str:
-    """Launch full consolidation as a background subprocess.
+def _dispatch_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
+    """Launch consolidation as a background subprocess.
+
+    Both light and full scopes run outside the tick budget.  They share
+    a single lock so they never run concurrently (both touch Qdrant +
+    spreading_edges).
 
     Returns a status string for the tick report.
-    Full consolidation runs outside the tick budget (~20-30 min)
-    with its own lockfile lifecycle.
     """
     import subprocess
     from pathlib import Path
 
     log_dir = Path.home() / ".codi-daemon" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    stdout_log = log_dir / "full-consolidation.stdout.log"
-    stderr_log = log_dir / "full-consolidation.stderr.log"
+    stdout_log = log_dir / "consolidation.stdout.log"
+    stderr_log = log_dir / "consolidation.stderr.log"
 
-    # Pre-check: is another full consolidation already running?
-    from modules.consolidation_runner import acquire_lock, _read_lock
+    # Pre-check: is another consolidation already running?
+    from modules.consolidation_runner import _read_lock
     existing = _read_lock()
     if existing:
         from modules.consolidation_runner import _is_process_alive
         pid = existing.get("pid", -1)
         dispatched = existing.get("dispatched_at", "")
         if _is_process_alive(pid, dispatched):
-            return f"full already running (pid={pid}, since {dispatched})"
+            return f"{scope} skipped — consolidation already running (pid={pid})"
 
     # Launch subprocess
     with open(stdout_log, "a") as out, open(stderr_log, "a") as err:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "modules.consolidation_runner", "--lookback", "24"],
+            [sys.executable, "-m", "modules.consolidation_runner",
+             "--scope", scope, "--lookback", str(lookback_hours)],
             stdout=out,
             stderr=err,
             cwd=BASE_DIR,
             env={**os.environ, "CODI_USE_OLLAMA": os.environ.get("CODI_USE_OLLAMA", "true")},
             start_new_session=True,  # detach from parent
         )
-    return f"full dispatched (pid={proc.pid})"
+    return f"{scope} dispatched (pid={proc.pid})"
 
 
 def _tick_consolidation(budget_ms: int) -> dict:
-    """Tick: Consolidation. Light runs inline; full dispatched as background job."""
+    """Tick: Consolidation. Always dispatched as background subprocess.
+
+    Both light and full scopes run out-of-process so they never
+    consume tick budget (~100ms dispatch vs 13-76s inline).
+    """
     start = time.monotonic()
     result = {"tick": "consolidation", "ok": False, "detail": ""}
 
     try:
         if _should_run_full_consolidation():
-            # Full consolidation: dispatch as background subprocess
-            detail = _dispatch_full_consolidation()
-            elapsed = (time.monotonic() - start) * 1000
-            result["ok"] = True
-            result["scope"] = "full"
-            result["detail"] = detail
-            result["elapsed_ms"] = round(elapsed)
+            scope, lookback = "full", 24
         else:
-            # Light consolidation: run inline within budget
-            from modules.consolidation import run_consolidation
-            report = run_consolidation(scope="light", lookback_hours=6)
-            _cache_last_consolidation_result()
-            elapsed = (time.monotonic() - start) * 1000
-            result["ok"] = True
-            result["scope"] = "light"
-            result["detail"] = report[:200] if report else "no output"
-            result["elapsed_ms"] = round(elapsed)
+            scope, lookback = "light", 6
+
+        detail = _dispatch_consolidation(scope, lookback)
+        elapsed = (time.monotonic() - start) * 1000
+        result["ok"] = True
+        result["scope"] = scope
+        result["detail"] = detail
+        result["elapsed_ms"] = round(elapsed)
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
@@ -2361,7 +2361,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         ordered_ticks = eligible_ticks  # Fallback to original order
 
     # Phase 3: Execute ticks in world-model-prioritized order
-    for name in ordered_ticks:
+    for _tick_idx, name in enumerate(ordered_ticks):
         func = tick_dispatch[name]
         min_required = TICK_MIN_MS.get(name, 200)
 
@@ -2450,6 +2450,20 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         finally:
             # Keep attempt visibility without masking failed freshness.
             _record_tick_timestamp(name, "last_attempt")
+
+        # Early-exit on budget exhaustion: avoid cascading "skipped" failures
+        post_elapsed = (time.monotonic() - start) * 1000
+        post_remaining = budget_ms - post_elapsed
+        if post_remaining <= 0:
+            remaining_ticks = ordered_ticks[_tick_idx + 1:]
+            for remaining_tick in remaining_ticks:
+                tick_results.append({
+                    "tick": remaining_tick, "ok": True,
+                    "status": "budget_deferred", "elapsed_ms": 0,
+                    "detail": f"deferred (budget exhausted, {int(post_remaining)}ms left)",
+                })
+                _record_tick_timestamp(remaining_tick, "last_attempt")
+            break
 
     # S4-05: Persist learned effects for next run
     try:
