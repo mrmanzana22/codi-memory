@@ -500,7 +500,7 @@ def _legacy_assess_butlin() -> str:
 
     # AST-1: Attention schema (Graziano 2013) -- predict, compare, adapt
     try:
-        from modules.wiring import describe_attention, predict_next_focus, get_attention_schema
+        from modules.wiring import predict_next_focus, get_attention_schema
         from modules.events import event_bus, Events
         schema = get_attention_schema()
         has_suppressed = "suppressed_items" in schema

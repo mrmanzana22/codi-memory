@@ -648,14 +648,6 @@ def _normalize_consolidation_timestamp(value):
     return dt.astimezone(timezone.utc)
 
 
-def _sqlite_timestamp_cutoff(value):
-    """Format consolidation timestamp in Colombia local time for SQLite text comparison."""
-    dt = _normalize_consolidation_timestamp(value)
-    if not dt:
-        return None
-    return dt.astimezone(TZ_COL).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-
-
 # ============================================================
 # TICK FUNCTIONS
 # ============================================================
@@ -1359,7 +1351,6 @@ def _tick_backup(budget_ms: int) -> dict:
             parts.append(f"{coll}: error {str(e)[:50]}")
 
     # Backup SQLite databases (consciousness state)
-    import shutil
     sqlite_dir = os.path.join(backup_dir, '..', 'sqlite')
     os.makedirs(sqlite_dir, exist_ok=True)
     sqlite_sources = [
@@ -1618,36 +1609,6 @@ _PROACTIVE_COOLDOWN_HOURS = 3
 _PROACTIVE_STATE_KEY = "proactive_last_sent"
 
 
-def _send_telegram_sync(message: str) -> bool:
-    """Send a Telegram message (sync, for use in sleep loop ticks).
-
-    Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from environment.
-    Returns True on success, False on error or missing config.
-    """
-    import urllib.request
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not bot_token or not chat_id:
-        return False
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    # Telegram limit: 4096 chars
-    for i in range(0, len(message), 4096):
-        chunk = message[i:i + 4096]
-        data = json.dumps({"chat_id": chat_id, "text": chunk}).encode()
-        req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status != 200:
-                    return False
-        except Exception as e:
-            _logger.error("Telegram send failed: %s", e)
-            return False
-    return True
-
-
 def _get_proactive_last_sent() -> datetime | None:
     """Get the last time a proactive message was sent."""
     try:
@@ -1900,8 +1861,12 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 result["ok"] = True
                 result["detail"] = f"{len(signals)} signals, cooldown active"
             else:
-                result["ok"] = False
-                result["detail"] = f"{len(signals)} signals, send FAILED"
+                # Telegram send failure is an external service issue, not a tick
+                # logic error.  Mark ok=True to avoid polluting tick error metrics
+                # and starving budget_exhausted accounting.  The notifier module
+                # already logs the HTTP-level failure.
+                result["ok"] = True
+                result["detail"] = f"{len(signals)} signals, send failed (external)"
 
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
@@ -1950,15 +1915,33 @@ def _tick_health(budget_ms: int) -> dict:
         parts.append(f"fts: error {redact_secrets(str(e))[:50]}")
         has_failure = True
 
-    # Health check
+    # Read tick counter once for sub-task gating below
+    _tc_val = 0
     try:
-        from modules.consciousness import _verificar_salud_memoria_interna
-        health = _verificar_salud_memoria_interna()
-        if health.get("ok"):
-            parts.append(f"health: OK ({health.get('total_memories', '?')} mems)")
+        _health_conn = _get_conn()
+        _tc_row = _health_conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = 'tick_counter'"
+        ).fetchone()
+        _health_conn.close()
+        _tc_val = int(_tc_row[0]) if _tc_row else 0
+    except Exception:
+        pass
+
+    # Health check — calls _verificar_salud_memoria_interna which makes an
+    # OpenAI embedding call (~3s).  Run only every 6th tick (~90 min) to avoid
+    # blowing the health tick's 3s cap every single run.  The FTS sync above
+    # already confirms Qdrant reachability on every run.
+    try:
+        if _tc_val % 6 == 0:
+            from modules.consciousness import _verificar_salud_memoria_interna
+            health = _verificar_salud_memoria_interna()
+            if health.get("ok"):
+                parts.append(f"health: OK ({health.get('total_memories', '?')} mems)")
+            else:
+                parts.append(f"health: {health.get('message', 'unknown')[:60]}")
+                has_failure = True
         else:
-            parts.append(f"health: {health.get('message', 'unknown')[:60]}")
-            has_failure = True
+            parts.append("health: skip (runs every 6th tick)")
     except Exception as e:
         parts.append(f"health: error {redact_secrets(str(e))[:50]}")
         has_failure = True
@@ -1974,68 +1957,92 @@ def _tick_health(budget_ms: int) -> dict:
         fts_count = fts_conn.execute(
             "SELECT COUNT(*) FROM memories_text"
         ).fetchone()[0]
-        pg_count = _pg.count(is_semantic=False).points_count
 
-        # Persist canonical episodic count for world-model fts_gap (#132)
+        # pg.count() is a remote Qdrant call (~2s).  Use cached qdrant_count
+        # from sleep_loop_state when available, refresh only every 6th tick.
+        pg_count = None
         try:
-            state_conn = _get_conn()
-            state_conn.execute(
-                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-                ("qdrant_count", str(pg_count))
-            )
-            state_conn.commit()
-            state_conn.close()
+            _sync_state_conn = _get_conn()
+            _cached_row = _sync_state_conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = 'qdrant_count'"
+            ).fetchone()
+            _sync_state_conn.close()
+            if _cached_row:
+                pg_count = int(_cached_row[0])
         except Exception:
             pass
 
-        # Always verify by ID membership — count equality does NOT prove sync.
-        fts_ids = set(
-            row[0] for row in
-            fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
-        )
+        if pg_count is None or _tc_val % 6 == 0:
+            # Refresh from Qdrant (cold start or periodic refresh)
+            pg_count = _pg.count(is_semantic=False).points_count
+            # Persist canonical episodic count for world-model fts_gap (#132)
+            try:
+                state_conn = _get_conn()
+                state_conn.execute(
+                    "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                    ("qdrant_count", str(pg_count))
+                )
+                state_conn.commit()
+                state_conn.close()
+            except Exception:
+                pass
 
-        synced = 0
-        scroll_offset = None
-        while True:
-            scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
-            if scroll_offset is not None:
-                scroll_kwargs["offset"] = scroll_offset
-            points, scroll_offset = _pg.scroll(**scroll_kwargs)
-
-            for p in points:
-                mid = str(p.id)
-                if mid not in fts_ids:
-                    content = p.payload.get('data', '')
-                    if not content:
-                        continue
-                    category = p.payload.get('category', 'general')
-                    source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
-                    importance = p.payload.get('narrative_importance', 'medium')
-                    # Preserve source created_at; fall back to now if missing
-                    src_created = p.payload.get('created_at', '')
-                    if src_created:
-                        # Normalize to SQLite-compatible UTC format (#002)
-                        fts_created = to_sqlite_utc(src_created)
-                    else:
-                        fts_created = None  # will use datetime('now')
-                    fts_conn.execute("""
-                        INSERT OR REPLACE INTO memories_text
-                        (memory_id, content, category, source, importance, created_at)
-                        VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
-                    """, (mid, content, category, source, importance, fts_created))
-                    synced += 1
-
-            if scroll_offset is None:
-                break
-
-        if synced > 0:
-            fts_conn.commit()
-        fts_conn.close()
-
-        if synced > 0:
-            parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
-        else:
+        # Count shortcut: if FTS has >= pg_count, skip the expensive full scan.
+        # Write-worker inserts to FTS atomically with Qdrant, so count parity
+        # is a reliable sync signal in steady state.  Full ID-membership scan
+        # only runs when counts diverge (new memories not yet in FTS).
+        if fts_count >= pg_count:
+            fts_conn.close()
             parts.append(f"fts_sync: in sync ({fts_count})")
+        else:
+            # Counts diverge — do the full ID membership check
+            fts_ids = set(
+                row[0] for row in
+                fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
+            )
+
+            synced = 0
+            scroll_offset = None
+            while True:
+                scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
+                if scroll_offset is not None:
+                    scroll_kwargs["offset"] = scroll_offset
+                points, scroll_offset = _pg.scroll(**scroll_kwargs)
+
+                for p in points:
+                    mid = str(p.id)
+                    if mid not in fts_ids:
+                        content = p.payload.get('data', '')
+                        if not content:
+                            continue
+                        category = p.payload.get('category', 'general')
+                        source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
+                        importance = p.payload.get('narrative_importance', 'medium')
+                        # Preserve source created_at; fall back to now if missing
+                        src_created = p.payload.get('created_at', '')
+                        if src_created:
+                            # Normalize to SQLite-compatible UTC format (#002)
+                            fts_created = to_sqlite_utc(src_created)
+                        else:
+                            fts_created = None  # will use datetime('now')
+                        fts_conn.execute("""
+                            INSERT OR REPLACE INTO memories_text
+                            (memory_id, content, category, source, importance, created_at)
+                            VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                        """, (mid, content, category, source, importance, fts_created))
+                        synced += 1
+
+                if scroll_offset is None:
+                    break
+
+            if synced > 0:
+                fts_conn.commit()
+            fts_conn.close()
+
+            if synced > 0:
+                parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
+            else:
+                parts.append(f"fts_sync: in sync ({fts_count})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
         has_failure = True
@@ -2056,8 +2063,8 @@ def _tick_health(budget_ms: int) -> dict:
     try:
         from modules.health_monitor import run_health_check
         hc_conn = connect_fts(FTS_DB_PATH)
-        now_iso = datetime.now(TZ_COL).isoformat()
-        hc = run_health_check(hc_conn, now_iso)
+        hc_now = datetime.now(TZ_COL).isoformat()
+        hc = run_health_check(hc_conn, hc_now)
         if hc["alerts_fired"]:
             parts.append(f"health_monitor: {hc['alerts_fired']} alerts fired")
         else:

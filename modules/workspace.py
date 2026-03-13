@@ -365,7 +365,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                     Maps to decay_multiplier = decay_rate / 0.05 for FadeMem.
     """
     from modules.forgetting import (
-        compute_fadem_strength, compute_fadem_strength_ss_rs,
+        compute_fadem_strength_ss_rs,
         _get_hours_since_access,
         _get_emotional_arousal, _is_consolidated, _get_memory_type,
         FADEM_FLOOR, should_enter_vault,

@@ -240,55 +240,6 @@ def _auto_curate_buffer(conn):
 # CONTEXT LOADER (for despertar_codi)
 # ============================================================
 
-def _load_working_memory_context() -> str:
-    """Top 10 active items by effective_score, truncated to 2000 chars."""
-    try:
-        with _get_conn() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
-                    "SELECT id, content, topic, chain_id, relevance, "
-                    "last_accessed_at, access_count, created_at "
-                    "FROM working_memory WHERE active = TRUE"
-                )
-                rows = cur.fetchall()
-
-        if not rows:
-            return ""
-
-        # Filter noise patterns from wake-up display (data stays in DB)
-        _WAKE_NOISE = ["[PROACTIVE MSG SENT]", "[PROACTIVE_EVAL]"]
-        rows = [r for r in rows
-                if not any(pat in (r["content"] or "") for pat in _WAKE_NOISE)]
-
-        if not rows:
-            return ""
-
-        scored = []
-        for r in rows:
-            s = _effective_score(r["relevance"], r["last_accessed_at"],
-                                 r["access_count"], r["created_at"])
-            scored.append((r, s))
-
-        scored.sort(key=lambda x: x[1], reverse=True)
-        top10 = scored[:10]
-
-        lines = []
-        total_len = 0
-        for r, s in top10:
-            content = r["content"][:100]
-            topic = r["topic"] or "general"
-            chain = r["chain_id"] or "-"
-            line = f"- [{s:.2f}] ({topic}/{chain}) {content}"
-            if total_len + len(line) > 2000:
-                break
-            lines.append(line)
-            total_len += len(line)
-
-        return "\n".join(lines)
-    except Exception:
-        return ""
-
-
 # ============================================================
 # PUBLIC HELPER FUNCTIONS (for session_bridge, flush, wiring)
 # ============================================================

@@ -44,7 +44,7 @@ from modules.config import (
     BACKUP_POLICY,
     BACKUP_MIN_INTERVAL_SEC,
     BACKUP_MAX_FILES,
-    now_col, now_iso, now_short, now_display,
+    now_col, now_iso, now_short,
 )
 from modules.secret_redact import redact_secrets
 

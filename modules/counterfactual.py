@@ -55,8 +55,8 @@ _CF_PATTERNS_EN = [
 
 # Negation keywords that signal the intervention target follows
 _NEGATION_MARKERS = [
-    "no", "not", "sin", "never", "hadn't", "hadn't", "hadn't", "no\s+hubiera",
-    "si\s+no", "without", "instead", "en\s+lugar",
+    "no", "not", "sin", "never", "hadn't", "hadn't", "hadn't", r"no\s+hubiera",
+    r"si\s+no", "without", "instead", r"en\s+lugar",
 ]
 
 

@@ -39,7 +39,6 @@ from modules.active_inference import (
     # Sprint 6: Options Framework
     Option,
     ALL_OPTIONS,
-    OPTION_MAP,
     get_available_options,
     compute_option_efe,
 )

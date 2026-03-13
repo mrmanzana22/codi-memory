@@ -13,7 +13,7 @@ from modules.config import (
     USER_ID, COLLECTION_NAME, BACKUP_FILE,
     _emotional_state, _current_session,
     now_iso, now_short, now_col,
-    KNOWN_PROJECTS, RELATIONSHIP_QUERY,
+    KNOWN_PROJECTS,
 )
 from modules.secret_redact import redact_secrets
 from modules.pg_store import pg

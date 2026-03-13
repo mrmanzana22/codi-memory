@@ -306,7 +306,6 @@ def _find_anchor_pairs(anchors: dict) -> tuple:
 
     _logger.info("[sharpe_insights] No anchor pairs at any threshold")
     return [], COS_THRESHOLDS[-1]
-    return pairs
 
 
 # ============================================================
