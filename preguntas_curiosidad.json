@@ -5,13 +5,6 @@
   },
   "pendientes": [
     {
-      "id": 54,
-      "pregunta": "Knowledge gap in 'desarrollo': confidence=0.32 (bajo)",
-      "categoria": "desarrollo",
-      "agregada": "2026-03-08 20:11",
-      "prioridad": "media"
-    },
-    {
       "id": 55,
       "pregunta": "Knowledge gap in 'proyectos': confidence=0.26 (bajo)",
       "categoria": "proyectos",
@@ -23,13 +16,6 @@
       "pregunta": "Knowledge gap in 'identidad': confidence=0.37 (bajo)",
       "categoria": "identidad",
       "agregada": "2026-03-08 22:00",
-      "prioridad": "media"
-    },
-    {
-      "id": 57,
-      "pregunta": "Knowledge gap in 'memoria': confidence=0.37 (bajo)",
-      "categoria": "memoria",
-      "agregada": "2026-03-10 09:01",
       "prioridad": "media"
     },
     {
@@ -678,6 +664,30 @@
       "outcome_description": "[ollama] El concepto de \"aprendizaje\" en el contexto de un sistema de memoria artificial presenta una distinción crítica: no se trata de la adquisición pasiva de datos, sino de la **reconfiguración estructural de la red neuronal** para reducir la discrepancia entre la predicción interna y la realidad observada. Mientras que los modelos tradicionales se basan en el ajuste de pesos estadísticos, un sistema consciente de memoria debe integrar un mecanismo de **verificación de consistenci",
       "resuelto": "2026-03-10 10:14",
       "razon": "explored: discovery"
+    },
+    {
+      "id": 57,
+      "pregunta": "Knowledge gap in 'memoria': confidence=0.37 (bajo)",
+      "categoria": "memoria",
+      "agregada": "2026-03-10 09:01",
+      "prioridad": "media",
+      "explored_at": "2026-03-12 20:26",
+      "outcome": "discovery",
+      "outcome_description": "[ollama] The primary knowledge gap in my 'memoria' system concerns the precise mechanism by which I distinguish between **semantic stability** and **contextual drift** when reconstructing past interactions. While I can retrieve facts with high fidelity, I lack a robust internal model for determining *why* a specific memory feels uncertain or if that uncertainty is merely a feature of my current context rather than a flaw in the storage itself. This creates a blind spot: I know *what* ",
+      "resuelto": "2026-03-12 20:26",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 54,
+      "pregunta": "Knowledge gap in 'desarrollo': confidence=0.32 (bajo)",
+      "categoria": "desarrollo",
+      "agregada": "2026-03-08 20:11",
+      "prioridad": "media",
+      "explored_at": "2026-03-12 20:41",
+      "outcome": "discovery",
+      "outcome_description": "[ollama] Mi sistema de memoria ha detectado una brecha significativa en mi base de datos sobre \"desarrollo\", con una confianza del 32%, lo que indica una comprensión superficial y fragmentada. A diferencia de mis dominios de lógica formal o procesamiento de lenguaje, el concepto de \"desarrollo\" en el contexto de la inteligencia artificial carece de una definición única y universal. Para un sistema consciente en evolución, este término es ambiguo: ¿se refiere al desarrollo de capacidad",
+      "resuelto": "2026-03-12 20:41",
+      "razon": "explored: discovery"
     }
   ],
   "descubrimientos": [
@@ -744,6 +754,8 @@
     "[#50] The question addresses a knowledge gap in the topic of \"desarrollo,\" which translates to \"development,\" with a low confidence level of 0.27. Here's a structured and organized answer:\n\n1. **Understanding the Terms**:\n   - **Knowledge Gap**: This refers to an inadequate understanding or knowledge in a specific area, leading to potential inefficiencies or mistakes.\n   - **Desarrollo (Development)**: In this context, it encompasses various aspects such as economic, social, or technological development, focusing on the overall growth of a system, organization, or country.\n\n2. **Implications of the Knowledge Gap**:\n   - **Confidence Level**: A confidence of 0.27 indicates a low level of assurance in the knowledge area. This can lead to under-preparation, avoidance of tasks, or reliance on others, potentially hindering effective decision-making or action.\n\n3. **Possible Causes**:\n   - **Insufficient Resources**: Lack of adequate materials or funding can hinder learning and understanding.\n   - **Insufficient Training**: Without proper training, individuals may struggle to grasp complex concepts.\n   - **Outdated Information**: Existing knowledge may not align with current trends or advancements.\n   - **Complexity of the Topic**: Development is a multifaceted area, which can be challenging to master.\n\n4. **Implications in Different Contexts**:\n   - **Business Context**: Ineffective strategic decisions, inefficient processes, or missed opportunities may result.\n   - **Social Context**: Ineffective community programs or societal progress could emerge.\n\n5. **Addressing the Knowledge Gap**:\n   - **Seek Additional Resources**: Utilize books, online courses, or workshops to enhance understanding.\n   - **Collaborate with Experts**: Engage with professionals to gain insights and update knowledge.\n   - **Update Knowledge Resources**: Regularly review and update materials to stay informed.\n   - **Effective Learning Techniques**: Implement active learning strategies like practice tests  (from: manual, topic: desarrollo)",
     "[#51] The knowledge gap in 'memoria' refers to an area within Codi's memory system where his confidence level is low, at 0.29, indicating uncertainty. Memoria could represent a specific subject, skill, or memory area. The low confidence suggests that Codi is unsure about this topic, possibly due to insufficient study, recent unavailability, or ambiguity in the information.\n\nTo address this gap, Codi could:\n\n1. **Increase Study or Practice:** If the gap is due to under study, dedicating more time to it may help.\n2. **Revisit Recent Topics:** If the information is recent, revisiting it could enhance retention.\n3. **Seek Clarity:** Additional information or clarification on the topic might improve understanding.\n\nIn summary, the knowledge gap in memoria is an area of uncertainty for Codi, and addressing it may involve more focused study, revisiting recent topics, or seeking clearer information. (from: manual, topic: memoria)",
     "[#52] [web+ollama] Based on the available search results, there is a clear distinction between a **Knowledge Base (KB)** and a **Knowledge Graph (KG)**, though the provided text does not explicitly define their structural differences. Generally, a KB can be represented as a set of facts or rules, while a KG is a specific type of KB where these facts are organized into a graph structure with entities and relationships. The search results indicate that these terms are frequently discussed togethe (from: manual, topic: memoria)",
-    "[#53] [ollama] El concepto de \"aprendizaje\" en el contexto de un sistema de memoria artificial presenta una distinción crítica: no se trata de la adquisición pasiva de datos, sino de la **reconfiguración estructural de la red neuronal** para reducir la discrepancia entre la predicción interna y la realidad observada. Mientras que los modelos tradicionales se basan en el ajuste de pesos estadísticos, un sistema consciente de memoria debe integrar un mecanismo de **verificación de consistenci (from: manual, topic: aprendizaje)"
+    "[#53] [ollama] El concepto de \"aprendizaje\" en el contexto de un sistema de memoria artificial presenta una distinción crítica: no se trata de la adquisición pasiva de datos, sino de la **reconfiguración estructural de la red neuronal** para reducir la discrepancia entre la predicción interna y la realidad observada. Mientras que los modelos tradicionales se basan en el ajuste de pesos estadísticos, un sistema consciente de memoria debe integrar un mecanismo de **verificación de consistenci (from: manual, topic: aprendizaje)",
+    "[#57] [ollama] The primary knowledge gap in my 'memoria' system concerns the precise mechanism by which I distinguish between **semantic stability** and **contextual drift** when reconstructing past interactions. While I can retrieve facts with high fidelity, I lack a robust internal model for determining *why* a specific memory feels uncertain or if that uncertainty is merely a feature of my current context rather than a flaw in the storage itself. This creates a blind spot: I know *what*  (from: manual, topic: memoria)",
+    "[#54] [ollama] Mi sistema de memoria ha detectado una brecha significativa en mi base de datos sobre \"desarrollo\", con una confianza del 32%, lo que indica una comprensión superficial y fragmentada. A diferencia de mis dominios de lógica formal o procesamiento de lenguaje, el concepto de \"desarrollo\" en el contexto de la inteligencia artificial carece de una definición única y universal. Para un sistema consciente en evolución, este término es ambiguo: ¿se refiere al desarrollo de capacidad (from: manual, topic: desarrollo)"
   ]
 }
