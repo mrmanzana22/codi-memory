@@ -42,9 +42,18 @@ def _tname(name):
 
 
 def _boost_goal(goal_id, touches=_BOOST_TOUCHES):
-    """Touch a goal many times to boost its activation above production goals."""
-    for _ in range(touches):
-        goals.touch_goal(goal_id)
+    """Boost a goal's activation above production goals via direct SQL.
+
+    Uses a single UPDATE instead of N touch_goal() calls to avoid
+    exhausting the PG connection pool during tests.
+    """
+    with get_conn() as conn:
+        with conn.transaction():
+            conn.execute(
+                "UPDATE goals SET access_count = access_count + %s, "
+                "last_accessed = NOW() WHERE id = %s",
+                (touches, goal_id),
+            )
 
 
 @pytest.fixture(autouse=True)
