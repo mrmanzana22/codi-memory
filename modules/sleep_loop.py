@@ -168,6 +168,8 @@ class SleepWorldModel:
         "self_model":         {},  # Metacognitive — no direct state effect
         "causal_discovery":   {},  # Structural learning — no direct homeostatic effect
         "sharpe_insights":    {},  # Read-only analysis — no direct state effect
+        "health_snapshot":    {},  # Operational snapshot — no direct state effect
+        "proactive_contact":  {},  # User contact — no direct state effect
     }
 
     LEARNING_RATE = 0.3  # EMA alpha for learned effects

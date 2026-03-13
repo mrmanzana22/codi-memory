@@ -169,11 +169,9 @@ class TestRecallNoUpdateLowSignal(unittest.TestCase):
         ]
         self.assertFalse(should_update_from_recall(results))
 
-    def test_three_results_triggers_update(self):
+    def test_high_importance_triggers_update(self):
         results = [
-            {"text": "memory 1", "source": "search"},
-            {"text": "memory 2", "source": "search"},
-            {"text": "memory 3", "source": "search"},
+            {"text": "memory 1", "source": "search", "meta": {"importance": "high"}},
         ]
         self.assertTrue(should_update_from_recall(results))
 
