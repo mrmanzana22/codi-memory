@@ -105,6 +105,7 @@ def _try_claude(task_type: str, prompt: str) -> Optional[str]:
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
             messages=[{"role": "user", "content": prompt}],
+            timeout=15.0,
         )
         text = response.content[0].text.strip() if response.content else ""
         if text:
@@ -148,6 +149,7 @@ def _try_openai(task_type: str, prompt: str) -> Optional[str]:
             messages=[{"role": "user", "content": prompt}],
             temperature=config["temperature"],
             max_tokens=config["max_tokens"],
+            timeout=15.0,
         )
         text = response.choices[0].message.content.strip()
         if text:
