@@ -4,12 +4,15 @@ PAD emotional model, mood baseline, emotion-tagged memories.
 """
 
 import json
+import logging
 
 from modules.config import (
     USER_ID, COLLECTION_NAME,
     _emotional_state, CODI_EMOTION_MAP,
     now_iso, now_short,
 )
+
+logger = logging.getLogger(__name__)
 from modules.secret_redact import redact_secrets
 from modules.pg_store import pg
 from modules.utils import (
@@ -72,7 +75,7 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
                 'trigger': trigger,
             })
         except Exception:
-            pass
+            logger.warning("Failed to emit EMOTION_CHANGED event", exc_info=True)
 
         result = {
             'result': 'Estado emocional actualizado',
@@ -119,7 +122,7 @@ def get_emotional_state(include_history: bool = False) -> str:
             }
         }
         if include_history:
-            result['history'] = _emotional_state['history'][-10:]
+            result['history'] = _emotional_state['history'][-20:]
         return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
@@ -360,7 +363,7 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
             from modules.memory_core import _track_scroll_access
             _track_scroll_access(points)
         except Exception:
-            pass
+            logger.warning("Failed to emit SCROLL_ACCESSED event", exc_info=True)
 
         # Proposal #67 Fix 3: Emit retrieval event for emotion searches
         try:
