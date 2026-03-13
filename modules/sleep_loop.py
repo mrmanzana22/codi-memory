@@ -452,7 +452,7 @@ TICK_MAX_MS = {
     "consolidation": 30000,      # was 6000 — light takes 13-76s (1.4s/candidate)
     "causal_discovery": 10000,   # was 5000
     "curiosity": 20000,          # was 5000 — N+1 fix (#140) drops to ~2s, LLM gen needs margin
-    "curiosity_resolve": 10000,  # was 5000
+    "curiosity_resolve": 20000,  # was 10000 — web search(2-8s) + Ollama(5-15s) needs margin
     "backup": 5000,              # unchanged
     "sharpe_insights": 5000,     # was 3000
     "reconsolidation": 5000,     # was 3000
@@ -2421,6 +2421,12 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
             tick_results.append(result)
             if result.get("ok") and result.get("status") == "ok":
+                _record_tick_timestamp(name)
+            elif result.get("status") == "timeout":
+                # Thread continues in background (pool.shutdown(wait=False))
+                # and Python atexit handler joins it before process exit.
+                # Record timestamp: timeout is a perf signal, not a liveness
+                # signal.  tick_dead should only fire for truly absent ticks.
                 _record_tick_timestamp(name)
 
             # S4-05: Learn from observation (only on success)
