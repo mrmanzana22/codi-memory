@@ -13,7 +13,7 @@ Covers:
 
 import math
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 
@@ -164,15 +164,15 @@ class TestGetHoursSinceAccess:
 
     def test_created_at_fallback(self):
         from modules.forgetting import _get_hours_since_access
-        ts = (datetime.now() - timedelta(hours=5)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
         result = _get_hours_since_access({"created_at": ts})
         assert result is not None
         assert 4.5 < result < 5.5
 
     def test_access_timestamps_preferred(self):
         from modules.forgetting import _get_hours_since_access
-        old_create = (datetime.now() - timedelta(hours=100)).isoformat()
-        recent_access = (datetime.now() - timedelta(hours=2)).isoformat()
+        old_create = (datetime.now(timezone.utc) - timedelta(hours=100)).isoformat()
+        recent_access = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
         result = _get_hours_since_access({
             "created_at": old_create,
             "access_timestamps": [old_create, recent_access],
@@ -182,7 +182,7 @@ class TestGetHoursSinceAccess:
 
     def test_empty_timestamps_uses_created(self):
         from modules.forgetting import _get_hours_since_access
-        ts = (datetime.now() - timedelta(hours=10)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat()
         result = _get_hours_since_access({
             "access_timestamps": [],
             "created_at": ts,
@@ -233,7 +233,7 @@ class TestMemoryVault:
 
     def test_should_enter_vault_for_old_weak_episodic_memory(self):
         from modules.forgetting import should_enter_vault
-        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         payload = {
             "created_at": ts,
             "retrieval_strength": 0.11,
@@ -244,7 +244,7 @@ class TestMemoryVault:
 
     def test_should_not_enter_vault_for_critical_memory(self):
         from modules.forgetting import should_enter_vault
-        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         payload = {
             "created_at": ts,
             "retrieval_strength": 0.05,
@@ -254,7 +254,7 @@ class TestMemoryVault:
 
     def test_should_not_enter_vault_for_semantic_memory(self):
         from modules.forgetting import should_enter_vault
-        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         payload = {
             "created_at": ts,
             "retrieval_strength": 0.05,
@@ -277,7 +277,7 @@ class TestMemoryVault:
 
     def test_should_not_enter_vault_for_causal_chain_member(self):
         from modules.forgetting import should_enter_vault
-        ts = (datetime.now() - timedelta(days=10)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
         payload = {
             "created_at": ts,
             "retrieval_strength": 0.05,
@@ -288,7 +288,7 @@ class TestMemoryVault:
 
     def test_should_not_enter_vault_for_young_memory(self):
         from modules.forgetting import should_enter_vault
-        ts = (datetime.now() - timedelta(days=3)).isoformat()
+        ts = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
         payload = {
             "created_at": ts,
             "retrieval_strength": 0.05,
@@ -345,12 +345,12 @@ class TestCalibration:
         )
         assert result > 0.4, f"Critical consolidated at 7d too low: {result}"
 
-    def test_critical_unconsolidated_7_days_hits_floor(self):
-        """Critical unconsolidated at 7d decays heavily (should be consolidated by then)."""
-        from modules.forgetting import compute_fadem_strength, FADEM_FLOOR
+    def test_critical_unconsolidated_7_days_no_decay(self):
+        """Critical memories never decay (P0 Bug #3 fix: identity/architectural facts persist)."""
+        from modules.forgetting import compute_fadem_strength
         result = compute_fadem_strength(0.8, 168.0, importance="critical")
-        # Unconsolidated memories decay fast by design (Tononi & Cirelli 2003)
-        assert result <= 0.3
+        # Critical memories are exempt from decay entirely
+        assert result == 0.8
 
     def test_low_24h_significant_decay(self):
         """Low-importance unconsolidated after 24h should decay significantly."""
@@ -360,11 +360,11 @@ class TestCalibration:
 
 
 # ============================================================
-# RIF TESTS (mocked Qdrant)
+# RIF TESTS (mocked pg_store)
 # ============================================================
 
 class _FakePoint:
-    """Minimal Qdrant point mock for RIF tests."""
+    """Minimal pg_store Point mock for RIF tests."""
     def __init__(self, id, payload, vector=None, score=0.8):
         self.id = id
         self.payload = payload
@@ -375,120 +375,117 @@ class _FakePoint:
 class TestApplyRif:
     """Tests for apply_rif (Retrieval-Induced Forgetting)."""
 
-    @patch("modules.forgetting.qdrant", create=True)
-    @patch("modules.forgetting.record_access", create=True)
-    def test_too_few_results_skips(self, mock_record, mock_qdrant):
+    def test_too_few_results_skips(self):
         from modules.forgetting import apply_rif
         result = apply_rif(["mem-1"])  # Only 1 result
         assert result["applied"] is False
         assert result["reason"] == "too_few_results"
 
-    @patch("modules.config.qdrant")
-    @patch("modules.access_tracking.record_access")
-    def test_suppresses_competitors(self, mock_record, mock_qdrant):
+    @patch("modules.forgetting.pg")
+    def test_suppresses_competitors(self, mock_pg):
         from modules.forgetting import apply_rif, FADEM_FLOOR
 
         # Setup: top result has a vector
         retrieved_point = _FakePoint("r1", {}, vector=[1.0] * 10)
-        mock_qdrant.retrieve.return_value = [retrieved_point]
+        mock_pg.get_by_ids.return_value = [retrieved_point]
 
         # Competitors: similar memories not in retrieved set
         comp1 = _FakePoint("c1", {"attention_salience": 0.7, "narrative_importance": "medium"}, score=0.8)
         comp2 = _FakePoint("c2", {"attention_salience": 0.5, "narrative_importance": "low"}, score=0.6)
-        # This one is retrieved, should NOT be suppressed
+        # These are retrieved, should NOT be suppressed
         ret1 = _FakePoint("r1", {"attention_salience": 0.9}, score=0.95)
         ret2 = _FakePoint("r2", {"attention_salience": 0.8}, score=0.90)
-        mock_qdrant.search.return_value = [ret1, ret2, comp1, comp2]
+        mock_pg.query_vector.return_value = [ret1, ret2, comp1, comp2]
+        mock_pg.update_payload.return_value = True
 
         result = apply_rif(["r1", "r2"])
         assert result["applied"] is True
         assert result["suppressed"] == 2
-        assert mock_record.call_count == 2
+        assert mock_pg.update_payload.call_count == 2
 
         # Check salience was reduced
-        for call in mock_record.call_args_list:
-            new_sal = call[0][2]["attention_salience"]
+        for call in mock_pg.update_payload.call_args_list:
+            updates = call[0][1]  # update_payload(id, updates)
+            new_sal = updates["attention_salience"]
             assert new_sal >= FADEM_FLOOR
 
-    @patch("modules.config.qdrant")
-    @patch("modules.access_tracking.record_access")
-    def test_critical_exempt_from_rif(self, mock_record, mock_qdrant):
+    @patch("modules.forgetting.pg")
+    def test_critical_exempt_from_rif(self, mock_pg):
         from modules.forgetting import apply_rif
 
         retrieved_point = _FakePoint("r1", {}, vector=[1.0] * 10)
-        mock_qdrant.retrieve.return_value = [retrieved_point]
+        mock_pg.get_by_ids.return_value = [retrieved_point]
 
         # Critical competitor should be exempt
         critical_comp = _FakePoint("c1", {"attention_salience": 0.9, "narrative_importance": "critical"}, score=0.85)
         medium_comp = _FakePoint("c2", {"attention_salience": 0.6, "narrative_importance": "medium"}, score=0.7)
         ret1 = _FakePoint("r1", {}, score=0.95)
         ret2 = _FakePoint("r2", {}, score=0.90)
-        mock_qdrant.search.return_value = [ret1, ret2, critical_comp, medium_comp]
+        mock_pg.query_vector.return_value = [ret1, ret2, critical_comp, medium_comp]
+        mock_pg.update_payload.return_value = True
 
         result = apply_rif(["r1", "r2"])
         assert result["applied"] is True
         # Only medium should be suppressed, not critical
         assert result["suppressed"] == 1
 
-    @patch("modules.config.qdrant")
-    @patch("modules.access_tracking.record_access")
-    def test_no_competitors_returns_not_applied(self, mock_record, mock_qdrant):
+    @patch("modules.forgetting.pg")
+    def test_no_competitors_returns_not_applied(self, mock_pg):
         from modules.forgetting import apply_rif
 
         retrieved_point = _FakePoint("r1", {}, vector=[1.0] * 10)
-        mock_qdrant.retrieve.return_value = [retrieved_point]
+        mock_pg.get_by_ids.return_value = [retrieved_point]
 
         # All neighbors are in the retrieved set
         ret1 = _FakePoint("r1", {}, score=0.95)
         ret2 = _FakePoint("r2", {}, score=0.90)
-        mock_qdrant.search.return_value = [ret1, ret2]
+        mock_pg.query_vector.return_value = [ret1, ret2]
 
         result = apply_rif(["r1", "r2"])
         assert result["applied"] is False
         assert result["reason"] == "no_competitors"
 
-    @patch("modules.config.qdrant")
-    @patch("modules.access_tracking.record_access")
-    def test_floor_memories_not_suppressed(self, mock_record, mock_qdrant):
+    @patch("modules.forgetting.pg")
+    def test_floor_memories_not_suppressed(self, mock_pg):
         from modules.forgetting import apply_rif, FADEM_FLOOR
 
         retrieved_point = _FakePoint("r1", {}, vector=[1.0] * 10)
-        mock_qdrant.retrieve.return_value = [retrieved_point]
+        mock_pg.get_by_ids.return_value = [retrieved_point]
 
         # Competitor already at floor
         floor_comp = _FakePoint("c1", {"attention_salience": FADEM_FLOOR, "narrative_importance": "low"}, score=0.7)
         ret1 = _FakePoint("r1", {}, score=0.95)
         ret2 = _FakePoint("r2", {}, score=0.90)
-        mock_qdrant.search.return_value = [ret1, ret2, floor_comp]
+        mock_pg.query_vector.return_value = [ret1, ret2, floor_comp]
 
         result = apply_rif(["r1", "r2"])
         assert result["applied"] is True
         assert result["suppressed"] == 0  # At floor, nothing to suppress
 
-    @patch("modules.config.qdrant")
-    @patch("modules.access_tracking.record_access")
-    def test_strong_competitors_suppressed_more(self, mock_record, mock_qdrant):
+    @patch("modules.forgetting.pg")
+    def test_strong_competitors_suppressed_more(self, mock_pg):
         """Inhibitory deficit: strong competitors get more suppression (Anderson 2003)."""
         from modules.forgetting import apply_rif
 
         retrieved_point = _FakePoint("r1", {}, vector=[1.0] * 10)
-        mock_qdrant.retrieve.return_value = [retrieved_point]
+        mock_pg.get_by_ids.return_value = [retrieved_point]
 
         strong = _FakePoint("c1", {"attention_salience": 0.9, "narrative_importance": "medium"}, score=0.8)
         weak = _FakePoint("c2", {"attention_salience": 0.3, "narrative_importance": "medium"}, score=0.8)
         ret1 = _FakePoint("r1", {}, score=0.95)
         ret2 = _FakePoint("r2", {}, score=0.90)
-        mock_qdrant.search.return_value = [ret1, ret2, strong, weak]
+        mock_pg.query_vector.return_value = [ret1, ret2, strong, weak]
+        mock_pg.update_payload.return_value = True
 
         result = apply_rif(["r1", "r2"])
         assert result["suppressed"] == 2
 
         # Strong competitor should lose more absolute salience
-        calls = mock_record.call_args_list
+        calls = mock_pg.update_payload.call_args_list
         sal_by_id = {}
         for call in calls:
-            cid = call[0][1]
-            new_sal = call[0][2]["attention_salience"]
+            cid = call[0][0]  # update_payload(id, updates)
+            new_sal = call[0][1]["attention_salience"]
             sal_by_id[cid] = new_sal
 
         strong_loss = 0.9 - sal_by_id["c1"]
@@ -496,20 +493,20 @@ class TestApplyRif:
         assert strong_loss > weak_loss
 
     def test_rif_with_query_embedding(self):
-        """Can provide pre-computed embedding instead of fetching from Qdrant."""
-        with patch("modules.config.qdrant") as mock_qdrant, \
-             patch("modules.access_tracking.record_access"):
+        """Can provide pre-computed embedding instead of fetching from pg."""
+        with patch("modules.forgetting.pg") as mock_pg:
             from modules.forgetting import apply_rif
 
             comp = _FakePoint("c1", {"attention_salience": 0.6, "narrative_importance": "medium"}, score=0.7)
             ret1 = _FakePoint("r1", {}, score=0.95)
             ret2 = _FakePoint("r2", {}, score=0.90)
-            mock_qdrant.search.return_value = [ret1, ret2, comp]
+            mock_pg.query_vector.return_value = [ret1, ret2, comp]
+            mock_pg.update_payload.return_value = True
 
             result = apply_rif(["r1", "r2"], query_embedding=[1.0] * 10)
             assert result["applied"] is True
-            # Should NOT call retrieve (embedding provided)
-            mock_qdrant.retrieve.assert_not_called()
+            # Should NOT call get_by_ids (embedding provided)
+            mock_pg.get_by_ids.assert_not_called()
 
 
 class TestRifConstants:
