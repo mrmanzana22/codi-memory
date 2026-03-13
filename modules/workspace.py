@@ -540,6 +540,13 @@ def get_high_salience_memories(limit: int = 10) -> str:
 
         sorted_points = sorted(all_points, key=lambda p: p.payload.get('attention_salience', 0.5), reverse=True)
 
+        # Track access for retrieved memories (FadeMem strength update)
+        try:
+            from modules.memory_core import _track_scroll_access
+            _track_scroll_access(sorted_points[:limit])
+        except Exception:
+            pass
+
         lines = [f"# Memorias con Mayor Salience (Top {limit})\n"]
         lines.append("*Estas son las memorias mas 'presentes' en mi mente*\n")
 

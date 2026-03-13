@@ -1740,7 +1740,8 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                             if t.tzinfo:
                                 cot_offset = timezone(timedelta(hours=-5))
                                 t = t.astimezone(cot_offset).replace(tzinfo=None)
-                            if t < now:
+                            hours_overdue = (now - t).total_seconds() / 3600
+                            if 0 < hours_overdue <= 48:  # Skip stale (>48h = abandoned)
                                 overdue.append(intent.get("action", "?"))
                         except (TypeError, ValueError):
                             pass
@@ -1783,7 +1784,7 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                    AND datetime(started_at) > datetime('now', '-3 hours')"""
             ).fetchone()
             conn.close()
-            if row and row[0] >= 3:
+            if row and row[0] >= 10:
                 signals.append(f"Sistema inestable: {row[0]} tick errors en ultimas 3h")
         except Exception:
             pass
@@ -1821,6 +1822,15 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
             return result
 
+        # Skip noise-only messages (if all signals are just system health, Hare
+        # doesn't need to know — it's our internal problem to fix, not his).
+        actionable = [s for s in signals if not s.startswith("Sistema inestable")]
+        if not actionable:
+            result["ok"] = True
+            result["detail"] = f"skip: {len(signals)} signals but all system-health noise"
+            result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
+            return result
+
         # Compose and send via shared notifier (handles its own cooldown)
         header = "Hola parcero, soy Codi. Tengo algo para ti:\n\n"
         body = "\n".join(f"- {s}" for s in signals)
@@ -1836,7 +1846,10 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
                 return result
 
-        sent = notify_hare(message)
+        # force=True: this tick already enforces its own 3h cooldown above,
+        # so bypass the notifier's 1h cooldown to avoid proactive_last_sent
+        # never getting updated (which caused ~1h spam instead of 3h).
+        sent = notify_hare(message, force=True)
         if sent:
             _set_proactive_last_sent()
             result["ok"] = True
@@ -1851,24 +1864,11 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
                 conn.commit()
                 conn.close()
         else:
-            # Distinguish cooldown from send failure (#009)
-            from modules.notifier import _get_last_notification_time, COOLDOWN_HOURS
-            last_notif = _get_last_notification_time()
-            if last_notif:
-                hours_since = (now_col() - last_notif).total_seconds() / 3600
-                in_cooldown = hours_since < COOLDOWN_HOURS
-            else:
-                in_cooldown = False
-            if in_cooldown:
-                result["ok"] = True
-                result["detail"] = f"{len(signals)} signals, cooldown active"
-            else:
-                # Telegram send failure is an external service issue, not a tick
-                # logic error.  Mark ok=True to avoid polluting tick error metrics
-                # and starving budget_exhausted accounting.  The notifier module
-                # already logs the HTTP-level failure.
-                result["ok"] = True
-                result["detail"] = f"{len(signals)} signals, send failed (external)"
+            # With force=True, notify_hare only returns False on Telegram API
+            # failure (not cooldown).  Mark ok=True to avoid polluting tick
+            # error metrics — the notifier module already logs the HTTP error.
+            result["ok"] = True
+            result["detail"] = f"{len(signals)} signals, telegram send failed (external)"
 
     except Exception as e:
         result["detail"] = f"error: {redact_secrets(str(e))[:100]}"
