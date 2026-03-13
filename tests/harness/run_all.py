@@ -170,12 +170,134 @@ def run_all(skip_retrieval: bool = False) -> dict:
     }
     report["summary"]["skipped"] += 1
 
+    # ---- P2 TESTS: Cross-Loop Integration (Fase 1) ----
+
+    # 11: Event flow & instrumentation
+    print("Running: event_flow...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_event_flow import run_event_flow_test
+        result = run_event_flow_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["event_flow"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["event_flow"] = {"test": "event_flow", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 12: Cross-loop chains
+    print("Running: cross_loop_chains...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_cross_loop_chains import run_cross_loop_chain_test
+        result = run_cross_loop_chain_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["cross_loop_chains"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["cross_loop_chains"] = {"test": "cross_loop_chains", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 13: E/I balance
+    print("Running: ei_balance...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_ei_balance import run_ei_balance_test
+        result = run_ei_balance_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["ei_balance"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["ei_balance"] = {"test": "ei_balance", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 14: Feedback stability
+    print("Running: feedback_stability...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_feedback_stability import run_feedback_stability_test
+        result = run_feedback_stability_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["feedback_stability"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["feedback_stability"] = {"test": "feedback_stability", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 15: Ablation framework
+    print("Running: ablation...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_ablation import run_ablation_test
+        result = run_ablation_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["ablation"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["ablation"] = {"test": "ablation", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 16: PCI (Perturbational Complexity Index)
+    print("Running: pci...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_pci import run_pci_test
+        result = run_pci_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["pci"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["pci"] = {"test": "pci", "error": str(e)}
+        report["summary"]["errors"] += 1
+
+    # 17: Failure modes
+    print("Running: failure_modes...", flush=True)
+    t0 = time.time()
+    try:
+        from tests.harness.test_failure_modes import run_failure_modes_test
+        result = run_failure_modes_test()
+        result["duration_s"] = round(time.time() - t0, 1)
+        report["tests"]["failure_modes"] = result
+        report["summary"]["total"] += 1
+        if result.get("pass"):
+            report["summary"]["passed"] += 1
+        else:
+            report["summary"]["failed"] += 1
+    except Exception as e:
+        report["tests"]["failure_modes"] = {"test": "failure_modes", "error": str(e)}
+        report["summary"]["errors"] += 1
+
     # Final summary
     total_scored = report["summary"]["total"]
     report["summary"]["pass_rate"] = (
         round(report["summary"]["passed"] / total_scored, 3) if total_scored else 0
     )
     report["summary"]["meets_p1_target"] = report["summary"]["passed"] >= 7
+    report["summary"]["meets_p2_target"] = report["summary"]["passed"] >= 10
 
     return report
 
@@ -189,6 +311,7 @@ def save_baselines(report: dict, path: str = REPORT_PATH) -> str:
         f"**Summary:** {s['passed']}/{s['total']} passed, "
         f"{s['failed']} failed, {s['skipped']} skipped, {s['errors']} errors",
         f"**P1 Target (7/10 pass):** {'MET' if s['meets_p1_target'] else 'NOT MET'}",
+        f"**P2 Target (10/15 pass):** {'MET' if s.get('meets_p2_target') else 'NOT MET'}",
         "",
         "## Results",
         "",
@@ -207,6 +330,14 @@ def save_baselines(report: dict, path: str = REPORT_PATH) -> str:
         ("8", "override_success", report["tests"].get("override_success", {}), None, "pass", "100%"),
         ("9", "tick_health", report["tests"].get("tick_health", {}), "health_pct", "pass", ">= 0.95"),
         ("10", "body_handoff", report["tests"].get("body_handoff", {}), None, "pass", "100%"),
+        # P2 — Cross-Loop Integration
+        ("11", "event_flow", report["tests"].get("event_flow", {}), "total_checks", "pass", "all checks"),
+        ("12", "cross_loop_chains", report["tests"].get("cross_loop_chains", {}), "total_chains", "pass", "all chains"),
+        ("13", "ei_balance", report["tests"].get("ei_balance", {}), None, "pass", "65-85% E"),
+        ("14", "feedback_stability", report["tests"].get("feedback_stability", {}), None, "pass", "no runaway"),
+        ("15", "ablation", report["tests"].get("ablation", {}), "total_checks", "pass", "all checks"),
+        ("16", "pci", report["tests"].get("pci", {}), "avg_pci", "pass", "0.05-0.80"),
+        ("17", "failure_modes", report["tests"].get("failure_modes", {}), "total_checks", "pass", "all checks"),
     ]
 
     for num, name, data, val_key, pass_key, target in test_rows:

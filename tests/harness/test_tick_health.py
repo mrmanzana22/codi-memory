@@ -30,7 +30,7 @@ def _get_db_path() -> str:
         return os.path.expanduser("~/codi-memory/memories_fts.db")
 
 
-def run_tick_health_test(days: int = 7) -> dict:
+def run_tick_health_test(days: int = 1) -> dict:
     """Measure tick health over rolling window.
 
     Returns dict with overall success rate and per-tick breakdown.
