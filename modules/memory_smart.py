@@ -674,6 +674,139 @@ def _compute_dedup_threshold(importance: str = "medium") -> float:
     return min(0.97, max(0.85, round(base, 3)))
 
 
+def _assess_content_quality(content: str) -> dict:
+    """Assess whether content is rich enough to be findable later.
+
+    Nelson & Narens 1990: metacognitive monitoring at encoding.
+    Craik & Tulving 1975: depth of processing predicts recall.
+
+    Returns:
+        {"pass": bool, "score": float(0-1), "issues": list, "suggestions": list}
+    """
+    issues = []
+    score = 1.0
+    words = content.split()
+
+    # Check 1: Minimum length
+    if len(words) < 5:
+        issues.append("too_short")
+        score -= 0.4
+
+    # Check 2: Has at least one specific term (proper noun, tech term, identifier)
+    specific_count = 0
+    for w in words:
+        # snake_case identifiers, file.py, CamelCase, or UPPERCASE acronyms
+        if ('_' in w or ('.' in w and not w.endswith('.'))
+                or (len(w) > 2 and w[0].isupper() and any(c.islower() for c in w))
+                or (len(w) >= 2 and w.isupper() and w.isalpha())):
+            specific_count += 1
+    if specific_count == 0:
+        issues.append("no_specific_terms")
+        score -= 0.3
+
+    # Check 3: Not a known generic phrase
+    _low = content.lower().strip().rstrip(".")
+    _GENERIC = {
+        "hicimos cosas hoy", "trabajamos en el proyecto", "implementamos sprints",
+        "avanzamos", "todo bien", "seguimos trabajando", "nada nuevo",
+        "implementamos cosas", "hicimos varias cosas",
+    }
+    if _low in _GENERIC:
+        issues.append("generic_phrase")
+        score -= 0.5
+
+    suggestions = []
+    if "no_specific_terms" in issues:
+        suggestions.append("Add module names, function names, or file paths")
+    if "too_short" in issues:
+        suggestions.append("Add more detail: what was done, why, and where")
+    if "generic_phrase" in issues:
+        suggestions.append("Replace with specific description of what changed")
+
+    return {
+        "pass": score >= 0.5,
+        "score": max(0.0, round(score, 2)),
+        "issues": issues,
+        "suggestions": suggestions,
+    }
+
+
+def _auto_enrich_content(content: str, category: str) -> str:
+    """Enrich thin memories with contextual keywords at save time.
+
+    Zero LLM calls — uses working memory, session edits, and goals.
+    Craik & Lockhart 1972: elaborative encoding at save time.
+
+    Args:
+        content: The original memory content.
+        category: Memory category.
+
+    Returns:
+        Enriched content string (original + context tags).
+    """
+    import os
+    enrichments = []
+
+    # 1. Active working memory topics
+    try:
+        from modules.config import connect_fts, FTS_DB_PATH
+        if os.path.exists(FTS_DB_PATH):
+            conn = connect_fts(FTS_DB_PATH)
+            rows = conn.execute(
+                "SELECT DISTINCT topic FROM working_memory WHERE active = 1 "
+                "AND topic NOT IN ('', 'general', 'metamemory', 'contradiction') "
+                "LIMIT 3"
+            ).fetchall()
+            conn.close()
+            topics = [r[0] for r in rows if r[0]]
+            if topics:
+                enrichments.append(f"[topics: {', '.join(topics)}]")
+    except Exception:
+        pass
+
+    # 2. Recent session edits (from edit_tracker.py)
+    try:
+        edits_log = os.path.expanduser("~/.claude/session_edits.jsonl")
+        if os.path.exists(edits_log):
+            import json as _json
+            with open(edits_log, "r", encoding="utf-8") as f:
+                lines = f.readlines()[-5:]
+            files = set()
+            funcs = set()
+            for line in lines:
+                if not line.strip():
+                    continue
+                entry = _json.loads(line)
+                files.add(entry.get("file", ""))
+                funcs.update(entry.get("functions", []))
+            files.discard("")
+            if files:
+                enrichments.append(f"[files: {', '.join(sorted(files)[:5])}]")
+            if funcs:
+                enrichments.append(f"[functions: {', '.join(sorted(funcs)[:5])}]")
+    except Exception:
+        pass
+
+    # 3. Active goal title
+    try:
+        from modules.config import connect_fts, FTS_DB_PATH
+        if os.path.exists(FTS_DB_PATH):
+            conn = connect_fts(FTS_DB_PATH)
+            row = conn.execute(
+                "SELECT title FROM goals WHERE status = 'active' "
+                "ORDER BY activation DESC LIMIT 1"
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                enrichments.append(f"[goal: {row[0]}]")
+    except Exception:
+        pass
+
+    if enrichments:
+        return content + " " + " ".join(enrichments)
+    return content
+
+
 def add_memory_smart(content: str, category: str = "general",
                      source: str = "experienced", importance: str = "medium",
                      dedup_threshold: float = 0.0,
@@ -854,6 +987,26 @@ def add_memory_smart(content: str, category: str = "general",
                     "score": round(top_score, 3),
                     "message": f"Memoria guardada y relacionada con existente (similitud {top_score:.2f})"
                 }, ensure_ascii=False)
+
+        # Sprint B: Quality gate — prevent unfindable memories (Nelson & Narens 1990)
+        _quality = _assess_content_quality(content)
+        if not _quality["pass"]:
+            if importance in ("critical", "high"):
+                # Auto-enrich instead of rejecting (Craik & Lockhart 1972)
+                content = _auto_enrich_content(content, category)
+            elif importance == "low":
+                # Low importance + low quality = skip
+                return json.dumps({
+                    "action": "skipped_low_quality",
+                    "quality_score": _quality["score"],
+                    "issues": _quality["issues"],
+                    "suggestions": _quality["suggestions"],
+                    "message": "Memory too vague to be findable. " +
+                               "; ".join(_quality["suggestions"])
+                }, ensure_ascii=False)
+            # medium importance: warn but save (enriched if possible)
+            elif _quality["score"] < 0.3:
+                content = _auto_enrich_content(content, category)
 
         # Sprint 13: EFE-gated active learning (PN-19)
         # Only record memories that are informative (reduce noise)
