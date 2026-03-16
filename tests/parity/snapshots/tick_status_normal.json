@@ -63,5 +63,10 @@
     "ok": true,
     "status": "ok",
     "tick": "proactive_contact"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "cx_health"
   }
 ]

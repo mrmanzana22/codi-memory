@@ -336,37 +336,38 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         pretty_lines.append("## Por emocion\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
 
-    # mode auto or memory
-    # 1) Try working memory quick scan (cheap)
-    wm_raw = None
-    try:
-        wm_raw = get_working_memory()
-        wm = json.loads(wm_raw)
-        wm_items = wm.get("items", [])
-        hits = []
-        for it in wm_items:
-            content = (it.get("content") or "")
-            if q_low and q_low in content.lower():
-                hits.append(it)
-        if hits:
-            add_result("working_memory_hits", json.dumps(hits, ensure_ascii=False), {"hits": len(hits)})
-            pretty_lines.append("## Working Memory (matches)\n" + "\n".join([f"- {h.get('content','')}" for h in hits[:10]]))
-    except Exception as exc:
-        _logger.warning("recall() working memory scan failed: %s", exc)
-        partial_sources.append("working_memory")
-        add_result(
-            "working_memory_error",
-            "Working memory unavailable during recall; results are partial.",
-            {"error_type": type(exc).__name__},
-        )
-        pretty_lines.append("## Working Memory\nUnavailable during recall (partial results).")
+    # mode auto: include working memory scan + specialized views
+    if mode == "auto":
+        # 1) Try working memory quick scan (cheap)
+        wm_raw = None
+        try:
+            wm_raw = get_working_memory()
+            wm = json.loads(wm_raw)
+            wm_items = wm.get("items", [])
+            hits = []
+            for it in wm_items:
+                content = (it.get("content") or "")
+                if q_low and q_low in content.lower():
+                    hits.append(it)
+            if hits:
+                add_result("working_memory_hits", json.dumps(hits, ensure_ascii=False), {"hits": len(hits)})
+                pretty_lines.append("## Working Memory (matches)\n" + "\n".join([f"- {h.get('content','')}" for h in hits[:10]]))
+        except Exception as exc:
+            _logger.warning("recall() working memory scan failed: %s", exc)
+            partial_sources.append("working_memory")
+            add_result(
+                "working_memory_error",
+                "Working memory unavailable during recall; results are partial.",
+                {"error_type": type(exc).__name__},
+            )
+            pretty_lines.append("## Working Memory\nUnavailable during recall (partial results).")
 
-    # 2) General hybrid memory search (safe default)
+    # 2) General hybrid memory search (both modes: auto + memory)
     out = search_memory(q, limit=limit)
     add_result("search_memory", out, {"limit": limit})
     pretty_lines.append("## Long-term memory\n" + out)
 
-    # 3) If auto, optionally add specialized views when signal is strong
+    # 3) Specialized views — only for auto mode
     if mode == "auto":
         # theme cues
         if any(k in q_low for k in ["tema:", "theme:", "proyecto", "fase ", "roadmap", "feature"]):
@@ -449,6 +450,7 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
 
     lt_res = None
     lt_enabled = bool(long_term)
+    _source_meta = None  # Source Monitoring: populated inside lt_enabled block
 
     # 2) Long-term decision: if low importance and short, skip unless explicitly requested
     if lt_enabled:
@@ -463,13 +465,54 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
 
         write_mode = _get_remember_mode()
 
+        # Source Monitoring: capture provenance at remember() time for all modes
+        _source_meta = None
+        try:
+            from modules.utils import _get_emotional_state
+            wm_ctx = ""
+            try:
+                wm_raw_ctx = get_working_memory()
+                wm_data_ctx = json.loads(wm_raw_ctx)
+                wm_items_ctx = wm_data_ctx.get("items", [])[:10]
+                wm_ctx = "\n".join(
+                    f"[{it.get('topic', '?')}] {it.get('content', '')}"
+                    for it in wm_items_ctx
+                )
+            except Exception:
+                wm_ctx = content
+            emo_snap = None
+            try:
+                emo_state = _get_emotional_state()
+                current = emo_state.get("current", {})
+                emo_snap = {
+                    "p": current.get("pleasure", 0),
+                    "a": current.get("arousal", 0),
+                    "d": current.get("dominance", 0),
+                    "trigger": current.get("trigger"),
+                }
+            except Exception:
+                pass
+            _source_meta = {
+                "session_id": get_trace_id(),
+                "source_type": source,
+                "context_full": wm_ctx,
+                "context_summary": content[:120],
+                "active_topic": topic,
+                "emotion_snapshot": emo_snap,
+            }
+        except Exception:
+            pass
+
         if write_mode == "async":
             # Async: enqueue only, return immediate ACK
             from modules.write_queue import enqueue_write_job, compute_dedupe_key
             dedupe_key = compute_dedupe_key("remember", content)
+            _payload = {"content": content, "category": topic, "source": ms_source, "importance": imp}
+            if _source_meta:
+                _payload["_source_meta"] = _source_meta
             enqueue_result = enqueue_write_job(
                 kind="remember",
-                payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                payload=_payload,
                 priority=3 if imp in ("critical", "high") else 5,
                 dedupe_key=dedupe_key,
                 session_id=get_trace_id(),
@@ -500,9 +543,12 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
             fingerprint = compute_request_fingerprint("remember", content, trace_id)
 
             # 1. Enqueue async write job
+            _payload_da = {"content": content, "category": topic, "source": ms_source, "importance": imp}
+            if _source_meta:
+                _payload_da["_source_meta"] = _source_meta
             enqueue_result = enqueue_write_job(
                 kind="remember",
-                payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                payload=_payload_da,
                 priority=3 if imp in ("critical", "high") else 5,
                 dedupe_key=dedupe_key,
                 session_id=trace_id,
@@ -614,9 +660,12 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
                 trace_id = get_trace_id()
                 dedupe_key = compute_dedupe_key("remember", content)
                 fingerprint = compute_request_fingerprint("remember", content, trace_id)
+                _payload_sh = {"content": content, "category": topic, "source": ms_source, "importance": imp}
+                if _source_meta:
+                    _payload_sh["_source_meta"] = _source_meta
                 enqueue_result = enqueue_write_job(
                     kind="remember",
-                    payload={"content": content, "category": topic, "source": ms_source, "importance": imp},
+                    payload=_payload_sh,
                     dedupe_key=dedupe_key,
                     session_id=trace_id,
                 )
@@ -639,6 +688,29 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
             finally:
                 _remember_ctx.wm_pushed = False
 
+    # Source Monitoring (Johnson et al. 1993) — record provenance
+    # For sync paths where we have the new_id immediately
+    _source_tracked = False
+    if lt_res is not None and _source_meta:
+        try:
+            lt_parsed = json.loads(lt_res) if isinstance(lt_res, str) else {}
+            new_id = lt_parsed.get("new_id")
+            if new_id and lt_parsed.get("action") in ("saved_new", "saved_with_relation", "saved_with_contradiction"):
+                from modules.source_tracking import record_source
+                record_source(
+                    memory_id=new_id,
+                    session_id=_source_meta.get("session_id", ""),
+                    source_type=_source_meta.get("source_type", source),
+                    context_full=_source_meta.get("context_full", ""),
+                    context_summary=_source_meta.get("context_summary", ""),
+                    active_topic=_source_meta.get("active_topic", ""),
+                    active_project="",
+                    emotion_snapshot=_source_meta.get("emotion_snapshot"),
+                )
+                _source_tracked = True
+        except Exception as e:
+            _logger.warning("source tracking sync failed: %s", e)
+
     pretty_lines = [
         "# REMEMBER",
         f"**Topic:** {topic}",
@@ -657,6 +729,9 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
     else:
         pretty_lines.append("\n## Long-term\n*No se consolido a long-term (por decision de importance/long_term).*")
 
+    if _source_tracked:
+        pretty_lines.append("\n*Source tracked.*")
+
     return _json_response(
         "\n".join(pretty_lines),
         topic=topic,
@@ -665,6 +740,7 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
         working_memory=wm_res,
         long_term=lt_res,
         long_term_enabled=lt_enabled,
+        source_tracked=_source_tracked,
     )
 
 
@@ -710,6 +786,26 @@ def context_snapshot(level: str = "light") -> str:
         rec = _ver_recordatorios_externos()
         if rec and rec.strip():
             pretty_lines.append("\n## Recordatorios externos\n" + rec)
+    except Exception:
+        pass
+
+    # Source Monitoring stats (Johnson et al. 1993)
+    source_stats_str = ""
+    try:
+        from modules.source_tracking import _ensure_tables
+        from modules.config_pg import get_conn
+        _ensure_tables()
+        with get_conn() as conn:
+            row = conn.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours') AS last_24h
+                FROM memory_sources
+            """).fetchone()
+            total_sources = row[0] if row else 0
+            last_24h = row[1] if row else 0
+            source_stats_str = f"Total tracked: {total_sources} | Last 24h: {last_24h}"
+            pretty_lines.append(f"\n## Source Monitoring\n{source_stats_str}")
     except Exception:
         pass
 

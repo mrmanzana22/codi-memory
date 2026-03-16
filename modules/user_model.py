@@ -177,7 +177,12 @@ def _build_state() -> AgentState:
 
                 if row:
                     state.current_topic = row[4] or ""
-                    goal_topics = json.loads(row[2] or '{}')
+                    try:
+                        goal_topics = json.loads(row[2] or '{}')
+                        if not isinstance(goal_topics, dict):
+                            goal_topics = {}
+                    except (json.JSONDecodeError, ValueError):
+                        goal_topics = {}
                     goal_locked = bool(row[3])
                     if goal_locked and goal_topics:
                         primary = max(goal_topics, key=goal_topics.get)
@@ -191,7 +196,7 @@ def _build_state() -> AgentState:
 
         # Infer stress from PE levels (high PE = topic shifting = possibly stressed)
         try:
-            if _table_exists(conn, "prediction_results"):
+            if _table_exists(conn, "prediction_results") and _has_column(conn, "prediction_results", "weighted_surprise"):
                 if _has_column(conn, "prediction_results", "source"):
                     where_clause = "WHERE COALESCE(source, 'interactive') != 'sleep_loop'"
                 else:

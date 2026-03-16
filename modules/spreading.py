@@ -356,7 +356,7 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
                     incoming_typed = _get_incoming_neighbors(edge_conn, node)
                     # Record outgoing edges for future reverse lookups
                     if outgoing:
-                        _record_edges(edge_conn, node, outgoing, ts)
+                        _record_edges(edge_conn, node, outgoing, ts, edge_type='similarity')
                 except Exception:
                     pass
 

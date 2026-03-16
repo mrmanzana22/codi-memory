@@ -24,7 +24,7 @@ Created: 2026-02-13 (Phase 1, Sub-phase 1.1)
 import json
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 from modules.config import (
@@ -33,6 +33,7 @@ from modules.config import (
     CONSOLIDATION_CLUSTER_MIN_SIZE,
     CONSOLIDATION_SIMILARITY_THRESHOLD,
     CONSOLIDATION_MAX_EPISODES_PER_RUN,
+    RECONSOLIDATION_PE_THRESHOLD,
 )
 from modules.pg_store import pg
 from modules.config_pg import get_conn as get_pg_conn
@@ -132,6 +133,13 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     except Exception as e:
         _logger.warning("[renorm] Temporal renormalization skipped: %s", e)
 
+    # Collect topics touched across all clusters (proposal 186: enrich payload for CX)
+    _topics_touched = set()
+    for c in clusters:
+        for ep in c.get("episodes", c.get("episode_ids", [])):
+            if isinstance(ep, dict):
+                _topics_touched.add(ep.get("topic", ep.get("category", "")))
+
     result = {
         "batch_id": batch_id,
         "scope": scope,
@@ -149,6 +157,7 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
         "facts_updated": 0,
         "contradictions_found": 0,
         "episodes_pruned": 0,
+        "topics": list(_topics_touched)[:10],
     }
 
     if scope == "full" and clusters:
@@ -307,7 +316,7 @@ def _phase_selection(lookback_hours: int) -> list:
     Returns:
         List of dicts: [{id, data, payload, score}]
     """
-    cutoff = datetime.now() - timedelta(hours=lookback_hours)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=lookback_hours)
     from modules.config import IMPORTANCE_WEIGHTS as importance_weights
 
     candidates = []
@@ -333,7 +342,7 @@ def _phase_selection(lookback_hours: int) -> list:
             try:
                 created = datetime.fromisoformat(str(created_str).replace("Z", "+00:00"))
                 if created.tzinfo:
-                    created = created.replace(tzinfo=None)
+                    created = created.astimezone(timezone.utc).replace(tzinfo=None)
             except Exception:
                 continue
 
@@ -583,110 +592,124 @@ Responde SOLO con un array JSON (sin markdown, sin explicacion):
 [{{"fact": "...", "category": "TECHNICAL|PROCEDURAL|RELATIONAL|ARCHITECTURAL|CONTEXTUAL|SELF", "confidence": 0.85, "specificity": "high"}}]"""
 
 
-_EDGE_CLASSIFY_PROMPT = """Classify the RELATIONSHIP between these memory pairs.
+# ---------------------------------------------------------------------------
+# Classical edge classification (Sprint Independence-1)
+# Replaces LLM call with keyword scoring + Jaccard similarity.
+# Bilingual (es/en). Zero API cost, ~100x faster, deterministic.
+# ---------------------------------------------------------------------------
 
-For each pair (A, B), respond with ONE type and your confidence (0.0 to 1.0):
-- "causes": A directly led to or caused B
-- "enables": A provided context or conditions that made B possible
-- "prevents": A contradicts or blocks B
-- "co_occurs": A and B are merely related by topic, no causal link
+_CAUSAL_SIGNALS = {
+    "porque", "caused", "therefore", "por eso", "resultado", "led to",
+    "triggered", "causing", "provoco", "genero", "produjo", "consecuencia",
+    "due to", "result of", "hence", "so that", "made", "hizo que",
+    "origin", "causa", "causo", "derived", "derivado",
+}
+_ENABLE_SIGNALS = {
+    "permite", "enabled", "allows", "habilita", "posibilita", "facilita",
+    "makes possible", "provides", "context", "prerequisite", "setup",
+    "configured", "configuro", "installed", "instalo", "prepared",
+    "preparo", "setting up", "base para", "necesario para",
+}
+_PREVENT_SIGNALS = {
+    "prevents", "contradicts", "blocks", "impide", "bloquea",
+    "incompatible", "instead", "rather", "sino", "en vez de",
+}
+_TEMPORAL_SIGNALS = {
+    "after", "then", "despues", "luego", "siguiente", "antes",
+    "before", "prior", "previo", "once", "cuando", "when",
+}
 
-MEMORIES:
-{memories}
 
-PAIRS TO CLASSIFY:
-{pairs}
+def _classify_pair(text_a: str, text_b: str) -> tuple:
+    """Classify relationship between two memory texts using keyword scoring.
 
-Respond ONLY with a JSON array of objects in order, e.g. [{{"type":"causes","confidence":0.85}},{{"type":"co_occurs","confidence":0.6}}]"""
+    Returns (edge_type, confidence) where edge_type is one of:
+    causes, enables, prevents, co_occurs.
+    """
+    combined = (text_a + " " + text_b).lower()
+    words_a = set(text_a.lower().split())
+    words_b = set(text_b.lower().split())
+    union = words_a | words_b
+    overlap = len(words_a & words_b) / max(len(union), 1)
+
+    # Score each type by signal word presence
+    scores = {
+        "causes": 0.0,
+        "enables": 0.0,
+        "prevents": 0.0,
+        "co_occurs": overlap * 0.4,  # topical overlap baseline
+    }
+
+    for signal in _CAUSAL_SIGNALS:
+        if signal in combined:
+            scores["causes"] += 0.25
+    for signal in _ENABLE_SIGNALS:
+        if signal in combined:
+            scores["enables"] += 0.25
+    for signal in _PREVENT_SIGNALS:
+        if signal in combined:
+            scores["prevents"] += 0.25
+    for signal in _TEMPORAL_SIGNALS:
+        if signal in combined:
+            scores["causes"] += 0.1  # temporal cues boost causal
+
+    # Pick highest scoring type
+    best_type = max(scores, key=scores.get)
+    best_score = scores[best_type]
+
+    # Require minimum signal strength for non-default types
+    if best_type != "co_occurs" and best_score < 0.25:
+        best_type = "co_occurs"
+        best_score = scores["co_occurs"]
+
+    # Map score to confidence
+    if best_type == "co_occurs":
+        confidence = min(1.0, 0.4 + overlap)
+    else:
+        confidence = min(1.0, 0.5 + best_score * 0.5)
+
+    return best_type, round(confidence, 2)
 
 
-def _llm_classify_edges(ids: list, texts: list) -> tuple:
-    """Use LLM to classify edge types between memory pairs in a cluster.
+def _classical_classify_edges(ids: list, texts: list) -> tuple:
+    """Classify edge types between memory pairs using classical NLP.
 
-    Canon v2, CC-3, Sprint 1 item 1.6.
-    Sprint 5.3: Now returns (types_map, confidence_map) tuple.
-
-    Returns:
-        (types_map, confidence_map) where:
+    Drop-in replacement for _llm_classify_edges. Same interface:
+    Returns (types_map, confidence_map) where:
         - types_map: {(from_id, to_id): edge_type_str}
         - confidence_map: {(from_id, to_id): float}
-    Falls back to empty dicts on error.
     """
-    import json as _json
-
     if len(ids) < 2 or len(texts) < 2:
         return {}, {}
 
-    # Build prompt with memory texts and pairs
-    n = min(len(ids), len(texts), 6)  # Cap to avoid huge prompts
-    memories_block = "\n".join(
-        f"[{i}] {texts[i][:200]}" for i in range(n)
-    )
+    n = min(len(ids), len(texts), 6)
 
-    # Generate pairs to classify (adjacent pairs, not all combinations)
-    pairs = []
+    # Generate pairs (same logic as before: adjacent pairs)
     pair_keys = []
     for i in range(n):
-        for j in range(i + 1, min(i + 3, n)):  # Each node connects to next 2
-            pairs.append(f"({i}, {j}): [{i}] vs [{j}]")
+        for j in range(i + 1, min(i + 3, n)):
             pair_keys.append((ids[i], ids[j]))
 
-    if not pairs:
+    if not pair_keys:
         return {}, {}
 
-    prompt = _EDGE_CLASSIFY_PROMPT.format(
-        memories=memories_block,
-        pairs="\n".join(pairs),
-    )
+    types_map = {}
+    conf_map = {}
+    for i_idx, (id_a, id_b) in enumerate(pair_keys):
+        # Find text indices from ids
+        try:
+            a_pos = ids[:n].index(id_a)
+            b_pos = ids[:n].index(id_b)
+        except ValueError:
+            continue
 
-    # Default confidence by edge type (fallback when LLM returns strings)
-    _DEFAULT_CONF = {"causes": 0.8, "enables": 0.7, "prevents": 0.8, "co_occurs": 0.5}
+        etype, conf = _classify_pair(texts[a_pos][:200], texts[b_pos][:200])
+        types_map[(id_a, id_b)] = etype
+        types_map[(id_b, id_a)] = etype
+        conf_map[(id_a, id_b)] = conf
+        conf_map[(id_b, id_a)] = conf
 
-    try:
-        from modules.llm_router import llm_complete
-
-        raw = llm_complete("edge_classify", prompt)
-        if not raw:
-            return {}, {}
-
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
-        items = _json.loads(raw)
-        if not isinstance(items, list):
-            return {}, {}
-
-        valid_types = {"causes", "enables", "prevents", "co_occurs"}
-        types_map = {}
-        conf_map = {}
-        for idx, pair_key in enumerate(pair_keys):
-            if idx >= len(items):
-                continue
-            item = items[idx]
-
-            # Handle both formats: string ("causes") or dict ({"type":"causes","confidence":0.85})
-            if isinstance(item, str):
-                etype = item
-                conf = _DEFAULT_CONF.get(etype, 0.5)
-            elif isinstance(item, dict):
-                etype = item.get("type", "co_occurs")
-                conf = float(item.get("confidence", _DEFAULT_CONF.get(etype, 0.5)))
-                conf = max(0.0, min(1.0, conf))
-            else:
-                continue
-
-            if etype in valid_types:
-                types_map[pair_key] = etype
-                types_map[(pair_key[1], pair_key[0])] = etype
-                conf_map[pair_key] = conf
-                conf_map[(pair_key[1], pair_key[0])] = conf
-
-        return types_map, conf_map
-    except Exception as e:
-        _logger.debug("LLM edge classify error: %s", e)
-        return {}, {}
+    return types_map, conf_map
 
 
 def _detect_confounds(conn, edge_types_map: dict) -> dict:
@@ -823,12 +846,13 @@ def _phase_graph_edges(clusters: list) -> int:
         if len(ids) < 2:
             continue
 
-        # Sprint 1, item 1.6: LLM edge typing for clusters with texts
-        # Sprint 5.3: Now returns (types_map, confidence_map) tuple
+        # Sprint 1, item 1.6: Edge typing for clusters with texts
+        # Sprint 5.3: Returns (types_map, confidence_map) tuple
+        # Sprint Independence-1: Classical NLP replaces LLM call
         edge_types_map = {}
         confidence_map = {}
         if texts and len(texts) >= 2:
-            edge_types_map, confidence_map = _llm_classify_edges(ids, texts)
+            edge_types_map, confidence_map = _classical_classify_edges(ids, texts)
 
         # Sprint 5.4: Detect confounds in classified edges
         if edge_types_map and edge_conn:
@@ -1257,6 +1281,51 @@ def _phase_integration(facts: list) -> dict:
 
             if duplicate:
                 old_payload = duplicate.payload or {}
+                old_fact_text = old_payload.get("fact_text", old_payload.get("data", ""))
+
+                # CA1 comparator: check for contradiction before merging
+                # (Kumaran & Maguire 2006, Proposal #180)
+                if old_fact_text:
+                    contra = detect_contradiction(old_fact_text, fact_text)
+                    if contra["prediction_error"] >= RECONSOLIDATION_PE_THRESHOLD:
+                        contradictions += 1
+                        _logger.warning(
+                            "Contradiction PE=%.2f: '%s...' vs '%s...'",
+                            contra["prediction_error"],
+                            old_fact_text[:50], fact_text[:50],
+                        )
+                        # Queue for reconsolidation review
+                        try:
+                            queue_correction_suggestion(
+                                old_memory_id=str(duplicate.id),
+                                old_text=old_fact_text,
+                                new_text=fact_text,
+                                prediction_error=contra["prediction_error"],
+                                shared_entities=contra["channels"].get("shared_entities", []),
+                                channels=contra["channels"],
+                            )
+                        except Exception:
+                            pass
+                        # Emit for CX wiring (Loop 1)
+                        try:
+                            from modules.events import event_bus, Events
+                            event_bus.emit(Events.CONTRADICTION_DETECTED, {
+                                "old_id": str(duplicate.id),
+                                "old_text": old_fact_text,
+                                "new_text": fact_text,
+                                "pe": contra["prediction_error"],
+                                "channels": contra["channels"],
+                            })
+                        except Exception:
+                            pass
+                        # Increment contradiction_count on existing fact
+                        old_contra_count = int(old_payload.get("contradiction_count", 0))
+                        pg.update_payload(duplicate.id, {
+                            "contradiction_count": old_contra_count + 1,
+                            "last_contradiction": now,
+                        })
+                        continue  # Do NOT merge contradictory fact
+
                 old_sources = old_payload.get("source_episode_ids", [])
                 new_sources = list(set(old_sources + fact["source_episode_ids"]))
                 old_evidence = int(old_payload.get("evidence_count", 1))

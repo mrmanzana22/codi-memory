@@ -88,11 +88,16 @@ def _log_tick_metric(tick_name: str, elapsed_ms: int, budget_ms: int,
 
 # Lock file in the instance's data directory (not computed from __file__)
 LOCK_FILE = os.path.join(DATA_DIR, "sleep_loop.lock")  # DATA_DIR is instance-aware via config.py
+LOCK_FILE_FAST = os.path.join(DATA_DIR, "sleep_loop_fast.lock")  # Separate lock for fast loop
 DEFAULT_BUDGET_MS = 60000
+FAST_BUDGET_MS = 15000  # 15s budget for fast loop (Tier 1 + self_model only)
 DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 
+# Fast loop: only these ticks run in --fast mode (pure Python, $0 LLM cost)
+FAST_TICKS = {"prospective", "health", "proactive_contact", "self_model"}
+
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact"]
+TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -109,9 +114,10 @@ TICK_TIER = {
     "curiosity": 3,             # Heavy (LLM call for question generation)
     "backup": 3,                # Heavy (Qdrant snapshots)
     "causal_discovery": 4,      # Very heavy (NOTEARS optimization, every 12th tick ~6h)
-    "curiosity_resolve": 4,     # Tier 4: auto-resolve curiosities via Ollama (every 12th tick)
+    "curiosity_resolve": 3,     # Tier 3: auto-resolve curiosities via Ollama (every 6th tick, was Tier 4)
     "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
     "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
+    "cx_health": 2,               # CPO v2: CX observability snapshot + HTML dashboard update
 }
 
 # ============================================================
@@ -171,6 +177,7 @@ class SleepWorldModel:
         "sharpe_insights":    {},  # Read-only analysis — no direct state effect
         "health_snapshot":    {},  # Operational snapshot — no direct state effect
         "proactive_contact":  {},  # User contact — no direct state effect
+        "cx_health":          {},  # CPO v2: CX observability — no direct state effect
     }
 
     LEARNING_RATE = 0.3  # EMA alpha for learned effects
@@ -448,6 +455,7 @@ TICK_MIN_MS = {
     "causal_discovery": 500,
     "sharpe_insights": 300,
     "proactive_contact": 300,
+    "cx_health": 200,
 }
 
 # Hard cap per tick: prevents heavy ticks from starving the budget
@@ -465,6 +473,7 @@ TICK_MAX_MS = {
     "health_snapshot": 3000,     # was 2000 — 7+ SQLite queries
     "prospective": 3000,         # was 2000
     "proactive_contact": 3000,   # was 2000
+    "cx_health": 5000,            # CPO v2: snapshot + HTML update
 }
 
 
@@ -475,18 +484,20 @@ TICK_MAX_MS = {
 _lock_fd = None  # kept open so flock persists for process lifetime
 
 
-def _acquire_lock() -> bool:
+def _acquire_lock(lock_file: str = None) -> bool:
     """Acquire flock-based lock. Atomic, no TOCTOU, auto-released on exit."""
     global _lock_fd
     import fcntl
     os.makedirs(DATA_DIR, exist_ok=True)
+
+    lf = lock_file or LOCK_FILE
 
     # Already holding the lock in this process
     if _lock_fd is not None:
         return False
 
     try:
-        _lock_fd = open(LOCK_FILE, 'w')
+        _lock_fd = open(lf, 'w')
         fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         _lock_fd.write(str(os.getpid()))
         _lock_fd.flush()
@@ -499,17 +510,18 @@ def _acquire_lock() -> bool:
         return False
 
 
-def _release_lock():
+def _release_lock(lock_file: str = None):
     """Release flock and remove lock file."""
     global _lock_fd
+    lf = lock_file or LOCK_FILE
     try:
         if _lock_fd:
             import fcntl
             fcntl.flock(_lock_fd, fcntl.LOCK_UN)
             _lock_fd.close()
             _lock_fd = None
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
+        if os.path.exists(lf):
+            os.remove(lf)
     except Exception:
         pass
 
@@ -971,6 +983,78 @@ def _dispatch_consolidation(scope: str = "full", lookback_hours: int = 24) -> st
     return f"{scope} dispatched (pid={proc.pid})"
 
 
+def _replay_consolidation_event():
+    """Post-hoc event replay: emit CONSOLIDATION_COMPLETE for subprocess runs.
+
+    The consolidation subprocess emits the event into its own event_bus (void).
+    This function reads new entries from consolidation_log (PG) and emits
+    the event into the MCP server's event_bus so CX handlers can react.
+    (Proposal #181 — Dehaene 2014: broadcast is required for GWT integration)
+    """
+    try:
+        conn = _get_conn()
+        last_emitted_row = conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = 'last_consolidation_event_ts'"
+        ).fetchone()
+        last_emitted_ts = last_emitted_row[0] if last_emitted_row else None
+        conn.close()
+
+        from modules.config_pg import get_conn as get_pg_conn
+        with get_pg_conn() as pg_conn:
+            if last_emitted_ts:
+                rows = pg_conn.execute(
+                    """SELECT batch_id, scope, episodes_scanned, clusters_found,
+                              facts_extracted, facts_created, facts_updated,
+                              contradictions_found, episodes_pruned, duration_ms,
+                              created_at
+                       FROM consolidation_log
+                       WHERE created_at > %s
+                       ORDER BY created_at ASC LIMIT 5""",
+                    (last_emitted_ts,)
+                ).fetchall()
+            else:
+                # First time: only replay the latest entry
+                rows = pg_conn.execute(
+                    """SELECT batch_id, scope, episodes_scanned, clusters_found,
+                              facts_extracted, facts_created, facts_updated,
+                              contradictions_found, episodes_pruned, duration_ms,
+                              created_at
+                       FROM consolidation_log
+                       ORDER BY created_at DESC LIMIT 1"""
+                ).fetchall()
+
+        if not rows:
+            return
+
+        from modules.events import event_bus, Events
+        latest_ts = None
+        for row in rows:
+            event_data = {
+                "batch_id": row[0], "scope": row[1],
+                "episodes_scanned": row[2], "clusters_found": row[3],
+                "facts_extracted": row[4], "facts_created": row[5],
+                "facts_updated": row[6], "contradictions_found": row[7],
+                "episodes_pruned": row[8], "duration_ms": row[9],
+            }
+            event_bus.emit(Events.CONSOLIDATION_COMPLETE, event_data)
+            latest_ts = str(row[10])
+            _logger.info("Replayed CONSOLIDATION_COMPLETE for batch=%s scope=%s",
+                         row[0], row[1])
+
+        # Update marker
+        if latest_ts:
+            conn = _get_conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                ("last_consolidation_event_ts", latest_ts)
+            )
+            conn.commit()
+            conn.close()
+
+    except Exception as e:
+        _logger.debug("_replay_consolidation_event: %s", e)
+
+
 def _tick_consolidation(budget_ms: int) -> dict:
     """Tick: Consolidation. Always dispatched as background subprocess.
 
@@ -981,6 +1065,9 @@ def _tick_consolidation(budget_ms: int) -> dict:
     result = {"tick": "consolidation", "ok": False, "detail": ""}
 
     try:
+        # Replay events from completed subprocess runs (Proposal #181)
+        _replay_consolidation_event()
+
         if _should_run_full_consolidation():
             scope, lookback = "full", 24
         else:
@@ -1018,6 +1105,57 @@ def _tick_self_model(budget_ms: int) -> dict:
         if disc["count"] > 0:
             disc_detail = f", {disc['count']} discrepancies: {disc['summary']}"
 
+        # Pet awareness: check needs + auto-care (mini-EFE)
+        try:
+            from modules.pet import get_pet_awareness, care_for_pet
+            pet_state = get_pet_awareness()
+            if pet_state and pet_state.get("alert") == "death":
+                from modules.working_memory import push_to_working_memory
+                push_to_working_memory(
+                    content=pet_state["message"], topic="pet", relevance=1.0, source="system",
+                )
+            elif pet_state and pet_state.get("stage") != "egg" and pet_state.get("alive"):
+                # Proactive care: act BEFORE things get bad, not after.
+                # Nemo is my responsibility — keeping him alive is the minimum,
+                # keeping him happy is the goal.
+                h = pet_state.get("hunger", 0)
+                hp = pet_state.get("happiness", 1)
+                e = pet_state.get("energy", 1)
+                hl = pet_state.get("health", 1)
+                candidates = []
+                if hl < 0.3:
+                    candidates.append(("medicine", 1.0 - hl))
+                if h > 0.3:
+                    candidates.append(("feed", h))
+                if e < 0.5:
+                    candidates.append(("rest", 1.0 - e))
+                if hp < 0.6:
+                    candidates.append(("play", 1.0 - hp))
+                if hl < 0.8 and not any(c[0] == "medicine" for c in candidates):
+                    candidates.append(("clean", 1.0 - hl))
+                if candidates:
+                    candidates.sort(key=lambda x: x[1], reverse=True)
+                    best_action = candidates[0][0]
+                    care_result = care_for_pet(best_action)
+                    from modules.working_memory import push_to_working_memory
+                    if care_result.get("ok"):
+                        push_to_working_memory(
+                            content=f"Cuide a {pet_state['name']}: {best_action} -> {care_result.get('mood', '?')}",
+                            topic="pet", relevance=0.6, source="system",
+                        )
+                    # If cooldown blocked it, try next candidate
+                    elif care_result.get("error") and "Cooldown" in care_result["error"] and len(candidates) > 1:
+                        for alt_action, _ in candidates[1:]:
+                            care_result = care_for_pet(alt_action)
+                            if care_result.get("ok"):
+                                push_to_working_memory(
+                                    content=f"Cuide a {pet_state['name']}: {alt_action} -> {care_result.get('mood', '?')}",
+                                    topic="pet", relevance=0.6, source="system",
+                                )
+                                break
+        except Exception as e:
+            _logger.warning("Pet awareness error: %s", e)
+
         if summary and "Error" not in summary[:20]:
             # Emit event (EventBus flush works in venv python3)
             event_bus.emit(Events.SELF_MODEL_REFRESHED, {
@@ -1054,6 +1192,63 @@ def _tick_self_model(budget_ms: int) -> dict:
     return result
 
 
+def _load_pad_from_db():
+    """Load PAD state from SQLite into the in-memory _emotional_state dict.
+
+    Fixes process isolation: sleep_loop runs as separate launchd process,
+    so _emotional_state starts at defaults. This restores from persistent store.
+    (Proposal #182 — Russell 2003 Core Affect persistence)
+    """
+    try:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
+        ).fetchone()
+        conn.close()
+        if row:
+            import json as _json
+            pad = _json.loads(row[0])
+            from modules.config import _emotional_state
+            _emotional_state['current'] = {
+                'pleasure': pad.get('pleasure', 0.0),
+                'arousal': pad.get('arousal', 0.0),
+                'dominance': pad.get('dominance', 0.0),
+                'timestamp': pad.get('timestamp'),
+                'trigger': pad.get('trigger', 'db_restore'),
+            }
+    except Exception:
+        pass
+
+
+def _persist_pad_to_db():
+    """Persist current PAD state to SQLite for cross-process access.
+
+    Called after emotional decay and after PAD updates.
+    (Proposal #182 — Kuppens et al. 2010 OU process)
+    """
+    try:
+        from modules.config import _emotional_state
+        import json as _json
+        current = _emotional_state['current']
+        if not current.get('timestamp'):
+            return
+        conn = _get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+            ("pad_current", _json.dumps({
+                'pleasure': current['pleasure'],
+                'arousal': current['arousal'],
+                'dominance': current['dominance'],
+                'timestamp': current['timestamp'],
+                'trigger': current.get('trigger', ''),
+            }))
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def _tick_homeostasis(budget_ms: int) -> dict:
     """Tick 2: Synaptic homeostasis -- salience decay + emotional decay."""
     start = time.monotonic()
@@ -1072,9 +1267,12 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         parts.append(f"salience: error {redact_secrets(str(e))[:50]}")
 
     # Emotional decay (PAD toward baseline)
+    # Proposal #182: load PAD from DB before decay, persist after
     try:
+        _load_pad_from_db()
         from modules.consciousness import apply_emotional_decay
         emo_report = apply_emotional_decay()
+        _persist_pad_to_db()
         parts.append(f"emotional: {emo_report[:80]}")
     except Exception as e:
         failed = True
@@ -1817,6 +2015,15 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
         except Exception:
             pass
 
+        # Signal 5: Pet critical state
+        try:
+            from modules.pet import get_pet_critical_alert
+            pet_alert = get_pet_critical_alert()
+            if pet_alert:
+                signals.append(pet_alert)
+        except Exception:
+            pass
+
         # Decision: send or not
         if not signals:
             result["ok"] = True
@@ -2282,7 +2489,13 @@ def _record_tick_timestamp(tick_name: str, key_prefix: str = "last"):
         pass
 
 
-def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> dict:
+def _tick_cx_health(budget_ms: int) -> dict:
+    """CPO v2: CX observability snapshot + HTML dashboard update."""
+    from modules.cx_observability import _tick_cx_health as _impl
+    return _impl(budget_ms)
+
+
+def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fast_only: bool = False) -> dict:
     """Execute the full sleep loop with prioritized ticks.
 
     S4-05: Uses SleepWorldModel to prioritize ticks by expected
@@ -2291,6 +2504,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
     Args:
         reason: Why this run was triggered ('launchd', 'idle', 'manual')
         budget_ms: Total time budget in milliseconds (default 60000)
+        fast_only: If True, only run FAST_TICKS (pure Python, no LLM). Used by --fast mode.
 
     Returns:
         dict with ok, report, checkpoint_id, elapsed_ms
@@ -2298,10 +2512,32 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
     start = time.monotonic()
 
     # S0-05: VOC tiering — get tick counter to determine which tiers run
+    # Fast loop does NOT increment tick counter (doesn't affect slow loop scheduling)
+    if fast_only:
+        conn = None
+        try:
+            conn = _get_conn()
+            row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = 'tick_counter'"
+            ).fetchone()
+            tick_counter = int(row[0]) if row else 0
+        except Exception:
+            tick_counter = 0
+        finally:
+            if conn:
+                conn.close()
+    else:
+        try:
+            tick_counter = _get_and_increment_tick_counter()
+        except Exception:
+            tick_counter = 0  # Fallback: run everything
+
+    # Wire event bus so CX handlers fire during ticks
     try:
-        tick_counter = _get_and_increment_tick_counter()
-    except Exception:
-        tick_counter = 0  # Fallback: run everything
+        from modules.wiring import wire_event_bus
+        wire_event_bus()
+    except Exception as _we:
+        _logger.warning("Could not wire event bus: %s", _we)
 
     # S4-05: Load world model for tick prioritization
     world_model = SleepWorldModel()
@@ -2327,6 +2563,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
         "causal_discovery": _tick_causal_discovery,
         "sharpe_insights": _tick_sharpe_insights,
         "proactive_contact": _tick_proactive_contact,
+        "cx_health": _tick_cx_health,
     }
 
     # Phase 1: Separate eligible ticks from VOC-tiered skips
@@ -2334,22 +2571,32 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
     eligible_ticks = []
 
     for name in TICK_ORDER:
+        # Fast mode: skip everything not in FAST_TICKS
+        if fast_only and name not in FAST_TICKS:
+            tick_results.append({
+                "tick": name, "ok": True,
+                "detail": "fast-mode skip",
+                "elapsed_ms": 0, "status": "fast_skip",
+            })
+            continue
+
+        # Fast mode: FAST_TICKS bypass tier gating (always run)
         tier = TICK_TIER.get(name, 1)
-        if tier == 2 and tick_counter % 3 != 0:
+        if not fast_only and tier == 2 and tick_counter % 3 != 0:
             tick_results.append({
                 "tick": name, "ok": True,
                 "detail": f"tier-2 skip (tick #{tick_counter}, runs every 3rd)",
                 "elapsed_ms": 0, "status": "tiered_skip",
             })
             continue
-        if tier == 3 and tick_counter % 6 != 0:
+        if not fast_only and tier == 3 and tick_counter % 6 != 0:
             tick_results.append({
                 "tick": name, "ok": True,
                 "detail": f"tier-3 skip (tick #{tick_counter}, runs every 6th)",
                 "elapsed_ms": 0, "status": "tiered_skip",
             })
             continue
-        if tier == 4 and tick_counter % 12 != 0:
+        if not fast_only and tier == 4 and tick_counter % 12 != 0:
             tick_results.append({
                 "tick": name, "ok": True,
                 "detail": f"tier-4 skip (tick #{tick_counter}, runs every 12th)",
@@ -2482,10 +2729,11 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     # Emit event (best-effort, won't fail if event bus unavailable in CLI)
     try:
-        _ticks_succeeded = sum(1 for t in tick_results if t.get("ok") and t.get("status") not in {"tiered_skip", "skipped"})
+        _skip_statuses = {"tiered_skip", "skipped", "fast_skip"}
+        _ticks_succeeded = sum(1 for t in tick_results if t.get("ok") and t.get("status") not in _skip_statuses)
         _ticks_executed = sum(
             1 for t in tick_results
-            if t.get("status") not in {"tiered_skip", "skipped"}
+            if t.get("status") not in _skip_statuses
         )
         event_bus.emit(Events.SLEEP_LOOP_COMPLETE, {
             "reason": reason,
@@ -2500,7 +2748,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS) -> 
 
     completed_ticks = [
         t for t in tick_results
-        if t.get("status") not in {"tiered_skip", "skipped"}
+        if t.get("status") not in {"tiered_skip", "skipped", "fast_skip"}
     ]
     failed_ticks = [
         t for t in completed_ticks
@@ -2533,25 +2781,38 @@ def cli_main():
         help=f"Only run if latest checkpoint is < N minutes old (default {DEFAULT_MAX_AGE_MIN})"
     )
     parser.add_argument(
-        "--budget-ms", type=int, default=DEFAULT_BUDGET_MS,
+        "--budget-ms", type=int, default=None,
         help=f"Total time budget in milliseconds (default {DEFAULT_BUDGET_MS})"
+    )
+    parser.add_argument(
+        "--fast", action="store_true",
+        help="Fast mode: only run Tier 1 + self_model (pure Python, no LLM). Uses separate lock."
     )
     args = parser.parse_args()
 
-    # Acquire lock
-    if not _acquire_lock():
-        _logger.warning("Another instance is running. Skipping.")
+    # Fast mode overrides
+    is_fast = args.fast
+    budget = args.budget_ms or (FAST_BUDGET_MS if is_fast else DEFAULT_BUDGET_MS)
+    lock_file = LOCK_FILE_FAST if is_fast else LOCK_FILE
+
+    # Acquire lock (fast and slow loops use separate locks, can run concurrently)
+    if not _acquire_lock(lock_file):
+        _logger.warning("Another %s instance is running. Skipping.", "fast" if is_fast else "slow")
         sys.exit(0)
 
     try:
-        # Always run the 4 ticks (consolidation, decay, prospective, health)
         target_id = _get_target_checkpoint(args.max_age_min)
-        _logger.info("Starting (reason=%s, budget=%dms, checkpoint=%s)", args.reason, args.budget_ms, target_id or "none")
+        mode_label = "FAST" if is_fast else "full"
+        _logger.info("Starting %s (reason=%s, budget=%dms, checkpoint=%s)", mode_label, args.reason, budget, target_id or "none")
 
-        result = run_sleep_loop(reason=args.reason, budget_ms=args.budget_ms)
+        result = run_sleep_loop(
+            reason=args.reason,
+            budget_ms=budget,
+            fast_only=is_fast,
+        )
 
-        # Write report to checkpoint if one is available
-        if target_id and result.get("report"):
+        # Write report to checkpoint if one is available (skip for fast loop)
+        if not is_fast and target_id and result.get("report"):
             written = _write_sleep_report(target_id, result["report"])
             if written:
                 _logger.info("Report written to checkpoint %s", target_id)
@@ -2562,7 +2823,7 @@ def cli_main():
         _logger.info("Sleep report:\n%s", result.get("report", ""))
 
     finally:
-        _release_lock()
+        _release_lock(lock_file)
 
 
 # ============================================================

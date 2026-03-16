@@ -209,6 +209,7 @@ def parity_env(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.sleep_loop.FTS_DB_PATH", db_path)
     monkeypatch.setattr("modules.sleep_loop.DATA_DIR", str(tmp_path))
     monkeypatch.setattr("modules.sleep_loop.LOCK_FILE", str(tmp_path / "sleep_loop.lock"))
+    monkeypatch.setattr("modules.sleep_loop.LOCK_FILE_FAST", str(tmp_path / "sleep_loop_fast.lock"))
 
     from modules.migrations import apply_migrations
     apply_migrations(db_path, migrations_dir=FTS_MIGRATIONS_DIR)

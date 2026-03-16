@@ -20,6 +20,7 @@ import sqlite3
 import os
 import re
 import uuid
+import subprocess
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +28,8 @@ FTS_DB_PATH = os.path.join(BASE_DIR, "memories_fts.db")
 TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")
 TRACKER_DIR = os.path.join(BASE_DIR, "hooks", ".trackers")
 PROSPECTIVE_DB_PATH = os.path.join(BASE_DIR, "prospective.db")
+EDITS_LOG = os.path.expanduser("~/.claude/session_edits.jsonl")
+VENV_PYTHON = os.path.join(BASE_DIR, "venv", "bin", "python3")
 
 # Signal keywords — adapted from supermemory + our own
 SIGNAL_KEYWORDS = [
@@ -366,6 +369,120 @@ def main():
                 _finalize_nuance_transcript(session_id, transcript_path)
         except Exception:
             pass
+
+        # Phase 4: Consolidate edit tracking into long-term memory
+        # Reads session_edits.jsonl (written by edit_tracker.py PostToolUse hook),
+        # builds ONE rich memory per session, saves via add_memory_smart().
+        # Craik & Lockhart 1972: deep encoding (function names, not just filenames).
+        try:
+            if session_id:
+                _consolidate_session_edits(session_id)
+        except Exception:
+            pass
+
+
+def _consolidate_session_edits(session_id: str):
+    """Read edit log, build consolidated memory, save to long-term via subprocess.
+
+    Design principles (neuro-verified):
+    - Encoding Specificity (Tulving & Thomson 1973): include function names + context
+    - Single consolidated save: one rich memory >> many shallow ones
+    - Subprocess isolation: avoids importing heavy Qdrant/mem0 into hook process
+    - Cleanup: processed entries removed from JSONL to prevent re-processing
+    """
+    if not os.path.exists(EDITS_LOG):
+        return
+
+    # Read all entries
+    all_entries = []
+    session_entries = []
+    try:
+        with open(EDITS_LOG, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    all_entries.append(entry)
+                    if entry.get("session_id") == session_id:
+                        session_entries.append(entry)
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        return
+
+    if not session_entries:
+        return
+
+    # Build rich content: group by file, collect function hints
+    files_touched = {}
+    for entry in session_entries:
+        fname = entry.get("file", "unknown")
+        if fname not in files_touched:
+            files_touched[fname] = {
+                "path": entry.get("path", ""),
+                "tools": set(),
+                "functions": [],
+                "count": 0,
+            }
+        files_touched[fname]["tools"].add(entry.get("tool", "Edit"))
+        files_touched[fname]["functions"].extend(entry.get("functions", []))
+        files_touched[fname]["count"] += 1
+
+    # Format: "Session edits: memory_core.py (3 edits, funcs: recall, _query_topic), wiring.py (2 edits, funcs: _on_workspace_to_self_model)"
+    file_parts = []
+    all_functions = []
+    for fname, info in files_touched.items():
+        funcs = list(dict.fromkeys(info["functions"]))  # dedupe preserving order
+        all_functions.extend(funcs)
+        func_str = f", funcs: {', '.join(funcs)}" if funcs else ""
+        tools_str = "+".join(sorted(info["tools"]))
+        file_parts.append(f"{fname} ({info['count']}x {tools_str}{func_str})")
+
+    content = f"Session implementation edits: {'; '.join(file_parts)}"
+
+    # Add timestamp range
+    timestamps = [e.get("ts", "") for e in session_entries if e.get("ts")]
+    if timestamps:
+        content += f" | period: {timestamps[0][:16]} to {timestamps[-1][:16]}"
+
+    # Cap content length
+    if len(content) > 1500:
+        content = content[:1500]
+
+    # Save via subprocess to avoid importing heavy modules in hook process
+    # Uses CODI_WRITE_MODE=async for <100ms non-blocking save
+    script = f'''
+import sys, os
+sys.path.insert(0, {repr(BASE_DIR)})
+os.environ["CODI_WRITE_MODE"] = "async"
+from modules.memory_smart import add_memory_smart
+result = add_memory_smart(
+    content={repr(content)},
+    category="episodio",
+    source="experienced",
+    importance="high",
+)
+'''
+    try:
+        subprocess.run(
+            [VENV_PYTHON, "-c", script],
+            cwd=BASE_DIR,
+            timeout=10,
+            capture_output=True,
+        )
+    except Exception:
+        pass
+
+    # Cleanup: keep only entries from OTHER sessions
+    remaining = [e for e in all_entries if e.get("session_id") != session_id]
+    try:
+        with open(EDITS_LOG, "w", encoding="utf-8") as f:
+            for entry in remaining:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _session_bridge_checkpoint(session_id: str):

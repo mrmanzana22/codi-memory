@@ -1,8 +1,8 @@
 {
   "ok": true,
   "report_length_within_cap": true,
-  "report_line_count": 14,
+  "report_line_count": 15,
   "report_starts_with": "SLEEP REPORT (parity_test, Nms",
-  "ticks_ok": 13,
-  "ticks_total": 13
+  "ticks_ok": 14,
+  "ticks_total": 14
 }

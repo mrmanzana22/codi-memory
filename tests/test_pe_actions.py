@@ -299,3 +299,43 @@ class TestHandlerResilience:
 
         # Working handler must have run despite broken one
         assert "survived" in errors_caught
+
+
+# ============================================================
+# Test 7: H1 and H2 both fire on same PREDICTION_ERROR event
+# ============================================================
+
+class TestH1H2Combined:
+    """Both handlers should fire on the same PE event emission."""
+
+    def test_h1_and_h2_both_fire_on_same_event(self, monkeypatch, prospective_db):
+        """H1 focuses spotlight AND H2 creates intention on single PE event."""
+        monkeypatch.setenv("CODI_PE_ACTIONS", "on")
+
+        from modules.workspace import _global_workspace
+        from modules.pe_actions import pe_workspace_handler, pe_prospective_handler
+
+        # Register both handlers (production order: H1 first, H2 second)
+        event_bus.on(Events.PREDICTION_ERROR, pe_workspace_handler)
+        event_bus.on(Events.PREDICTION_ERROR, pe_prospective_handler)
+
+        try:
+            # Emit via event bus (production path)
+            event_bus.emit(Events.PREDICTION_ERROR, {
+                "topic": "combined_test_topic",
+                "intensity": "high",
+                "confidence": 0.9,
+            })
+
+            # H1: spotlight should be updated
+            spotlight = _global_workspace.get("spotlight", [])
+            assert any("combined_test_topic" in str(item) for item in spotlight), \
+                "H1 should have focused spotlight"
+
+            # H2: intention should be created (was blocked by H1 rate limit before fix)
+            assert len(prospective_db) == 1, \
+                f"H2 should have created intention, got {len(prospective_db)}"
+            assert "combined_test_topic" in prospective_db[0].get("action", "")
+        finally:
+            event_bus.off(Events.PREDICTION_ERROR, pe_workspace_handler)
+            event_bus.off(Events.PREDICTION_ERROR, pe_prospective_handler)

@@ -77,6 +77,25 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
         except Exception:
             logger.warning("Failed to emit EMOTION_CHANGED event", exc_info=True)
 
+        # Proposal #182: Persist PAD to SQLite for cross-process access
+        # (Russell 2003 Core Affect: affective state must persist)
+        try:
+            from modules.config import FTS_DB_PATH
+            import sqlite3
+            _db = sqlite3.connect(FTS_DB_PATH, timeout=2)
+            _db.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                ("pad_current", json.dumps({
+                    'pleasure': p, 'arousal': a, 'dominance': d,
+                    'timestamp': _emotional_state['current']['timestamp'],
+                    'trigger': trigger or '',
+                }))
+            )
+            _db.commit()
+            _db.close()
+        except Exception:
+            pass
+
         result = {
             'result': 'Estado emocional actualizado',
             'state': {'pleasure': p, 'arousal': a, 'dominance': d, 'emotion': emotion_label, 'description': emotion_text, 'intensity': round(intensity, 2), 'trigger': trigger}
@@ -174,9 +193,9 @@ def apply_emotional_decay() -> str:
         # Asymmetric decay: positive fades faster, negative persists
         # Baumeister et al. 2001, Larsen & Prizmic 2008
         p_decay = decay_rate * 1.5 if current['pleasure'] > mood['pleasure'] else decay_rate * 0.8
-        new_p = current['pleasure'] + (mood['pleasure'] - current['pleasure']) * p_decay
-        new_a = current['arousal'] + (mood['arousal'] - current['arousal']) * decay_rate
-        new_d = current['dominance'] + (mood['dominance'] - current['dominance']) * decay_rate
+        new_p = _clamp_pad_value(current['pleasure'] + (mood['pleasure'] - current['pleasure']) * p_decay)
+        new_a = _clamp_pad_value(current['arousal'] + (mood['arousal'] - current['arousal']) * decay_rate)
+        new_d = _clamp_pad_value(current['dominance'] + (mood['dominance'] - current['dominance']) * decay_rate)
 
         _emotional_state['history'].append(current.copy())
         _emotional_state['history'] = _emotional_state['history'][-20:]
@@ -214,7 +233,7 @@ def get_emotional_expression() -> str:
             intensity_level, intensity_word = 'baja', 'ligeramente'
         elif intensity < 0.7:
             intensity_level, intensity_word = 'moderada', 'moderadamente'
-        elif intensity < 1.2:
+        elif intensity < 0.9:
             intensity_level, intensity_word = 'alta', 'bastante'
         else:
             intensity_level, intensity_word = 'muy alta', 'muy'
@@ -657,13 +676,16 @@ def evolve_pad_from_text(text: str) -> dict:
         "trigger": "text_inference",
     }
 
-    # Emit event for other subsystems
-    from modules.events import event_bus, Events
-    event_bus.emit(Events.EMOTION_CHANGED, {
-        "source": "text_inference",
-        "deltas": deltas,
-        "new_state": {"P": new_p, "A": new_a, "D": new_d},
-    })
+    # Emit event for other subsystems (best-effort, same pattern as set_emotional_state)
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.EMOTION_CHANGED, {
+            "source": "text_inference",
+            "deltas": deltas,
+            "new_state": {"P": new_p, "A": new_a, "D": new_d},
+        })
+    except Exception:
+        logger.warning("Failed to emit EMOTION_CHANGED event from evolve_pad_from_text", exc_info=True)
 
     return {
         "changed": True,

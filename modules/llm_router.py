@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import time
 from typing import Optional
 
@@ -57,13 +58,15 @@ OPENAI_MODEL = "gpt-4o-mini"
 # ---------------------------------------------------------------------------
 # Provider: Ollama (optional, free)
 # ---------------------------------------------------------------------------
-def _try_ollama(task_type: str, prompt: str) -> Optional[str]:
+def _try_ollama(task_type: str, prompt: str, system: str = "") -> Optional[str]:
     """Try Ollama if enabled and available."""
     if os.getenv("CODI_USE_OLLAMA", "").lower() not in ("true", "1", "yes"):
         return None
     try:
         from modules.ollama_router import ollama_chat_completion
-        return ollama_chat_completion(task_type, prompt)
+        # Ollama has no dedicated system param — concatenate into prompt
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        return ollama_chat_completion(task_type, full_prompt)
     except Exception as e:
         _logger.debug("[llm_router] Ollama failed: %s", e)
         return None
@@ -91,7 +94,7 @@ def _get_anthropic():
     return _anthropic_client
 
 
-def _try_claude(task_type: str, prompt: str) -> Optional[str]:
+def _try_claude(task_type: str, prompt: str, system: str = "") -> Optional[str]:
     """Try Claude Haiku via Anthropic API."""
     client = _get_anthropic()
     if client is None:
@@ -100,13 +103,16 @@ def _try_claude(task_type: str, prompt: str) -> Optional[str]:
     config = TASK_CONFIG.get(task_type, {"temperature": 0.2, "max_tokens": 2048})
 
     try:
-        response = client.messages.create(
+        kwargs: dict = dict(
             model=CLAUDE_MODEL,
             max_tokens=config["max_tokens"],
             temperature=config["temperature"],
             messages=[{"role": "user", "content": prompt}],
             timeout=15.0,
         )
+        if system:
+            kwargs["system"] = system  # pass as dedicated top-level parameter
+        response = client.messages.create(**kwargs)
         text = response.content[0].text.strip() if response.content else ""
         if text:
             _logger.info("[llm_router] Claude succeeded for %s (%d chars)", task_type, len(text))
@@ -135,7 +141,7 @@ def _get_openai():
     return _openai_client
 
 
-def _try_openai(task_type: str, prompt: str) -> Optional[str]:
+def _try_openai(task_type: str, prompt: str, system: str = "") -> Optional[str]:
     """Try OpenAI gpt-4o-mini as backup."""
     client = _get_openai()
     if client is None:
@@ -144,9 +150,13 @@ def _try_openai(task_type: str, prompt: str) -> Optional[str]:
     config = TASK_CONFIG.get(task_type, {"temperature": 0.2, "max_tokens": 2048})
 
     try:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})  # dedicated system message
+        messages.append({"role": "user", "content": prompt})
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=config["temperature"],
             max_tokens=config["max_tokens"],
             timeout=15.0,
@@ -203,48 +213,85 @@ def _log_to_pg(task_type: str, provider: str, model: str, duration_ms: int,
 
 
 # ---------------------------------------------------------------------------
+# Training Data Logging (Fase 1: destilacion pasiva)
+# Logs successful LLM input/output pairs in MLX-LM chat JSONL format.
+# Used to train our own model later (Qwen3-4B via QLoRA).
+# ---------------------------------------------------------------------------
+_TRAINING_DATA_DIR = pathlib.Path(__file__).resolve().parent.parent / "training_data"
+
+# Don't log these — already replaced with classical or not useful for training
+_SKIP_TRAINING_LOG = {"edge_classify"}
+
+
+def _log_training_data(task_type: str, prompt: str, response: str, system: str = ""):
+    """Save successful LLM call as training example in JSONL chat format."""
+    if task_type in _SKIP_TRAINING_LOG:
+        return
+    if not response or len(response) < 10:
+        return
+    try:
+        _TRAINING_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        filepath = _TRAINING_DATA_DIR / f"{task_type}.jsonl"
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        messages.append({"role": "assistant", "content": response})
+        example = {"messages": messages}
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(json.dumps(example, ensure_ascii=False) + "\n")
+    except Exception as e:
+        _logger.debug("[llm_router] Training data log failed: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
-def llm_complete(task_type: str, prompt: str, system: str = "") -> Optional[str]:
+def llm_complete(task_type: str, prompt: str, system: str = "",
+                 _no_log: bool = False) -> Optional[str]:
     """Route LLM call through priority chain: Ollama → Claude → OpenAI.
 
     Args:
         task_type: Key for task config (temperature, max_tokens).
         prompt: The user/task prompt.
         system: Optional system prompt (only used by Claude).
+        _no_log: If True, skip training data logging (use for DPO/synthetic
+                 calls whose responses must not contaminate SFT files).
 
     Returns:
         Response text, or None if all providers fail.
     """
-    full_prompt = prompt
-    if system:
-        full_prompt = f"{system}\n\n{prompt}"
-
     t0 = time.time()
-    prompt_chars = len(full_prompt)
+    prompt_chars = len(prompt) + len(system)
 
-    # 1. Ollama (free, local)
-    answer = _try_ollama(task_type, full_prompt)
+    # 1. Ollama (free, local) — concatenates system into prompt internally
+    answer = _try_ollama(task_type, prompt, system)
     if answer:
         duration_ms = int((time.time() - t0) * 1000)
         _log_to_pg(task_type, "ollama", "local", duration_ms,
                    prompt_chars, len(answer), True)
+        if not _no_log:
+            _log_training_data(task_type, prompt, answer, system)
         return answer
 
-    # 2. Claude Haiku (our API)
-    answer = _try_claude(task_type, full_prompt)
+    # 2. Claude Haiku (our API) — system passed as top-level parameter
+    answer = _try_claude(task_type, prompt, system)
     if answer:
         duration_ms = int((time.time() - t0) * 1000)
         _log_to_pg(task_type, "anthropic", CLAUDE_MODEL, duration_ms,
                    prompt_chars, len(answer), True)
+        if not _no_log:
+            _log_training_data(task_type, prompt, answer, system)
         return answer
 
-    # 3. OpenAI gpt-4o-mini (backup)
-    answer = _try_openai(task_type, full_prompt)
+    # 3. OpenAI gpt-4o-mini (backup) — system prepended as system message
+    answer = _try_openai(task_type, prompt, system)
     if answer:
         duration_ms = int((time.time() - t0) * 1000)
         _log_to_pg(task_type, "openai", OPENAI_MODEL, duration_ms,
                    prompt_chars, len(answer), True)
+        if not _no_log:
+            _log_training_data(task_type, prompt, answer, system)
         return answer
 
     # All failed

@@ -692,7 +692,8 @@ def recalibrate_importance(
     try:
         downgraded_crit = 0
         downgraded_high = 0
-        scanned = 0
+        scanned_critical = 0
+        scanned_high = 0
         now = now_col()
         critical_cutoff = now - timedelta(days=critical_decay_days)
         high_cutoff = now - timedelta(days=high_decay_days)
@@ -703,7 +704,7 @@ def recalibrate_importance(
 
         # --- Scan critical memories ---
         offset = None
-        while scanned < max_scan:
+        while scanned_critical < max_scan:
             batch, next_offset = pg.scroll(
                 filters={"importance": "critical"},
                 limit=100,
@@ -714,7 +715,7 @@ def recalibrate_importance(
                 break
 
             for point in batch:
-                scanned += 1
+                scanned_critical += 1
                 payload = point.payload
 
                 # Protected: legitimate critical content (personal moments)
@@ -753,7 +754,7 @@ def recalibrate_importance(
 
         # --- Scan high memories ---
         offset = None
-        while scanned < max_scan:
+        while scanned_high < max_scan:
             batch, next_offset = pg.scroll(
                 filters={"importance": "high"},
                 limit=100,
@@ -764,7 +765,7 @@ def recalibrate_importance(
                 break
 
             for point in batch:
-                scanned += 1
+                scanned_high += 1
                 payload = point.payload
 
                 # Protected: emotionally weighted memories
@@ -818,6 +819,7 @@ def recalibrate_importance(
                         (downgrade_to_medium,),
                     )
 
+        scanned = scanned_critical + scanned_high
         total_downgraded = downgraded_crit + downgraded_high
         if total_downgraded > 0:
             logger.info(f"[importance_recal] {downgraded_crit} critical→high, {downgraded_high} high→medium")

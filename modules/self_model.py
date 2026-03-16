@@ -975,6 +975,14 @@ def detect_self_discrepancies() -> dict:
                     "discrepancy_type": "actual/ought (hierarchy violation)",
                     "magnitude": avg_pe['L1'] - avg_pe['L0'],
                 })
+            if 'L1' in avg_pe and 'L2' in avg_pe and avg_pe['L2'] > avg_pe['L1'] * 1.2:
+                discrepancies.append({
+                    "domain": "hierarchy",
+                    "expected": f"PE_L2 <= PE_L1 (metacognition more stable than L1)",
+                    "actual": f"PE_L1={avg_pe['L1']:.3f}, PE_L2={avg_pe['L2']:.3f}",
+                    "discrepancy_type": "actual/ought (hierarchy violation L2>L1)",
+                    "magnitude": avg_pe['L2'] - avg_pe['L1'],
+                })
         except Exception:
             pass
 

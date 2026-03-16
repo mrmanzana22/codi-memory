@@ -253,3 +253,37 @@ class TestEmotionalVulnerability:
         payload = {"data": "calm fact", "pad_at_encoding": {"P": 0.2, "A": 0.1, "D": 0.3}}
         result = check_reconsolidation("mem3", payload, "context")
         assert result["should_reconsolidate"] is False
+
+
+class TestBypassGuard:
+    """Test bypass_guard parameter for internal callers (Proposal #179).
+
+    Note: bypass_guard lives on _correct_memory_impl (not the MCP-exposed
+    correct_memory wrapper) because FastMCP rejects params starting with '_'.
+    """
+
+    @patch("modules.destructive_guard.is_guard_enabled", return_value=True)
+    def test_bypass_guard_skips_token_requirement(self, mock_guard):
+        """bypass_guard=True should skip two-step confirmation even with guard enabled."""
+        from modules.reconsolidation import _correct_memory_impl
+        result = _correct_memory_impl(
+            memory_id="nonexistent-id",
+            correction="test correction",
+            force=True,
+            bypass_guard=True,
+        )
+        # Gets past the guard, fails at ID resolution (expected)
+        assert "CONFIRMACION REQUERIDA" not in result
+
+    @patch("modules.destructive_guard.request_confirmation",
+           return_value={"confirm_token": "test-token-123", "ttl_seconds": 300})
+    @patch("modules.destructive_guard.is_guard_enabled", return_value=True)
+    def test_without_bypass_requires_token(self, mock_guard, mock_request):
+        """Without bypass_guard, guard-enabled correct_memory requires token."""
+        from modules.reconsolidation import correct_memory
+        result = correct_memory(
+            memory_id="test-id",
+            correction="test correction",
+            force=True,
+        )
+        assert "CONFIRMACION REQUERIDA" in result

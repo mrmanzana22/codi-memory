@@ -31,7 +31,7 @@ import logging
 import math
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def _compute_base_level(
     Returns:
         Base-level activation (float). Higher = more accessible.
     """
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Parse creation time (default: 30 days ago if missing)
     default_created = now - timedelta(days=30)
@@ -122,7 +122,7 @@ def _compute_base_level(
         if created_at_str:
             created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
             if created_at.tzinfo:
-                created_at = created_at.replace(tzinfo=None)
+                created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
         else:
             created_at = default_created
     except Exception:
@@ -136,7 +136,7 @@ def _compute_base_level(
             try:
                 ts = datetime.fromisoformat(str(ts_str).replace('Z', '+00:00'))
                 if ts.tzinfo:
-                    ts = ts.replace(tzinfo=None)
+                    ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
                 t_hours = max(1.0, (now - ts).total_seconds() / ACTR_TIME_UNIT)
                 total += t_hours ** (-decay)
                 parsed_any = True
@@ -156,7 +156,7 @@ def _compute_base_level(
         try:
             last_acc = datetime.fromisoformat(str(last_accessed_str).replace('Z', '+00:00'))
             if last_acc.tzinfo:
-                last_acc = last_acc.replace(tzinfo=None)
+                last_acc = last_acc.astimezone(timezone.utc).replace(tzinfo=None)
             t_last = max(1.0, (now - last_acc).total_seconds() / ACTR_TIME_UNIT)
         except Exception:
             pass

@@ -32,6 +32,8 @@ MAX_OPS_PER_BATCH: int = 200       # chunk size per batch_update_points call
 
 # Alert thresholds (for check_health)
 ALERT_ERRORS_PER_HOUR: int = 5     # FAIL if errors > this in 1h
+ALERT_ERROR_RATE: float = 0.10     # FAIL if error_rate > 10% (min 10 flushes)
+ALERT_MIN_FLUSHES: int = 10        # minimum flush_count before error rate check applies
 ALERT_PENDING_MAX: int = 500       # WARN if pending stays above this
 
 
@@ -187,8 +189,10 @@ def check_health() -> dict:
     dropped = stats.get("dropped", 0)
     pending = stats.get("pending", 0)
 
-    if errors > ALERT_ERRORS_PER_HOUR:
-        return {"mode": mode, "verdict": "FAIL", "reason": f"errors={errors} > {ALERT_ERRORS_PER_HOUR}", "stats": stats}
+    flush_count = stats.get("flush_count", 0)
+    error_rate = errors / max(flush_count, 1)
+    if flush_count >= ALERT_MIN_FLUSHES and error_rate > ALERT_ERROR_RATE:
+        return {"mode": mode, "verdict": "FAIL", "reason": f"error_rate={error_rate:.1%} ({errors}/{flush_count} flushes)", "stats": stats}
     if dropped > 0:
         return {"mode": mode, "verdict": "WARN", "reason": f"dropped={dropped} (data loss)", "stats": stats}
     if pending > ALERT_PENDING_MAX:

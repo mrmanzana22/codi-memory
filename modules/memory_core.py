@@ -420,6 +420,14 @@ def search_memory(query: str, limit: int = 5) -> str:
         # ============================================================
         # METACOGNITIVE CONTROL (HOT-3): FOK -> strategy adjustment
         # ============================================================
+        # Compute topic early — needed by both metacognitive emit and TS allocation
+        _query_topic = None
+        try:
+            from modules.retrieval_metadata import _get_topic_from_query
+            _query_topic = _get_topic_from_query(query)
+        except Exception:
+            pass
+
         fok_control = None
         confidence_flag = ""
         try:
@@ -435,6 +443,7 @@ def search_memory(query: str, limit: int = 5) -> str:
                     "strategy": fok_control.get("strategy", ""),
                     "adjusted_limit": limit_multiplier,
                     "fok_score": fok_control.get("fok", {}).get("fok_score", None),
+                    "domain": _query_topic or "general",
                 })
             except Exception:
                 pass
@@ -444,13 +453,7 @@ def search_memory(query: str, limit: int = 5) -> str:
         # ============================================================
         # CHANNEL ALLOCATION: Thompson Sampling (S1-04, CC-8 per-topic)
         # ============================================================
-        # Compute topic early for per-topic TS allocation (Canon v2, CC-8)
-        _query_topic = None
-        try:
-            from modules.retrieval_metadata import _get_topic_from_query
-            _query_topic = _get_topic_from_query(query)
-        except Exception:
-            pass
+        # Topic already computed above for metacognitive emit + TS allocation
 
         try:
             from modules.thompson_sampling import sample_allocation
@@ -906,6 +909,19 @@ def search_memory(query: str, limit: int = 5) -> str:
                 pass
 
         # ============================================================
+        # SOURCE MONITORING: batch check provenance (Johnson et al. 1993)
+        # ============================================================
+        _source_ids = set()
+        try:
+            from modules.source_tracking import get_sources_batch
+            _all_ids = [item["id"] for item in merged if item.get("id")]
+            if _all_ids:
+                _source_map = get_sources_batch(_all_ids)
+                _source_ids = set(_source_map.keys())
+        except Exception:
+            _source_ids = set()
+
+        # ============================================================
         # FORMAT OUTPUT
         # ============================================================
 
@@ -921,8 +937,9 @@ def search_memory(query: str, limit: int = 5) -> str:
                 topic = item.get("topic", "")
                 conf = item.get("confidence", 0)
                 evidence = item.get("evidence_count", 0)
+                _src_tag = "[verified]" if str(mem_id) in _source_ids else "[unverified]"
                 memories.append(
-                    f"{i}. [FACT][{topic}] [score:{score:.2f}|conf:{conf:.2f}|ev:{evidence}] {text}"
+                    f"{i}. [FACT][{topic}] [score:{score:.2f}|conf:{conf:.2f}|ev:{evidence}]{_src_tag} {text}"
                 )
             else:
                 # Format episodic memories (original format)
@@ -976,16 +993,18 @@ def search_memory(query: str, limit: int = 5) -> str:
                     if item.get("vault_reactivated"):
                         text = f"[VAULT] {text}"
 
-                    # Per-memory confidence (Koriat 1997)
+                    # Per-memory confidence (Koriat 1997 + Johnson 1993 source penalty)
+                    _is_verified = str(mem_id) in _source_ids
                     try:
                         from modules.retrieval_metadata import compute_memory_confidence
-                        mem_conf = compute_memory_confidence(payload, activation=act)
+                        mem_conf = compute_memory_confidence(payload, activation=act, source_verified=_is_verified)
                     except Exception:
                         mem_conf = 0.0
 
-                    memories.append(f"{i}. {date_display}{temporal_tag}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}|conf:{mem_conf:.2f}] {text}")
+                    _src_tag = "[verified]" if _is_verified else "[unverified]"
+                    memories.append(f"{i}. {date_display}{temporal_tag}[{source}|{importance}] [score:{score:.2f}|act:{act:.2f}|conf:{mem_conf:.2f}]{_src_tag} {text}")
                 except Exception:
-                    memories.append(f"{i}. [score:{score:.2f}] {text}")
+                    memories.append(f"{i}. [score:{score:.2f}][unverified] {text}")
 
         # ============================================================
         # RCJ CALIBRATION (HOT-2): Record FOK prediction vs actual outcome

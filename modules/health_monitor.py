@@ -143,7 +143,7 @@ def _rule_ai_disconnected(metrics: dict, now_iso: str) -> dict | None:
     events = metrics["global"]["events_24h"]
     observations = metrics["active_inference"]["total_observations"]
     enough_activity = writes >= _AI_MIN_WRITES_TO_CHECK
-    if enough_activity and observations == 0:
+    if enough_activity and observations == 0 and metrics["active_inference"]["table_exists"]:
         return {
             "alert_key": "ai_disconnected",
             "subsystem": "active_inference",

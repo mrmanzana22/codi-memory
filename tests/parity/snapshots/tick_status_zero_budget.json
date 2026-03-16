@@ -63,5 +63,10 @@
     "ok": false,
     "status": "skipped",
     "tick": "proactive_contact"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "cx_health"
   }
 ]

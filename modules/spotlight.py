@@ -53,10 +53,13 @@ def _apply_ttl(items: list) -> list:
     for item in items:
         try:
             ts = datetime.fromisoformat(item["ts"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=now.tzinfo)
+            age = (now - ts).total_seconds()
         except (KeyError, TypeError, ValueError):
             _logger.warning("Dropping spotlight item with invalid timestamp: %r", item)
             continue
-        if (now - ts).total_seconds() < SPOTLIGHT_TTL_SECONDS:
+        if 0 <= age < SPOTLIGHT_TTL_SECONDS:
             alive.append(item)
     return alive
 
@@ -108,7 +111,7 @@ def select_risk(health_signals: dict) -> dict | None:
     """
     # Priority 1: dual gate failure
     gate = health_signals.get("dual_gate")
-    if gate and gate.upper() in ("FAIL", "WARNING"):
+    if gate and isinstance(gate, str) and gate.upper() in ("FAIL", "WARNING"):
         detail = health_signals.get("dual_detail", "")
         return make_item("risk", f"DUAL gate {gate}: {detail}"[:200], "health")
 
@@ -247,13 +250,13 @@ def should_update_from_recall(results: list) -> bool:
     # Strong signal: explicit evidence inside a recall result
     for r in results:
         meta = r.get("meta", {}) or {}
-        text = r.get("text", "")
+        text = r.get("text") or ""
         text_low = text.lower()
         importance = str(meta.get("importance", "")).lower()
-        hits = meta.get("hits", 0)
+        hits = meta.get("hits") or 0
         if importance in ("critical", "high"):
             return True
-        if isinstance(hits, int) and hits >= 3:
+        if hits >= 3:
             return True
         if "critical" in text_low or "bloqueo" in text_low:
             return True

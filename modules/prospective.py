@@ -616,7 +616,7 @@ def _check_time(spec: dict, now: datetime) -> dict:
 
     tolerance = timedelta(minutes=spec.get("tolerance_minutes", 30))
 
-    if now_cmp >= trigger_time - tolerance:
+    if trigger_time - tolerance <= now_cmp <= trigger_time + tolerance:
         return {"matched": True, "detail": f"Time: {trigger_time_str}"}
     return {"matched": False}
 

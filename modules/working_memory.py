@@ -27,6 +27,45 @@ _DEDUP_WINDOW_S = 120
 # Machine identifier for multi-host tracking
 _MACHINE_ID = socket.gethostname()
 
+# ---------------------------------------------------------------------------
+# Belief Revision: antonym pairs for same-topic contradiction detection
+# (Gärdenfors 1988 — new belief contradicting active belief → retract old)
+# Each pair is (set_A, set_B): if new matches A and old matches B (or vice
+# versa), within the same topic, the old item gets archived.
+# ---------------------------------------------------------------------------
+_ANTONYM_PAIRS = [
+    ({"muerto", "murio", "died", "dead", "muerte"},
+     {"vivo", "alive", "nacido", "adopted", "born", "adoptado"}),
+    ({"failed", "fallo", "broken", "roto"},
+     {"fixed", "resuelto", "corregido", "solved", "funciona"}),
+    ({"sick", "enfermo", "enferma"},
+     {"healthy", "sano", "recovered", "recuperado", "curado"}),
+    ({"down", "offline", "stopped", "caido", "detenido"},
+     {"online", "funcionando"}),
+    ({"lost", "perdido", "perdida"},
+     {"found", "encontrado", "recovered", "recuperado"}),
+]
+
+
+def _detect_contradiction(new_content: str, old_content: str) -> bool:
+    """Return True if new_content contradicts old_content via antonym pairs."""
+    new_words = set(new_content.lower().split())
+    old_words = set(old_content.lower().split())
+    for set_a, set_b in _ANTONYM_PAIRS:
+        if (new_words & set_a and old_words & set_b) or \
+           (new_words & set_b and old_words & set_a):
+            return True
+    return False
+
+
+def _content_similarity(a: str, b: str) -> float:
+    """Jaccard similarity on lowered word sets. Classical, no ML."""
+    wa = set(a.lower().split())
+    wb = set(b.lower().split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
 # ============================================================
 # DATABASE INIT
 # ============================================================
@@ -250,9 +289,11 @@ def wm_get_active_topics(limit: int = 10) -> list:
         with _get_conn() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
-                    "SELECT DISTINCT topic FROM working_memory "
+                    "SELECT topic, MAX(relevance) as max_rel "
+                    "FROM working_memory "
                     "WHERE active = TRUE AND topic IS NOT NULL "
-                    "ORDER BY topic LIMIT %s",
+                    "GROUP BY topic "
+                    "ORDER BY max_rel DESC LIMIT %s",
                     (limit,)
                 )
                 rows = cur.fetchall()
@@ -493,6 +534,23 @@ def push_to_working_memory(
                          source, chain_id, _MACHINE_ID)
                     )
                     new_id = cur.fetchone()[0]
+
+                # Belief revision + duplicate consolidation (single pass)
+                # 1. Contradiction (Gärdenfors 1988): antonym-based retraction
+                # 2. Near-duplicate (Jaccard > 0.85): keeps only newest
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        "SELECT id, content FROM working_memory "
+                        "WHERE active = TRUE AND topic = %s AND id != %s",
+                        (topic, new_id)
+                    )
+                    for row in cur.fetchall():
+                        if _detect_contradiction(content, row["content"]) or \
+                           _content_similarity(content, row["content"]) > 0.85:
+                            conn.execute(
+                                "UPDATE working_memory SET active = FALSE WHERE id = %s",
+                                (row["id"],)
+                            )
 
                 _auto_curate_buffer(conn)
 

@@ -103,7 +103,7 @@ def _retrieve_by_period(days: int, focus: str = None) -> list:
 
     filters = {}
     if focus:
-        filters["narrative_themes"] = {"key": "narrative_themes", "value": focus.lower()}
+        filters["narrative_themes"] = focus.lower()
 
     # Bug #052: Parse cutoff as proper datetime instead of truncating timezone
     try:
@@ -203,20 +203,17 @@ def _construct_scenes(daily_data: dict) -> list:
             theme_groups[primary_theme].append(m)
 
         for theme, mems in theme_groups.items():
-            if len(mems) < 1:
-                continue
-
             # Emotional tone: aggregate PAD values (fix: pad_at_encoding["P"])
             pleasures = []
             for m in mems:
                 pad_enc = (m.payload or {}).get("pad_at_encoding")
                 if isinstance(pad_enc, dict):
-                    p_val = pad_enc.get("P", 0)
+                    p_val = pad_enc.get("P", None)
                 else:
                     p_val = 0
-                if p_val and isinstance(p_val, (int, float)):
+                if p_val is not None and isinstance(p_val, (int, float)):
                     pleasures.append(p_val)
-                elif not p_val:
+                elif p_val is None:
                     # Fallback: use experiential_emotional_valence
                     valence = (m.payload or {}).get("experiential_emotional_valence", "neutral")
                     if valence == "positive":

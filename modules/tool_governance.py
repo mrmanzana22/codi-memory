@@ -55,6 +55,12 @@ BUNDLE_CORE = frozenset({
     # Goals (Sprint 15 - daily use)
     "crear_goal", "ver_goals", "actualizar_goal", "completar_goal",
     "contexto_goals", "arbol_goals",
+    # CPO v2: CX observability
+    "get_cx_health",
+    # Pet (tamagochi digital)
+    "pet_status", "adopt_pet_tool", "care_for_pet_tool",
+    # Source Monitoring (Johnson et al. 1993)
+    "get_memory_source",
     # Governance meta (always visible)
     "get_toolset_status",
 })

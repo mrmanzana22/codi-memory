@@ -106,15 +106,18 @@ _SOURCE_WEIGHTS = {
 }
 
 
-def compute_memory_confidence(payload: dict, activation: float = 0.0) -> float:
-    """Compute per-memory confidence score from 5 signals.
+def compute_memory_confidence(payload: dict, activation: float = 0.0,
+                              source_verified: bool = None) -> float:
+    """Compute per-memory confidence score from 5 signals + source verification.
 
     Koriat 1997: confidence = retrieval fluency + source reliability.
     Dunlosky & Metcalfe 2009: corroboration increases JOL.
+    Johnson et al. 1993 / Nelson & Narens 1990: source monitoring modulates FOK.
 
     Args:
         payload: Memory's Qdrant payload dict
         activation: ACT-R activation score (0-1) from search scoring
+        source_verified: If False, apply 0.10 penalty (no provenance). None = no penalty.
 
     Returns:
         Confidence score (0.0-1.0)
@@ -156,7 +159,11 @@ def compute_memory_confidence(payload: dict, activation: float = 0.0) -> float:
         + 0.15 * 1.0  # base reliability
     )
 
-    return round(max(0.0, min(1.0, raw - contradiction_penalty)), 3)
+    # 6. Source verification penalty (Johnson et al. 1993, Nelson & Narens 1990)
+    # Memories without provenance tracking are less trustworthy
+    source_penalty = 0.10 if source_verified is False else 0.0
+
+    return round(max(0.0, min(1.0, raw - contradiction_penalty - source_penalty)), 3)
 
 
 # ============================================================

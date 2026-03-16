@@ -292,9 +292,11 @@ def _cargar_curiosidades() -> dict:
 
 
 def _guardar_curiosidades(data: dict):
-    """Guarda el archivo de curiosidades a disco."""
-    with open(CURIOSIDAD_FILE, 'w', encoding='utf-8') as f:
+    """Guarda el archivo de curiosidades a disco (atomic write)."""
+    tmp_path = CURIOSIDAD_FILE + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, CURIOSIDAD_FILE)
 
 
 def push_curiosidad(tema: str, prioridad: str = "media", categoria: str = "general") -> str:

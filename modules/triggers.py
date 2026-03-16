@@ -4,9 +4,12 @@ Handles trigger loading, detection, evaluation, and dynamic creation.
 Triggers act as 'memory webhooks' that detect patterns and activate protocols.
 """
 
+import logging
 import os
 import json
 from datetime import datetime
+
+_logger = logging.getLogger(__name__)
 
 from modules.config import USER_ID, COLLECTION_NAME, TRIGGERS_FILE, _current_session, _emotional_state, now_iso
 from modules.secret_redact import redact_secrets
@@ -26,14 +29,22 @@ def _load_triggers():
         if not os.path.exists(TRIGGERS_FILE):
             _triggers_cache = {}
         else:
-            with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                raise ValueError("Invalid triggers file format: expected top-level object")
-            triggers = data.get('triggers', {})
-            if not isinstance(triggers, dict):
-                raise ValueError("Invalid triggers file schema: 'triggers' must be an object")
-            _triggers_cache = triggers
+            try:
+                with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    _logger.warning("triggers.json: invalid format (expected object), using empty cache")
+                    _triggers_cache = {}
+                else:
+                    triggers = data.get('triggers', {})
+                    if not isinstance(triggers, dict):
+                        _logger.warning("triggers.json: 'triggers' key is not an object, using empty cache")
+                        _triggers_cache = {}
+                    else:
+                        _triggers_cache = triggers
+            except (json.JSONDecodeError, OSError) as e:
+                _logger.error("Failed to load triggers file %s: %s — using empty cache", TRIGGERS_FILE, e)
+                _triggers_cache = {}
     return _triggers_cache
 
 
@@ -44,6 +55,9 @@ def _detect_triggers(text: str) -> list:
     text_lower = text.lower()
 
     for trigger_name, trigger_data in triggers.items():
+        if not isinstance(trigger_data, dict):
+            _logger.warning("Trigger '%s' has non-dict value, skipping", trigger_name)
+            continue
         patterns = [p.strip() for p in trigger_data.get('patterns', []) if isinstance(p, str) and p.strip()]
         for pattern in patterns:
             if pattern.lower() in text_lower:
@@ -252,7 +266,7 @@ def register_tools(mcp):
 
             # Actualizar indice rapido
             primera_letra = nombre[0].upper()
-            if primera_letra not in data.get('indice_rapido', {}):
+            if not isinstance(data['indice_rapido'].get(primera_letra), list):
                 data['indice_rapido'][primera_letra] = []
             if nombre not in data['indice_rapido'][primera_letra]:
                 data['indice_rapido'][primera_letra].append(nombre)

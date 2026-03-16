@@ -156,7 +156,7 @@ def _softmax_select(candidates: list, k: int) -> list:
     if not candidates or k <= 0:
         return []
     if len(candidates) <= k:
-        return list(candidates)
+        return sorted(candidates, key=lambda c: c.activation, reverse=True)
 
     try:
         selected = []

@@ -514,6 +514,19 @@ def _on_prediction_error(event_name: str, data: dict):
     else:
         error_magnitude = 0.0
     topic = data.get("topic", "unknown")
+
+    # L9→L4: Asymmetric self-prediction precision (Kube 2020, Sharot 2011)
+    # Self-relevant positive PEs get mild precision boost (healthy optimism bias)
+    try:
+        domain = data.get("domain", topic).lower()
+        if domain and _cx26_core_values and any(
+            v.lower() in domain for v in _cx26_core_values if isinstance(v, str)
+        ):
+            if data.get("valence") == "positive":
+                error_magnitude = min(1.0, error_magnitude * 1.05)
+    except Exception:
+        pass
+
     # Build keywords from available data
     actual_keywords = data.get("actual_keywords", [])
     if not actual_keywords:
@@ -829,11 +842,12 @@ def _on_contradiction_detected(event_name: str, data: dict):
                 # Sevenster et al. 2013: contradiction PE (not topic PE) is the correct trigger
                 if pe >= 0.6:
                     try:
-                        from modules.reconsolidation import correct_memory
-                        result = correct_memory(
+                        from modules.reconsolidation import _correct_memory_impl
+                        result = _correct_memory_impl(
                             memory_id=old_memory_id,
                             correction=new_text,
                             force=True,  # PE already validated
+                            bypass_guard=True,  # trusted internal caller
                         )
                         _logger.info("Auto-reconsolidation: %s", result)
                     except Exception:
@@ -1196,8 +1210,9 @@ def _on_pe_drives_curiosity(event_name: str, data: dict):
         if not topic or not error_magnitude:
             return
 
-        # Goldilocks zone (Kidd & Hayden 2015): skip noise and boring
-        if error_magnitude < 0.4 or error_magnitude > 0.95:
+        # Goldilocks zone (Kidd & Hayden 2015, Kidd 2012): skip noise and boring
+        # Lower bound 0.3 per neuro-skill v2 review (proposal 187)
+        if error_magnitude < 0.3 or error_magnitude > 0.95:
             return
 
         # Cooldown per topic (prevent runaway curiosity)
@@ -1667,9 +1682,12 @@ _CX11_MAX_BUFFER = 20         # Batch threshold (Bramley 2015)
 
 # CX-9 state: anti-rumination circuit breakers
 _CX9_REFRACTORY_SECONDS = 45  # Neuro-grounded: 30-90s range (DMN dynamics)
+_CX9_RELAXED_REFRACTORY = 20  # Homeostatic: relaxed after chronic blocking (Turrigiano 2004)
+_CX9_BLOCK_THRESHOLD = 5      # Consecutive blocks before relaxation
 _CX9_SALIENCE_THRESHOLD = 0.3  # Base threshold for PE*precision gate
 _cx9_last_fire = 0.0
 _cx9_fire_count_window = []
+_cx9_consecutive_blocks = 0    # Homeostatic plasticity counter (proposal 188)
 _SELF_REF_KEYWORDS = {
     "self_model", "identity", "identidad", "capability", "performance",
     "consciousness", "consciencia", "codi", "self",
@@ -1910,12 +1928,13 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
 
     Circuit breakers (Menon 2011 triple network model):
     1. Anti-echo: skip if broadcast is only self-model content (CX-3 origin)
-    2. Refractory: 45s cooldown (neuro-grounded, DMN dynamics are seconds-scale)
+    2. Refractory: ADAPTIVE cooldown (Turrigiano 2004 homeostatic plasticity)
+       Base 45s, relaxes to 20s after 5 consecutive blocks (proposal 188)
     3. DAN/DMN anti-correlation: suppress when focus_value > 0.7 (ECN dominant)
     4. PE*precision salience gate (SN analog, Menon 2011)
     5. Kill switch: >3 fires in 30min → disable (Whitfield-Gabrieli 2012)
     """
-    global _cx9_last_fire
+    global _cx9_last_fire, _cx9_consecutive_blocks
     try:
         winner_domains = data.get("winner_domains", [])
         if not winner_domains:
@@ -1923,21 +1942,27 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
 
         # CB1: Anti-echo — sole self_model winner = CX-3 echo
         if len(winner_domains) == 1 and winner_domains[0].lower() == "self_model":
+            _cx9_consecutive_blocks += 1
             return
 
-        # CB2: Refractory period (45s)
+        # CB2: Refractory period — ADAPTIVE (Turrigiano 2004)
+        # After chronic blocking, relax from 45s to 20s (within physiological range, Fox 2005)
         now = time.monotonic()
-        if now - _cx9_last_fire < _CX9_REFRACTORY_SECONDS:
+        refractory = _CX9_RELAXED_REFRACTORY if _cx9_consecutive_blocks >= _CX9_BLOCK_THRESHOLD else _CX9_REFRACTORY_SECONDS
+        if now - _cx9_last_fire < refractory:
+            _cx9_consecutive_blocks += 1
             return
 
         self_relevance = _compute_self_relevance(winner_domains)
         if self_relevance < 0.1:
+            _cx9_consecutive_blocks += 1
             return
 
         # CB3: DAN/DMN anti-correlation (Menon 2011)
         attention = get_attention_schema()
         focus_value = attention.get("focus_value", 0.0)
         if focus_value > 0.7:
+            _cx9_consecutive_blocks += 1
             return
 
         # CB4: PE*precision salience gate (SN analog)
@@ -1949,6 +1974,7 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
             precision = 0.5
         weighted_salience = self_relevance * precision
         if weighted_salience < _CX9_SALIENCE_THRESHOLD:
+            _cx9_consecutive_blocks += 1
             return
 
         # CB5: Kill switch — >3 fires in 30min
@@ -1958,8 +1984,14 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
             _cx9_fire_count_window.pop(0)
         if len(_cx9_fire_count_window) > 3:
             _logger.warning("CX-9 kill switch: >3 fires in 30min, disabling")
+            _cx9_consecutive_blocks += 1
             return
 
+        # SUCCESS: reset homeostatic counter (Turrigiano 2004)
+        if _cx9_consecutive_blocks >= _CX9_BLOCK_THRESHOLD:
+            _logger.info("CX-9 homeostatic reset: was blocked %d times, refractory was relaxed to %ds",
+                         _cx9_consecutive_blocks, _CX9_RELAXED_REFRACTORY)
+        _cx9_consecutive_blocks = 0
         _cx9_last_fire = now
 
         # Background thread (reflect_on_self is heavy ~200-500ms)
@@ -3180,6 +3212,43 @@ def _register_proactive_handlers():
     event_bus.on(Events.PREDICTION_ERROR, _on_high_prediction_error)
 
 
+def _on_pet_state_changed(data: dict):
+    """Pet state changes affect Codi's emotions via PAD.
+
+    When Codi cares for the pet -> positive PAD shift (nurturing satisfaction).
+    When pet is adopted -> joy.
+    """
+    try:
+        from modules.config import _emotional_state
+        from modules.emotion import set_emotional_state
+        from modules.utils import _clamp_pad_value
+
+        current = _emotional_state.get("current", {})
+        p = current.get("pleasure", 0.0)
+        a = current.get("arousal", 0.0)
+        d = current.get("dominance", 0.0)
+
+        event_type = data.get("event", "")
+        pet_name = data.get("pet_name", "pet")
+
+        if event_type == "cared":
+            set_emotional_state(
+                _clamp_pad_value(p + 0.1),
+                _clamp_pad_value(a - 0.05),
+                _clamp_pad_value(d + 0.1),
+                trigger=f"pet_care:{pet_name}",
+            )
+        elif event_type == "adopted":
+            set_emotional_state(
+                _clamp_pad_value(p + 0.2),
+                _clamp_pad_value(a + 0.1),
+                _clamp_pad_value(d + 0.05),
+                trigger=f"pet_adopted:{pet_name}",
+            )
+    except Exception as e:
+        _logger.debug("_on_pet_state_changed error: %s", e)
+
+
 def wire_event_bus():
     """Register all event handlers. Called from server.py at startup.
 
@@ -3387,6 +3456,9 @@ def wire_event_bus():
         _register_proactive_handlers()
     except Exception as e:
         _logger.warning("Proactive handlers not loaded: %s", redact_secrets(str(e)))
+
+    # ---- PET: State changes affect Codi's emotions ----
+    event_bus.on(Events.PET_STATE_CHANGED, _on_pet_state_changed)
 
     # ============================================================
     # CX_REGISTRY — Cross-Loop Registry (Fase 0 - Eval Harness)

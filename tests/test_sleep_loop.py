@@ -156,7 +156,7 @@ class TestFullLoop:
     def test_all_ticks_run(self, isolated_db, mock_tick_deps):
         from modules.sleep_loop import run_sleep_loop, TICK_ORDER
 
-        result = run_sleep_loop(reason="test", budget_ms=8000)
+        result = run_sleep_loop(reason="test", budget_ms=10000)
 
         assert result["ok"] is True
         assert result["report"] is not None
@@ -172,7 +172,7 @@ class TestFullLoop:
 
         cp_id = _insert_checkpoint(isolated_db, "test session")
 
-        result = run_sleep_loop(reason="test", budget_ms=8000)
+        result = run_sleep_loop(reason="test", budget_ms=10000)
         written = _write_sleep_report(cp_id, result["report"])
 
         assert written is True

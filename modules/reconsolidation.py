@@ -24,7 +24,7 @@ from modules.config import (
     RECONSOLIDATION_PE_THRESHOLD,
     RECONSOLIDATION_STRENGTH_FLOOR,
     RECONSOLIDATION_STRENGTH_CEILING,
-    now_col, now_iso,
+    now_col,
 )
 from modules.pg_store import pg
 from modules.consolidation_common import (
@@ -334,17 +334,8 @@ def correct_memory(
     GUARDED: Requires two-step confirmation token (added 2026-03-08 after audit
     identified this as the highest-risk unguarded destructive operation).
 
-    Pipeline:
-      1. Destructive guard check (two-step token)
-      2. Resolve full ID
-      3. Retrieve old payload from pg_store
-      4. Labile gate: verify memory is labile OR has PE (force bypasses)
-      5. Log old content to reconsolidation_log
-      6. Adjust confidence (decrement by 0.1 for contradiction)
-      7. Build new content, generate new embedding
-      8. Update payload via pg_store (re-embed, not post-it)
-      9. Update FTS5 index
-      10. Emit RECONSOLIDATION_TRIGGERED event
+    This is the MCP-exposed wrapper. Internal callers that need to bypass the
+    destructive guard should call _correct_memory_impl(..., bypass_guard=True).
 
     Args:
         memory_id: ID (or prefix) of the memory to correct
@@ -356,6 +347,23 @@ def correct_memory(
     Returns:
         Summary of reconsolidation action
     """
+    return _correct_memory_impl(
+        memory_id=memory_id, correction=correction, force=force,
+        confirm_token=confirm_token, confirm_code=confirm_code,
+        bypass_guard=False,
+    )
+
+
+def _correct_memory_impl(
+    memory_id: str, correction: str, force: bool = False,
+    confirm_token: str = "", confirm_code: str = "",
+    bypass_guard: bool = False,
+) -> str:
+    """Internal implementation of correct_memory.
+
+    Args:
+        bypass_guard: If True, skip destructive guard (for trusted internal callers only).
+    """
     from modules.destructive_guard import (
         is_guard_enabled, compute_fingerprint,
         request_confirmation, validate_and_consume, log_security_event,
@@ -365,7 +373,7 @@ def correct_memory(
     tool = "correct_memory"
     fp = compute_fingerprint(tool, memory_id=memory_id, correction=correction[:100])
 
-    if is_guard_enabled():
+    if is_guard_enabled() and not bypass_guard:
         if not confirm_token:
             # Step 1: Preview + issue token
             preview = (
@@ -468,6 +476,19 @@ def correct_memory(
         pg.upsert(full_id, new_vector, updated_payload)
     except Exception as e:
         return f"[reconsolidation] pg_store upsert error: {redact_secrets(str(e))}"
+
+    # 7a. Source tracking: reconsolidation creates new provenance (Nader 2000)
+    try:
+        from modules.source_tracking import record_source
+        record_source(
+            memory_id=full_id,
+            source_type="reconsolidation",
+            context_full=f"OLD: {old_content[:300]}\nNEW: {new_content[:300]}\nPE: {actual_pe:.2f}",
+            context_summary=f"Reconsolidated: PE={actual_pe:.2f}, conf {old_confidence:.2f}->{new_confidence:.2f}",
+            active_topic=old_payload.get("category", ""),
+        )
+    except Exception as e:
+        _logger.warning("source tracking for reconsolidation failed: %s", e)
 
     # 7b. Log reconsolidation AFTER successful upsert (audit trail)
     try:

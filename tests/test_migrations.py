@@ -54,7 +54,7 @@ class TestEmptyDbBaseline:
             assert v in result["applied"], f"Migration {v} should be applied"
         # 022 is postgres-only and should be skipped
         assert "022" in result["skipped"], "Migration 022 (postgres-only) should be skipped"
-        assert result["current_version"] == "026"
+        assert result["current_version"] == "028"
 
         conn = sqlite3.connect(db_path)
         tables = {r[0] for r in conn.execute(
@@ -83,6 +83,9 @@ class TestEmptyDbBaseline:
             "causal_discovery_state",
             "health_alerts",
             "system_health",
+            "cx_snapshots",
+            "pets",
+            "pet_care_log",
         }
         # memories_fts is a virtual table, check separately
         vtables = {r[0] for r in sqlite3.connect(db_path).execute(
@@ -359,6 +362,7 @@ class TestNoCreateTableOutsideMigrations:
             "working_memory.py", "active_inference_integration.py",
             "goals.py", "prospective.py", "reward_tracking.py",
             "ollama_router.py",
+            "cx_observability.py",
         }
 
         violations = []

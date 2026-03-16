@@ -23,7 +23,7 @@ from modules.pg_store import pg
 import random
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 _logger = logging.getLogger(__name__)
 
@@ -662,7 +662,7 @@ def compute_base_level_activation(
     Returns:
         Base-level activation value (float). Higher = more accessible.
     """
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Parse creation time
     # Default: assume 30 days old if no timestamp (not "now" which inflates activation)
@@ -671,7 +671,7 @@ def compute_base_level_activation(
         if created_at_str and 'T' in str(created_at_str):
             created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
             if created_at.tzinfo:
-                created_at = created_at.replace(tzinfo=None)
+                created_at = created_at.astimezone(timezone.utc).replace(tzinfo=None)
         else:
             created_at = default_created
     except Exception:
@@ -684,7 +684,7 @@ def compute_base_level_activation(
             try:
                 ts = datetime.fromisoformat(str(ts_str).replace('Z', '+00:00'))
                 if ts.tzinfo:
-                    ts = ts.replace(tzinfo=None)
+                    ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
                 t_hours = max(1.0, (now - ts).total_seconds() / ACTR_TIME_UNIT)
                 total += t_hours ** (-decay)
             except Exception:
@@ -703,7 +703,7 @@ def compute_base_level_activation(
         try:
             last_acc = datetime.fromisoformat(str(last_accessed_str).replace('Z', '+00:00'))
             if last_acc.tzinfo:
-                last_acc = last_acc.replace(tzinfo=None)
+                last_acc = last_acc.astimezone(timezone.utc).replace(tzinfo=None)
             t_last = max(1.0, (now - last_acc).total_seconds() / ACTR_TIME_UNIT)
         except Exception:
             pass

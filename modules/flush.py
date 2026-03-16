@@ -260,15 +260,15 @@ def _flush_session(resumen: str, decisiones: str = "", errores: str = "",
     resultados = []
 
     # 1. Guardar checkpoint principal
-    try:
-        resultado_checkpoint = _checkpoint_memoria(
-            momento="flush_pre_compaction",
-            que_paso=resumen,
-            por_que_importa="Flush automatico antes de compaction para no perder contexto"
-        )
+    resultado_checkpoint = _checkpoint_memoria(
+        momento="flush_pre_compaction",
+        que_paso=resumen,
+        por_que_importa="Flush automatico antes de compaction para no perder contexto"
+    )
+    if resultado_checkpoint.startswith("Error"):
+        resultados.append(f"Checkpoint: FAILED - {resultado_checkpoint[:80]}")
+    else:
         resultados.append("Checkpoint: OK")
-    except Exception as e:
-        resultados.append(f"Checkpoint: ERROR - {redact_secrets(str(e))}")
 
     # 2. Guardar decisiones si hay
     if decisiones.strip():

@@ -67,6 +67,7 @@ class Events:
     MEMORY_VAULTED = 'memory_vaulted'
     MEMORY_REACTIVATED = 'memory_reactivated'
     ACTION_SELECTED = 'action_selected'                                         # CX-22: L7→L5 action monitoring (all 4 architectures)
+    PET_STATE_CHANGED = 'pet_state_changed'                                       # Pet needs/care events → PAD integration
 
 
 class EventBus:
@@ -315,6 +316,7 @@ class EventBus:
             _logger.debug("Failed to flush event_counts", exc_info=True)
             # Restore snapshot so evidence isn't lost
             with self._lock:
+                self._last_flush = time.monotonic()
                 for event_name, increment in pending_counts.items():
                     self._dirty_counts[event_name] += increment
                 self._dirty_total += pending_total

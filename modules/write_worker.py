@@ -182,6 +182,26 @@ def _execute_remember(payload: dict) -> dict:
         _remember_ctx.wm_pushed = False
 
     result = json.loads(result_str) if isinstance(result_str, str) else result_str
+
+    # Source Monitoring: record provenance if metadata was passed from remember()
+    new_id = result.get("new_id")
+    sm = payload.get("_source_meta")
+    if new_id and sm and result.get("action") in ("saved_new", "saved_with_relation", "saved_with_contradiction"):
+        try:
+            from modules.source_tracking import record_source
+            record_source(
+                memory_id=new_id,
+                session_id=sm.get("session_id", ""),
+                source_type=sm.get("source_type", source),
+                context_full=sm.get("context_full", ""),
+                context_summary=sm.get("context_summary", ""),
+                active_topic=sm.get("active_topic", ""),
+                active_project="",
+                emotion_snapshot=sm.get("emotion_snapshot"),
+            )
+        except Exception as e:
+            _logger.warning("source tracking failed for %s: %s", new_id, e)
+
     return {"action": result.get("action", "unknown"), "result": str(result_str)[:200]}
 
 

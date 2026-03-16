@@ -115,6 +115,7 @@ def notify_hare_urgent(message: str) -> bool:
 # -- Cooldown state persistence --
 
 _STATE_KEY = "notifier_last_sent"
+_last_sent_in_memory: "datetime | None" = None  # in-process fallback if DB unavailable
 
 
 def _get_last_notification_time() -> datetime | None:
@@ -131,19 +132,23 @@ def _get_last_notification_time() -> datetime | None:
             return datetime.fromisoformat(row[0])
     except Exception:
         pass
-    return None
+    return _last_sent_in_memory
 
 
 def _record_notification_time():
     """Record current time as last notification in SQLite."""
+    global _last_sent_in_memory
+    from modules.config import now_iso
+    now_str = now_iso()
+    _last_sent_in_memory = datetime.fromisoformat(now_str)  # in-memory first (always succeeds)
     try:
-        from modules.config import connect_fts, now_iso
+        from modules.config import connect_fts
         conn = connect_fts()
         conn.execute(
             "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-            (_STATE_KEY, now_iso())
+            (_STATE_KEY, now_str)
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        _logger.error("Failed to record notification time: %s", e)
+        _logger.error("Failed to persist notification time (in-memory fallback active): %s", e)

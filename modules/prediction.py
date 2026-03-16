@@ -29,11 +29,12 @@ __all__ = [
 ]
 
 # Predictive state
+_PREDICTIVE_STATE_MAX = 500  # sliding window per list — prevents unbounded growth
+
 _predictive_state = {
     'predictions': [],
     'surprises': [],
     'belief_updates': [],
-    'accuracy_history': []
 }
 _state_lock = threading.Lock()
 
@@ -53,7 +54,7 @@ def predict_context(current_context: str) -> str:
         current_context: Descripcion del contexto actual
     """
     try:
-        results = pg.search(current_context, limit=10, is_semantic=False)
+        results = pg.search(current_context, limit=10, is_semantic=True)
         if not results or not results.get('results'):
             prediction = {
                 'context': current_context, 'timestamp': now_iso(),
@@ -62,6 +63,8 @@ def predict_context(current_context: str) -> str:
             }
             with _state_lock:
                 _predictive_state['predictions'].append(prediction)
+                if len(_predictive_state['predictions']) > _PREDICTIVE_STATE_MAX:
+                    _predictive_state['predictions'] = _predictive_state['predictions'][-_PREDICTIVE_STATE_MAX:]
             return f"No tengo memorias para predecir sobre: {current_context}\nPrediccion: contexto nuevo, alta probabilidad de sorpresa."
 
         predicted_memories = []
@@ -100,6 +103,8 @@ def predict_context(current_context: str) -> str:
         }
         with _state_lock:
             _predictive_state['predictions'].append(prediction)
+            if len(_predictive_state['predictions']) > _PREDICTIVE_STATE_MAX:
+                _predictive_state['predictions'] = _predictive_state['predictions'][-_PREDICTIVE_STATE_MAX:]
 
         lines = [f"# PREDICCION - Anticipando contexto\n"]
         lines.append(f"**Contexto:** {current_context}")
@@ -134,6 +139,8 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
         }
         with _state_lock:
             _predictive_state['surprises'].append(surprise_record)
+            if len(_predictive_state['surprises']) > _PREDICTIVE_STATE_MAX:
+                _predictive_state['surprises'] = _predictive_state['surprises'][-_PREDICTIVE_STATE_MAX:]
 
         content = f"[SORPRESA|{intensity.upper()}] Esperaba: {expected[:50]}... | Realidad: {actual[:50]}..."
         result = pg.add(content=content, category="aprendizaje", source="experienced", importance="high" if intensity == "high" else "medium")
@@ -198,7 +205,7 @@ def get_prediction_accuracy() -> str:
 
         total_predictions = len(predictions)
         total_surprises = len(surprises)
-        lines.append(f"**Predicciones realizadas:** {total_predictions}")
+        lines.append(f"**Predicciones (últimas {min(total_predictions, _PREDICTIVE_STATE_MAX)}):** {total_predictions}")
         lines.append(f"**Sorpresas registradas:** {total_surprises}")
 
         if total_predictions > 0:
@@ -251,6 +258,8 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
         }
         with _state_lock:
             _predictive_state['belief_updates'].append(belief_update)
+            if len(_predictive_state['belief_updates']) > _PREDICTIVE_STATE_MAX:
+                _predictive_state['belief_updates'] = _predictive_state['belief_updates'][-_PREDICTIVE_STATE_MAX:]
 
         content = f"[ACTUALIZACION DE CREENCIA] Sobre {topic}: Antes creia '{old_belief[:50]}...' | Ahora creo '{new_belief[:50]}...' | Razon: {reason[:50]}..."
         result = pg.add(content=content, category="aprendizaje", source="experienced", importance="high")

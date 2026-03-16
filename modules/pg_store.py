@@ -290,7 +290,10 @@ def _build_where(filters: Optional[dict], params: list, is_semantic: Optional[bo
                 if not mk or not all(c.isalnum() or c == '_' for c in mk):
                     continue
                 clauses.append(f"metadata->>'{mk}' = %s")
-                params.append(str(mv))
+                if isinstance(mv, bool):
+                    params.append(str(mv).lower())  # True->"true", False->"false" (JSONB text repr)
+                else:
+                    params.append(str(mv))
 
     return " AND ".join(clauses) if clauses else "TRUE"
 

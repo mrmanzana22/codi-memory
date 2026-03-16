@@ -462,6 +462,36 @@ def discover_cross_domain_insights() -> dict:
         INSIGHTS_MODE, len(bridges), len(anchor_pairs), threshold_used, len(insights)
     )
 
+    # Persist insights in "on" mode
+    insights_persisted = 0
+    if INSIGHTS_MODE == "on" and insights:
+        try:
+            from modules.memory_smart import add_memory_smart
+        except Exception as e:
+            _logger.warning("[sharpe_insights] Could not import add_memory_smart: %s", e)
+        else:
+            for insight in insights:
+                try:
+                    domains_str = " <-> ".join(str(d) for d in insight.get("domains", []))
+                    content = (
+                        f"[cross-domain insight] {insight['hypothesis']} "
+                        f"(domains: {domains_str})"
+                    )
+                    add_memory_smart(
+                        content=content,
+                        category="consciencia",
+                        source="inferred",
+                        importance="medium",
+                    )
+                    insights_persisted += 1
+                except Exception as e:
+                    _logger.warning("[sharpe_insights] Could not persist insight: %s", e)
+            if insights_persisted:
+                _logger.info("[sharpe_insights] Persisted %d/%d insights",
+                             insights_persisted, len(insights))
+
+    result["insights_persisted"] = insights_persisted
+
     return result
 
 

@@ -308,7 +308,7 @@ def should_enter_vault(payload: dict) -> bool:
     if payload.get("is_dormant"):
         return False
 
-    if payload.get("importance", payload.get("narrative_importance", "medium")) == "critical":
+    if (payload.get("importance") or payload.get("narrative_importance") or "medium") == "critical":
         return False
 
     if payload.get("is_semantic") or _get_memory_type(payload) == "semantic":
@@ -418,7 +418,7 @@ def apply_rif(retrieved_ids: list, query_embedding: list = None) -> dict:
         competitors = [
             n for n in neighbors
             if str(n.id) not in retrieved_set
-            and n.payload.get('importance', n.payload.get('narrative_importance', 'medium')) != 'critical'
+            and (n.payload.get('importance') or n.payload.get('narrative_importance') or 'medium') != 'critical'
             and str(n.id) not in _chain_ids
             and getattr(n, "score", 1.0) >= RIF_SIMILARITY_THRESHOLD
         ]
