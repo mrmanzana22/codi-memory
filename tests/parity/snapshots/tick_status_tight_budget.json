@@ -68,5 +68,10 @@
     "ok": true,
     "status": "ok",
     "tick": "cx_health"
+  },
+  {
+    "ok": true,
+    "status": "ok",
+    "tick": "recall_eval"
   }
 ]

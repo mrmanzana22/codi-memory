@@ -97,7 +97,7 @@ DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 FAST_TICKS = {"prospective", "health", "proactive_contact", "self_model"}
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health"]
+TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -178,6 +178,7 @@ class SleepWorldModel:
         "health_snapshot":    {},  # Operational snapshot — no direct state effect
         "proactive_contact":  {},  # User contact — no direct state effect
         "cx_health":          {},  # CPO v2: CX observability — no direct state effect
+        "recall_eval":        {},  # Recall quality measurement — no direct state effect
     }
 
     LEARNING_RATE = 0.3  # EMA alpha for learned effects
@@ -2495,6 +2496,63 @@ def _tick_cx_health(budget_ms: int) -> dict:
     return _impl(budget_ms)
 
 
+def _tick_recall_eval(budget_ms: int) -> dict:
+    """Tier 3: Run recall quality evaluation suite.
+
+    Measures precision@5, recall@5, MRR against ground-truth test cases.
+    Stores results for trending. Alerts if MRR drops below threshold.
+    """
+    t0 = time.monotonic()
+    try:
+        from modules.recall_eval import seed_eval_cases, load_active_cases, run_eval_suite, store_eval_results, reconcile_failed_searches
+
+        seed_eval_cases()  # No-op if cases already exist
+        cases = load_active_cases()
+        if len(cases) < 3:
+            return {"tick": "recall_eval", "ok": True, "status": "ok",
+                    "detail": f"skipped: only {len(cases)} cases (need 3+)",
+                    "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+
+        results = run_eval_suite(cases, limit=10)
+        store_eval_results(results, run_source="sleep_loop")
+
+        agg = results["aggregate"]
+        mrr = agg.get("mrr", 0)
+
+        # Alert on degradation
+        if mrr < 0.3:
+            _logger.warning("RECALL QUALITY ALERT: MRR=%.2f (below 0.3 threshold)", mrr)
+            try:
+                from modules.working_memory import push_to_working_memory
+                push_to_working_memory(
+                    f"[RECALL ALERT] MRR={mrr:.2f}, P@5={agg.get('precision_at_5', 0):.2f}, "
+                    f"failures={agg.get('n_failures', 0)}/{agg.get('n_cases', 0)}",
+                    topic="metamemory", relevance=0.9,
+                )
+            except Exception:
+                pass
+
+        # Reconcile failed searches (Schacter 1999: bridge encoding-retrieval gaps)
+        recon = {"reconciled": 0, "bridged": 0}
+        remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
+        if remaining_ms > 2000:
+            try:
+                recon = reconcile_failed_searches(max_per_run=5)
+            except Exception as e:
+                _logger.debug("reconcile_failed_searches in tick failed: %s", e)
+
+        return {"tick": "recall_eval", "ok": True, "status": "ok",
+                "detail": f"MRR={mrr:.2f} P@5={agg.get('precision_at_5', 0):.2f} "
+                          f"R@5={agg.get('recall_at_5', 0):.2f} "
+                          f"failures={agg.get('n_failures', 0)}/{agg.get('n_cases', 0)} "
+                          f"reconciled={recon.get('reconciled', 0)} bridged={recon.get('bridged', 0)}",
+                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        return {"tick": "recall_eval", "ok": False, "status": "error",
+                "detail": str(e)[:100],
+                "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+
+
 def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fast_only: bool = False) -> dict:
     """Execute the full sleep loop with prioritized ticks.
 
@@ -2564,6 +2622,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
         "sharpe_insights": _tick_sharpe_insights,
         "proactive_contact": _tick_proactive_contact,
         "cx_health": _tick_cx_health,
+        "recall_eval": _tick_recall_eval,
     }
 
     # Phase 1: Separate eligible ticks from VOC-tiered skips

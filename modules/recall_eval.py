@@ -341,6 +341,76 @@ def register_tools(mcp):
         return report
 
 
+def reconcile_failed_searches(max_per_run: int = 5) -> dict:
+    """Bridge encoding-retrieval gaps from failed searches.
+
+    Schacter 1999: failed retrieval reveals encoding deficits.
+    For each recent failed search:
+      1. Do relaxed vector search (lower threshold)
+      2. For near-miss memories, append failed query terms to FTS index
+      3. This creates BM25 bridges so the query works next time
+
+    Returns: {"reconciled": int, "bridged": int}
+    """
+    try:
+        from modules.config import connect_fts, FTS_DB_PATH
+        if not os.path.exists(FTS_DB_PATH):
+            return {"reconciled": 0, "bridged": 0}
+
+        conn = connect_fts(FTS_DB_PATH)
+
+        # Get recent failed searches not yet reconciled
+        rows = conn.execute(
+            "SELECT id, query, topic FROM failed_searches "
+            "WHERE result_count < 2 "
+            "ORDER BY created_at DESC LIMIT ?",
+            (max_per_run,),
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return {"reconciled": 0, "bridged": 0}
+
+        from modules.pg_store import pg
+        from modules.consolidation_common import _embed_text
+
+        bridged = 0
+        for row in rows:
+            query = row[1]
+            embedding = _embed_text(query)
+            if embedding is None:
+                continue
+
+            # Relaxed vector search: find near-miss memories
+            hits = pg.query_vector(embedding, limit=3, is_semantic=False)
+            for hit in hits:
+                score = float(hit.score) if hasattr(hit, 'score') else 0
+                if score < 0.40:
+                    continue
+                # This memory is somewhat related but didn't match BM25
+                # Append query terms as retrieval bridge in PG content
+                existing = (hit.payload or {}).get("data", "")
+                if f"[bridge: {query[:30]}" in existing:
+                    continue  # Already bridged
+
+                bridge_tag = f" [bridge: {query[:50]}]"
+                try:
+                    from modules.pg_store import get_conn
+                    with get_conn() as pg_conn:
+                        pg_conn.execute(
+                            "UPDATE memories SET content = content || %s WHERE id = %s",
+                            (bridge_tag, str(hit.id)),
+                        )
+                    bridged += 1
+                except Exception:
+                    pass
+
+        return {"reconciled": len(rows), "bridged": bridged}
+    except Exception as e:
+        _logger.debug("reconcile_failed_searches failed: %s", e)
+        return {"reconciled": 0, "bridged": 0, "error": str(e)[:100]}
+
+
 # Seed eval cases
 SEED_CASES = [
     {"query": "cerebro operativo", "keywords": ["cerebro", "operativo", "consciencia", "5 capas"], "category": "bilingual"},

@@ -68,5 +68,10 @@
     "ok": false,
     "status": "skipped",
     "tick": "cx_health"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "recall_eval"
   }
 ]

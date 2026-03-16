@@ -630,6 +630,15 @@ def search_memory(query: str, limit: int = 5) -> str:
             except Exception:
                 pass
 
+            # 3E: Context reinstatement bonus (Godden & Baddeley 1975)
+            # Memories encoded in matching topic context are easier to retrieve.
+            try:
+                _mem_category = payload.get('category', '')
+                if _query_topic and _mem_category and _query_topic.lower() == str(_mem_category).lower():
+                    combined += 0.06
+            except Exception:
+                pass
+
             vec_result = vector_map.get(mid, {}).get("result")
             bm25_text = bm25_map.get(mid, {}).get("result", {}).get("content", "")
             merged.append({
@@ -762,6 +771,45 @@ def search_memory(query: str, limit: int = 5) -> str:
             return "No encontre recuerdos relacionados."
 
         merged = merged[:limit]
+
+        # ============================================================
+        # SEMANTIC PRIMING: 1-hop spreading from top results
+        # Collins & Loftus 1975: activated nodes prime connected nodes.
+        # Take top-3 episodic IDs, run 1-hop spread, add primed
+        # memories that aren't already in results.
+        # ============================================================
+        try:
+            _existing_ids = {m["id"] for m in merged}
+            _seed_ids = [m["id"] for m in merged[:3] if m.get("memory_type") == "episodic" and m["id"]]
+            if _seed_ids:
+                from modules.spreading import _spread_activation
+                _spread_result = _spread_activation(_seed_ids, depth=1, factor=0.5, seed_boost=0.0)
+                _primed_updates = _spread_result.get("updates", {})
+                # Add primed memories above threshold that aren't already in results
+                _primed_new = {mid: delta for mid, delta in _primed_updates.items()
+                               if mid not in _existing_ids and delta > 0.05}
+                if _primed_new:
+                    # Batch fetch payloads for primed memories
+                    _primed_pts = pg.get_by_ids(list(_primed_new.keys())[:5])
+                    for _pp in (_primed_pts or []):
+                        _ppid = str(_pp.id)
+                        _pp_payload = _pp.payload or {}
+                        if _pp_payload.get("is_dormant"):
+                            continue
+                        merged.append({
+                            "id": _ppid,
+                            "combined_score": _primed_new.get(_ppid, 0.1),
+                            "activation": _primed_new.get(_ppid, 0.1),
+                            "memory_type": "episodic",
+                            "vector_result": {"id": _ppid, "memory": _pp_payload.get("data", ""), "score": 0.0},
+                            "bm25_text": "",
+                            "primed": True,
+                        })
+                    # Re-sort after adding primed memories
+                    merged.sort(key=lambda x: -x["combined_score"])
+                    merged = merged[:limit]
+        except Exception:
+            pass  # Priming is best-effort enhancement
 
         # Emit emotion gating evidence if any memory scores were modified (HOT-4)
         if _emotion_gating_count > 0:
