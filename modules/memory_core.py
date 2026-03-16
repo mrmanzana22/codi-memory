@@ -545,6 +545,14 @@ def search_memory(query: str, limit: int = 5) -> str:
         # Sprint 10.4: Load per-topic retrieval weights (adaptive, falls back to defaults)
         _w_vector, _w_bm25, _w_activation = _get_retrieval_weights(_query_topic or "general")
 
+        # Get current session ID for temporal contiguity boost (Howard & Kahana 2002)
+        _current_session_id = None
+        try:
+            from modules.utils import get_session_id
+            _current_session_id = get_session_id()
+        except Exception:
+            pass
+
         # Score episodic memories
         for mid in episodic_ids:
             v_score = vector_map.get(mid, {}).get("vector_score", 0)
@@ -592,6 +600,35 @@ def search_memory(query: str, limit: int = 5) -> str:
                         _emotion_gating_count += 1
                 except Exception:
                     pass
+
+            # 3D: Temporal contiguity boost (Howard & Kahana 2002, Kahana 1996)
+            # Same-session memories share temporal context representations.
+            # Same-day memories get exponentially decaying bonus.
+            try:
+                import math as _math
+                _mem_created = payload.get('created_at', '')
+                _mem_session = payload.get('temporal_session_id', '')
+
+                if _mem_session and _mem_session == _current_session_id:
+                    # Same session: strong temporal context overlap
+                    combined += 0.12
+                elif _mem_created:
+                    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+                    _now_utc = _dt.now(_tz.utc)
+                    _created_str = str(_mem_created)
+                    try:
+                        _created_dt = _dt.fromisoformat(_created_str.replace("Z", "+00:00"))
+                        if _created_dt.tzinfo is None:
+                            _created_dt = _created_dt.replace(tzinfo=_tz(_td(hours=-5)))
+                        _hours_ago = max(0, (_now_utc - _created_dt).total_seconds() / 3600)
+                        if _hours_ago < 48:
+                            # Exponential decay: 0.08 at 0h, ~0.04 at 6h, ~0.01 at 24h
+                            _contiguity = 0.08 * _math.exp(-0.15 * _hours_ago)
+                            combined += _contiguity
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             vec_result = vector_map.get(mid, {}).get("result")
             bm25_text = bm25_map.get(mid, {}).get("result", {}).get("content", "")
