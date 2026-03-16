@@ -452,10 +452,13 @@ class PGMemoryStore:
                 fts AS (
                     SELECT id,
                            ROW_NUMBER() OVER (
-                               ORDER BY ts_rank(fts_combined, to_tsquery('english', %(fts)s)) DESC
+                               ORDER BY ts_rank(fts_combined,
+                                   to_tsquery('english', %(fts)s) || to_tsquery('spanish', %(fts)s)
+                               ) DESC
                            ) AS rank
                     FROM memories
-                    WHERE fts_combined @@ to_tsquery('english', %(fts)s) {semantic_clause} {dormant_clause}
+                    WHERE fts_combined @@ (to_tsquery('english', %(fts)s) || to_tsquery('spanish', %(fts)s))
+                          {semantic_clause} {dormant_clause}
                     LIMIT %(k_fts)s
                 ),
                 act AS (
@@ -914,14 +917,16 @@ class PGMemoryStore:
             rows = conn.execute(
                 """
                 SELECT id AS memory_id, content, category, source, importance,
-                       ts_rank(fts_combined, to_tsquery('english', %s)) AS bm25_rank
+                       ts_rank(fts_combined,
+                           to_tsquery('english', %s) || to_tsquery('spanish', %s)
+                       ) AS bm25_rank
                 FROM memories
-                WHERE fts_combined @@ to_tsquery('english', %s)
+                WHERE fts_combined @@ (to_tsquery('english', %s) || to_tsquery('spanish', %s))
                   AND COALESCE(is_dormant, FALSE) = FALSE
                 ORDER BY bm25_rank DESC
                 LIMIT %s
                 """,
-                (tsquery, tsquery, limit),
+                (tsquery, tsquery, tsquery, tsquery, limit),
             ).fetchall()
 
         return [
