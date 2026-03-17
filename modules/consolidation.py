@@ -1122,7 +1122,7 @@ def _phase_extraction(clusters: list) -> list:
             raw = llm_complete("semantic_extract", prompt)
             if not raw:
                 _logger.warning("[consolidation] LLM failed for semantic_extract")
-                return
+                continue
 
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
