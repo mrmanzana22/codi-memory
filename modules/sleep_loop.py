@@ -1002,12 +1002,13 @@ def _replay_consolidation_event():
 
         from modules.config_pg import get_conn as get_pg_conn
         with get_pg_conn() as pg_conn:
-            if last_emitted_ts:
-                rows = pg_conn.execute(
-                    """SELECT batch_id, scope, episodes_scanned, clusters_found,
+            _cols = """batch_id, scope, episodes_scanned, clusters_found,
                               facts_extracted, facts_created, facts_updated,
                               contradictions_found, episodes_pruned, duration_ms,
-                              created_at
+                              consolidated_ids, created_at"""
+            if last_emitted_ts:
+                rows = pg_conn.execute(
+                    f"""SELECT {_cols}
                        FROM consolidation_log
                        WHERE created_at > %s
                        ORDER BY created_at ASC LIMIT 5""",
@@ -1016,10 +1017,7 @@ def _replay_consolidation_event():
             else:
                 # First time: only replay the latest entry
                 rows = pg_conn.execute(
-                    """SELECT batch_id, scope, episodes_scanned, clusters_found,
-                              facts_extracted, facts_created, facts_updated,
-                              contradictions_found, episodes_pruned, duration_ms,
-                              created_at
+                    f"""SELECT {_cols}
                        FROM consolidation_log
                        ORDER BY created_at DESC LIMIT 1"""
                 ).fetchall()
@@ -1036,9 +1034,10 @@ def _replay_consolidation_event():
                 "facts_extracted": row[4], "facts_created": row[5],
                 "facts_updated": row[6], "contradictions_found": row[7],
                 "episodes_pruned": row[8], "duration_ms": row[9],
+                "consolidated_ids": row[10] or [],  # Proposal #186: CX-4b needs IDs
             }
             event_bus.emit(Events.CONSOLIDATION_COMPLETE, event_data)
-            latest_ts = str(row[10])
+            latest_ts = str(row[11])
             _logger.info("Replayed CONSOLIDATION_COMPLETE for batch=%s scope=%s",
                          row[0], row[1])
 

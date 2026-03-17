@@ -1937,14 +1937,16 @@ def _log_consolidation_run(result: dict):
                 INSERT INTO consolidation_log
                 (batch_id, scope, lookback_hours, episodes_scanned, clusters_found,
                  facts_extracted, facts_created, facts_updated, contradictions_found,
-                 episodes_pruned, duration_ms, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 episodes_pruned, duration_ms, consolidated_ids, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             """, (
                 result["batch_id"], result["scope"], result.get("lookback_hours", 24),
                 result["episodes_scanned"], result["clusters_found"],
                 result["facts_extracted"], result["facts_created"],
                 result["facts_updated"], result["contradictions_found"],
-                result["episodes_pruned"], result["duration_ms"], now_iso()
+                result["episodes_pruned"], result["duration_ms"],
+                json.dumps(result.get("consolidated_ids", [])[:100]),
+                now_iso()
             ))
     except Exception as e:
         _logger.warning("Could not log run: %s", redact_secrets(str(e)))
