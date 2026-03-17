@@ -61,6 +61,8 @@ BUNDLE_CORE = frozenset({
     "pet_status", "adopt_pet_tool", "care_for_pet_tool",
     # Source Monitoring (Johnson et al. 1993)
     "get_memory_source",
+    # Hippocampal Index (Teyler & DiScenna 1986)
+    "binary_recall_tool",
     # Governance meta (always visible)
     "get_toolset_status",
 })
@@ -89,6 +91,8 @@ BUNDLE_OPS = frozenset({
     "cancelar_intencion", "posponer_intencion", "mantenimiento_intenciones",
     # Learning
     "auto_learn_from_session", "audit_tools", "rate_tool_usefulness",
+    # Hippocampal Index ops
+    "fhrr_index_stats",
     # Training (self-correction protocol)
     "capturar_ejemplo_training", "guardar_ejemplo_training",
     "listar_ejemplos_training", "contar_ejemplos_training",

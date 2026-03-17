@@ -117,7 +117,7 @@ def _get_remember_mode() -> str:
     return _get_write_mode()
 
 VALID_IMPORTANCE = {"critical", "high", "medium", "low", "auto"}
-VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline", "counterfactual"}
+VALID_RECALL_MODES = {"auto", "memory", "theme", "ownership", "emotion", "timeline", "counterfactual", "session"}
 VALID_SNAPSHOT_LEVELS = {"light", "full"}
 
 
@@ -336,6 +336,34 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         pretty_lines.append("## Por emocion\n" + out)
         return _json_response("\n".join(pretty_lines), results=results, count=len(results))
 
+    if mode == "session":
+        # FHRR hippocampal index: fast session localization (~10ms, 0 tokens)
+        try:
+            from modules.hippocampal_index import binary_recall
+            br_hits = binary_recall(q, max_results=limit)
+            if br_hits:
+                lines = ["## Session Index (FHRR)"]
+                for h in br_hits:
+                    sid = h['session_id'][:8]
+                    score = h['score']
+                    matched = h.get('matched_roles', {})
+                    roles_str = ", ".join(f"{k}: {v}" for k, v in matched.items() if v)
+                    preview = (h.get('context', {}).get('texts', [''])[0] or '')[:150]
+                    lines.append(f"- **{sid}** (score={score:.2f}) [{roles_str}]")
+                    if preview:
+                        lines.append(f"  > {preview}")
+                    add_result("binary_recall", preview, {
+                        "session_id": h['session_id'],
+                        "score": score,
+                        "matched_roles": matched,
+                    })
+                pretty_lines.append("\n".join(lines))
+            else:
+                pretty_lines.append("## Session Index\nNo matching sessions found.")
+        except Exception as e:
+            pretty_lines.append(f"## Session Index\nError: {str(e)[:100]}")
+        return _json_response("\n".join(pretty_lines), results=results, count=len(results))
+
     # mode auto: include working memory scan + specialized views
     if mode == "auto":
         # 1) Try working memory quick scan (cheap)
@@ -361,6 +389,19 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
                 {"error_type": type(exc).__name__},
             )
             pretty_lines.append("## Working Memory\nUnavailable during recall (partial results).")
+
+    # 1.5) FHRR session index scan (auto mode only, ~10ms, 0 tokens)
+    if mode == "auto":
+        try:
+            from modules.hippocampal_index import binary_recall as _br
+            _br_hits = _br(q, max_results=3)
+            if _br_hits:
+                _session_line = "Session Index: " + ", ".join(
+                    f"{h['session_id'][:8]}({h['score']:.2f})" for h in _br_hits
+                )
+                pretty_lines.append(f"## {_session_line}")
+        except Exception:
+            pass
 
     # 2) General hybrid memory search (both modes: auto + memory)
     out = search_memory(q, limit=limit)

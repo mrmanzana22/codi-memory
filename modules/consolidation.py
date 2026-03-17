@@ -1310,11 +1310,12 @@ def _phase_integration(facts: list) -> dict:
                         try:
                             from modules.events import event_bus, Events
                             event_bus.emit(Events.CONTRADICTION_DETECTED, {
-                                "old_id": str(duplicate.id),
-                                "old_text": old_fact_text,
-                                "new_text": fact_text,
+                                "conflicting_memory_id": str(duplicate.id),
+                                "conflicting_text": old_fact_text,
+                                "new_content": fact_text,
                                 "pe": contra["prediction_error"],
                                 "channels": contra["channels"],
+                                "shared_entities": contra["channels"].get("shared_entities", []),
                             })
                         except Exception:
                             pass

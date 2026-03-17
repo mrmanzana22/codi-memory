@@ -209,6 +209,12 @@ def compute_fadem_strength_ss_rs(
         effective = rs * (0.7 + 0.3 * ss)
         return (ss, rs, min(1.0, effective))
 
+    # Critical memories never decay — mirrors guard in compute_fadem_strength() (line 108)
+    # Bahrick 1984 permastore: identity/architectural facts must persist indefinitely.
+    if importance == "critical":
+        effective = rs * (0.7 + 0.3 * ss)
+        return (ss, rs, min(1.0, effective))
+
     # Step 2: RS decay — inversely proportional to SS (Bjork & Bjork 1992)
     # High SS → slower RS decay (well-stored memories are easier to re-access)
     imp = FADEM_IMPORTANCE.get(importance, 0.5)

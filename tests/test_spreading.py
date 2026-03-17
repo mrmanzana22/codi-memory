@@ -178,6 +178,43 @@ class TestRecordEdges:
         assert rows[0][0] == "causes"
         assert rows[0][1] == 0.9
 
+    def test_no_downgrade_preserves_causal_edge(self, edge_db):
+        """Proposal #188: spreading must not overwrite causal edges with similarity."""
+        conn, db_path = edge_db
+        _record_edges(conn, "a", ["b"], "2026-03-12T10:00:00",
+                      edge_type="causes", strength=0.8)
+        _record_edges(conn, "a", ["b"], "2026-03-12T11:00:00",
+                      edge_type="similarity", no_downgrade=True)
+        row = conn.execute(
+            "SELECT edge_type, strength FROM spreading_edges WHERE from_id='a' AND to_id='b'"
+        ).fetchone()
+        assert row[0] == "causes"
+        assert row[1] == 0.8
+
+    def test_no_downgrade_inserts_new_edge(self, edge_db):
+        """no_downgrade=True should still insert if edge doesn't exist."""
+        conn, db_path = edge_db
+        _record_edges(conn, "x", ["y"], "2026-03-12T10:00:00",
+                      edge_type="similarity", no_downgrade=True)
+        row = conn.execute(
+            "SELECT edge_type, strength FROM spreading_edges WHERE from_id='x' AND to_id='y'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "similarity"
+
+    def test_default_downgrade_still_overwrites(self, edge_db):
+        """Default behavior (no_downgrade=False) still allows UPSERT."""
+        conn, db_path = edge_db
+        _record_edges(conn, "a", ["b"], "2026-03-12T10:00:00",
+                      edge_type="causes", strength=0.8)
+        _record_edges(conn, "a", ["b"], "2026-03-12T11:00:00",
+                      edge_type="enables", strength=0.9)
+        row = conn.execute(
+            "SELECT edge_type, strength FROM spreading_edges WHERE from_id='a' AND to_id='b'"
+        ).fetchone()
+        assert row[0] == "enables"
+        assert row[1] == 0.9
+
 
 # ============================================================
 # INCOMING NEIGHBORS

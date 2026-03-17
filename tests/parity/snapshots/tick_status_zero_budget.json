@@ -22,6 +22,11 @@
   {
     "ok": false,
     "status": "skipped",
+    "tick": "fhrr_encoding"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "reconsolidation"
   },
   {

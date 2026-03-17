@@ -243,6 +243,130 @@ def _on_consolidation_complete(event_name: str, data: dict):
         _logger.error("_on_consolidation_complete error: %s", redact_secrets(str(e)))
 
 
+def _on_consolidation_enrich_fhrr(event_name: str, data: dict):
+    """CX-32: Session index enriches consolidation (Teyler & DiScenna 1986).
+
+    After consolidation completes, enrich newly created facts with session
+    topics from the FHRR index. Read-only: adds context, does not modify scores.
+
+    Paper: Teyler & DiScenna 1986 (Hippocampal Indexing Theory)
+    """
+    try:
+        facts_created = data.get("facts_created", 0)
+        if facts_created == 0:
+            return
+
+        from modules.hippocampal_index import binary_recall
+        # Use consolidation's batch topic as query
+        batch_topic = data.get("batch_topic", "") or data.get("query", "")
+        if not batch_topic:
+            return
+
+        br_hits = binary_recall(batch_topic, max_results=3)
+        if br_hits:
+            session_topics = []
+            for h in br_hits:
+                matched = h.get('matched_roles', {})
+                topics = matched.get('topics', [])
+                session_topics.extend(topics)
+
+            if session_topics:
+                from modules.working_memory import push_to_working_memory
+                unique_topics = list(dict.fromkeys(session_topics))[:5]
+                push_to_working_memory(
+                    content=f"[CX-32 SESSION CONTEXT] Consolidation topics found in sessions: {', '.join(unique_topics)}",
+                    topic="consolidation",
+                    relevance=0.4,
+                    source="fhrr_consolidation_enrichment",
+                )
+                _logger.debug("CX-32: Enriched consolidation with session topics: %s", unique_topics)
+    except Exception as e:
+        _logger.error("CX-32 _on_consolidation_enrich_fhrr error: %s", redact_secrets(str(e)))
+
+
+def _on_memory_retrieved_fhrr(event_name: str, data: dict):
+    """CX-33: Session index competes in GNW (Baars 1988 + HippoRAG 2024).
+
+    When memories are retrieved, check FHRR index for matching sessions
+    and push session context as a GNW candidate. This gives the workspace
+    access to session-level context alongside individual memories.
+
+    Paper: Baars 1988 (Global Workspace Theory), HippoRAG NeurIPS 2024
+    """
+    try:
+        query = data.get("query", "")
+        if not query:
+            return
+
+        from modules.hippocampal_index import binary_recall
+        br_hits = binary_recall(query, max_results=2)
+        if not br_hits:
+            return
+
+        top = br_hits[0]
+        score = top.get('score', 0)
+        if score < 0.1:
+            return
+
+        # Push session context to working memory as a candidate for GNW
+        session_id = top.get('session_id', '')[:8]
+        matched = top.get('matched_roles', {})
+        preview = (top.get('context', {}).get('texts', [''])[0] or '')[:200]
+        roles_str = ", ".join(f"{k}: {v}" for k, v in matched.items() if v)
+
+        from modules.working_memory import push_to_working_memory
+        push_to_working_memory(
+            content=f"[SESSION CONTEXT] {session_id}: {roles_str}. {preview}",
+            topic="session_index",
+            relevance=min(0.5, score),
+            source="fhrr_gnw_candidate",
+        )
+        _logger.debug("CX-33: Pushed session %s (score=%.2f) to WM for GNW", session_id, score)
+    except Exception as e:
+        _logger.error("CX-33 _on_memory_retrieved_fhrr error: %s", redact_secrets(str(e)))
+
+
+def _on_session_indexed_novelty(event_name: str, data: dict):
+    """CX-35: Schema novelty drives prediction error (van Kesteren 2012).
+
+    After a session is indexed, compute its novelty against schema prototypes.
+    High novelty (> 0.6) fires prediction error — novel sessions are memorable.
+
+    Paper: van Kesteren 2012 (mPFC schema congruency),
+           Kumaran & Maguire 2007 (hippocampal match-mismatch)
+    """
+    try:
+        session_id = data.get("session_id", "")
+        if not session_id:
+            return
+
+        from modules.hippocampal_index import load_session_record, compute_novelty_score
+        record = load_session_record(session_id)
+        if not record or record.get('num_turns', 0) == 0:
+            return
+
+        novelty = compute_novelty_score(record)
+
+        if novelty > 0.6:
+            from modules.prediction import record_surprise
+            record_surprise(
+                expected="schema_consistent",
+                actual=f"novel_session_{session_id[:8]}",
+                intensity="high" if novelty > 0.8 else "medium",
+            )
+
+        from modules.working_memory import push_to_working_memory
+        push_to_working_memory(
+            content=f"[CX-35] Session {session_id[:8]} novelty: {novelty:.2f} ({'high' if novelty > 0.6 else 'low'})",
+            topic="session_index",
+            relevance=min(0.6, novelty),
+            source="fhrr_novelty_detection",
+        )
+        _logger.debug("CX-35: Session %s novelty=%.2f", session_id[:8], novelty)
+    except Exception as e:
+        _logger.error("CX-35 _on_session_indexed_novelty error: %s", redact_secrets(str(e)))
+
+
 # ============================================================
 # ATTENTION SCHEMA (Graziano 2013)
 # ============================================================
@@ -933,6 +1057,56 @@ def _on_session_close(event_name: str, data: dict):
         )
     except Exception as e:
         _logger.error("_on_session_close error: %s", redact_secrets(str(e)))
+
+
+def _on_session_close_encode_fhrr(event_name: str, data: dict):
+    """CX-31: Hippocampal rapid encoding (McClelland 1995 CLS Theory).
+
+    When a session closes, encode it as an FHRR session record.
+    This is the computational analog of hippocampal rapid encoding —
+    fast, index-like traces that point to neocortical content.
+
+    Paper: McClelland et al. 1995, Diekelmann & Born 2010.
+    """
+    try:
+        session_id = data.get("session_id", "")
+        if not session_id:
+            return
+
+        from modules.hippocampal_index import encode_current_session
+        record = encode_current_session(session_id)
+
+        if record and record.get('num_turns', 0) > 0:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.SESSION_INDEXED, {
+                'session_id': session_id,
+                'num_turns': record['num_turns'],
+                'num_chunks': len(record.get('chunks', [])),
+                'topics': record.get('roles', {}).get('topics', [])[:5],
+            })
+            _logger.info("CX-31: FHRR encoded session %s (%d turns, %d chunks)",
+                         session_id, record['num_turns'], len(record.get('chunks', [])))
+    except Exception as e:
+        _logger.error("CX-31 _on_session_close_encode_fhrr error: %s", redact_secrets(str(e)))
+
+
+def _on_session_indexed(event_name: str, data: dict):
+    """CX-31b: Session indexed — push notification to working memory."""
+    try:
+        from modules.working_memory import push_to_working_memory
+        session_id = data.get("session_id", "")
+        num_turns = data.get("num_turns", 0)
+        topics = data.get("topics", [])
+        topics_str = ", ".join(topics[:3]) if topics else "general"
+
+        push_to_working_memory(
+            content=f"[SESSION INDEXED] {session_id[:8]}: {num_turns} turns, topics: {topics_str}",
+            topic="session",
+            relevance=0.5,
+            source="session_indexed",
+        )
+    except Exception as e:
+        _logger.error("_on_session_indexed error: %s", redact_secrets(str(e)))
 
 
 def _on_session_open(event_name: str, data: dict):
@@ -3274,6 +3448,11 @@ def wire_event_bus():
 
     # S3-04: Connect orphan events
     event_bus.on(Events.SESSION_CLOSE, _on_session_close)
+    event_bus.on(Events.SESSION_CLOSE, _on_session_close_encode_fhrr)  # CX-31: Hippocampal rapid encoding
+    event_bus.on(Events.SESSION_INDEXED, _on_session_indexed)          # CX-31b: Post-encoding notification
+    event_bus.on(Events.CONSOLIDATION_COMPLETE, _on_consolidation_enrich_fhrr)  # CX-32: Session topics enrich consolidation
+    event_bus.on(Events.MEMORY_RETRIEVED, _on_memory_retrieved_fhrr)            # CX-33: Session context competes in GNW
+    event_bus.on(Events.SESSION_INDEXED, _on_session_indexed_novelty)           # CX-35: Schema novelty → PE
     event_bus.on(Events.SESSION_OPEN, _on_session_open)
     event_bus.on(Events.SLEEP_LOOP_COMPLETE, _on_sleep_loop_complete)
     event_bus.on(Events.PERF_BUDGET_VIOLATION, _on_perf_budget_violation)
@@ -3502,6 +3681,11 @@ def wire_event_bus():
         'CX-28': {'event': Events.MEMORY_VAULTED, 'handler': _on_forgetting_degrades_metacognition, 'tier': 5, 'model': 'event', 'desc': 'Forgetting degrades metacognition (Koriat 1993)'},
         'CX-29': {'event': Events.RECONSOLIDATION_TRIGGERED, 'handler': _on_reconsolidation_invalidates_causal_edges, 'tier': 5, 'model': 'event', 'desc': 'Reconsolidation invalidates causal edges (Pearl 2009)'},
         'CX-30': {'event': Events.ACTION_SELECTED, 'handler': _on_action_outcome_updates_causal_dag, 'tier': 5, 'model': 'event', 'desc': 'Action outcomes → causal DAG (Pearl 2009)'},
+        # ---- TIER 6: Hippocampal Index ----
+        'CX-31': {'event': Events.SESSION_CLOSE, 'handler': _on_session_close_encode_fhrr, 'tier': 6, 'model': 'event', 'desc': 'Hippocampal rapid encoding (McClelland 1995 CLS)'},
+        'CX-32': {'event': Events.CONSOLIDATION_COMPLETE, 'handler': _on_consolidation_enrich_fhrr, 'tier': 6, 'model': 'event', 'desc': 'Session index enriches consolidation (Teyler & DiScenna 1986)'},
+        'CX-33': {'event': Events.MEMORY_RETRIEVED, 'handler': _on_memory_retrieved_fhrr, 'tier': 6, 'model': 'event', 'desc': 'Session index competes in GNW (Baars 1988 + HippoRAG 2024)'},
+        'CX-35': {'event': Events.SESSION_INDEXED, 'handler': _on_session_indexed_novelty, 'tier': 6, 'model': 'event', 'desc': 'Schema novelty drives PE (van Kesteren 2012)'},
     }
 
     _wired = True

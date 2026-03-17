@@ -524,3 +524,41 @@ class TestRifConstants:
     def test_max_competitors_bounded(self):
         from modules.forgetting import RIF_MAX_COMPETITORS
         assert 5 <= RIF_MAX_COMPETITORS <= 20
+
+
+# ============================================================
+# SS/RS CRITICAL GUARD (Proposal #189)
+# ============================================================
+
+class TestSSRSCriticalGuard:
+    """Critical memories must not decay in the SS/RS model."""
+
+    def test_ss_rs_critical_no_decay(self):
+        """Critical memories must not decay in SS/RS model (mirrors compute_fadem_strength guard)."""
+        from modules.forgetting import compute_fadem_strength_ss_rs
+        ss, rs, effective = compute_fadem_strength_ss_rs(
+            ss=0.5, rs=0.8, hours_since_access=168.0,  # 1 week
+            importance="critical",
+        )
+        assert ss == 0.5, "SS should not change for critical memories"
+        assert rs == 0.8, "RS should not decay for critical memories"
+        assert abs(effective - (0.8 * (0.7 + 0.3 * 0.5))) < 1e-6
+
+    def test_ss_rs_critical_consistent_with_fadem(self):
+        """Critical memory protection must be consistent between SS/RS and basic FadeMem."""
+        from modules.forgetting import compute_fadem_strength, compute_fadem_strength_ss_rs
+        # Basic FadeMem: returns current_salience unchanged
+        basic = compute_fadem_strength(0.9, 168.0, importance="critical")
+        assert basic == 0.9
+        # SS/RS: RS must also not change
+        ss, rs, _ = compute_fadem_strength_ss_rs(0.3, 0.9, 168.0, importance="critical")
+        assert rs == 0.9, f"RS changed to {rs} for critical memory"
+
+    def test_ss_rs_non_critical_still_decays(self):
+        """Non-critical memories should still decay normally."""
+        from modules.forgetting import compute_fadem_strength_ss_rs
+        ss, rs, effective = compute_fadem_strength_ss_rs(
+            ss=0.5, rs=0.8, hours_since_access=168.0,
+            importance="medium",
+        )
+        assert rs < 0.8, "Medium importance RS should decay"

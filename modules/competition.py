@@ -47,6 +47,7 @@ SOFTMAX_TEMPERATURE = 8.0         # Gamma: inverse temperature for softmax (high
 VALID_DOMAINS = frozenset([
     "episodic", "semantic", "working_memory",
     "prospective", "prediction", "trigger",
+    "session_index",
 ])
 
 

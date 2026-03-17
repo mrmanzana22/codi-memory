@@ -22,6 +22,11 @@
   {
     "ok": true,
     "status": "ok",
+    "tick": "fhrr_encoding"
+  },
+  {
+    "ok": true,
+    "status": "ok",
     "tick": "reconsolidation"
   },
   {

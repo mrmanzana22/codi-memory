@@ -83,3 +83,6 @@ claude-code-server/
 # macOS launch agents (local)
 *.plist
 backups/
+adapters/
+*.safetensors
+*.contaminated

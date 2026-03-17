@@ -60,6 +60,7 @@ class Events:
     PERF_BUDGET_VIOLATION = 'perf_budget_violation'                     # Performance contract violation
     SESSION_CLOSE = 'session_close'                                       # Session bridge: checkpoint saved
     SESSION_OPEN = 'session_open'                                         # Session bridge: bridge loaded at wake
+    SESSION_INDEXED = 'session_indexed'                                     # CX-31: FHRR hippocampal index encoded (McClelland 1995)
     SLEEP_LOOP_COMPLETE = 'sleep_loop_complete'                             # Sleep loop: background maintenance done
     EMOTION_GATING_APPLIED = 'emotion_gating_applied'                        # HOT-4 runtime evidence (Bower 1981)
     AFFECTIVE_CHARGE_COMPUTED = 'affective_charge_computed'                     # Sprint 4: AC from policy shift (Joffily & Coricelli 2013)

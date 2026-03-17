@@ -99,6 +99,7 @@ from modules import ollama_router
 from modules import cx_observability
 from modules import pet
 from modules import source_tracking
+from modules import hippocampal_index
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -136,6 +137,7 @@ ollama_router.register_tools(mcp)
 cx_observability.register_tools(mcp)
 pet.register_tools(mcp)
 source_tracking.register_tools(mcp)
+hippocampal_index.register_tools(mcp)
 
 # ============================================================
 # TOOL GOVERNANCE - Apply bundle-based visibility filter

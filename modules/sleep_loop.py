@@ -97,7 +97,7 @@ DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 FAST_TICKS = {"prospective", "health", "proactive_contact", "self_model"}
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval"]
+TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "fhrr_encoding", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -118,6 +118,7 @@ TICK_TIER = {
     "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
     "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
     "cx_health": 2,               # CPO v2: CX observability snapshot + HTML dashboard update
+    "fhrr_encoding": 2,           # Hippocampal offline replay (Diekelmann & Born 2010)
 }
 
 # ============================================================
@@ -179,6 +180,7 @@ class SleepWorldModel:
         "proactive_contact":  {},  # User contact — no direct state effect
         "cx_health":          {},  # CPO v2: CX observability — no direct state effect
         "recall_eval":        {},  # Recall quality measurement — no direct state effect
+        "fhrr_encoding":      {},  # Hippocampal replay — no direct state effect
     }
 
     LEARNING_RATE = 0.3  # EMA alpha for learned effects
@@ -2552,6 +2554,92 @@ def _tick_recall_eval(budget_ms: int) -> dict:
                 "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
 
+def _tick_fhrr_encoding(budget_ms: int) -> dict:
+    """Tier 2: Encode un-indexed sessions into FHRR hippocampal index.
+
+    Offline hippocampal replay (Diekelmann & Born 2010):
+    Sessions that weren't indexed at close time get encoded here.
+    Max 3 sessions per tick to stay within budget (~200ms each).
+    """
+    t0 = time.monotonic()
+    result = {"tick": "fhrr_encoding", "ok": False, "detail": ""}
+    try:
+        from modules.hippocampal_index import encode_current_session, get_index_stats
+        from modules.config import connect_fts, FTS_DB_PATH
+
+        # Find sessions not yet indexed
+        db = connect_fts(FTS_DB_PATH)
+        rows = db.execute(
+            """SELECT sc.session_id FROM session_checkpoints sc
+               LEFT JOIN fhrr_session_index fi ON sc.session_id = fi.session_id
+               WHERE fi.session_id IS NULL
+               ORDER BY sc.created_at DESC LIMIT 3"""
+        ).fetchall()
+        db.close()
+
+        if not rows:
+            result["ok"] = True
+            result["detail"] = "no un-indexed sessions"
+            result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+            return result
+
+        encoded = 0
+        errors = 0
+        for row in rows:
+            remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
+            if remaining_ms < 500:
+                break
+            try:
+                encode_current_session(session_id=row[0])
+                encoded += 1
+            except Exception as e:
+                _logger.debug("fhrr_encoding skip session %s: %s", row[0][:8], e)
+                errors += 1
+
+        stats = get_index_stats()
+
+        # Sprint 5A: Recompute schema prototypes for touched topics
+        prototypes_saved = 0
+        try:
+            remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
+            if encoded > 0 and remaining_ms > 500:
+                from modules.hippocampal_index import get_all_prototypes, save_prototypes
+                protos = get_all_prototypes()
+                prototypes_saved = save_prototypes(protos)
+        except Exception as e:
+            _logger.debug("fhrr_encoding prototype update: %s", e)
+
+        # Sprint 5C: Discover synonym edges (every ~6th run)
+        # Use tick counter from sleep_loop_state to throttle
+        synonyms_found = 0
+        try:
+            remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
+            if encoded > 0 and remaining_ms > 500:
+                _tc_db = connect_fts(FTS_DB_PATH)
+                _tc_row = _tc_db.execute(
+                    "SELECT value FROM sleep_loop_state WHERE key = 'tick_counter'"
+                ).fetchone()
+                _tc_db.close()
+                _tc = int(_tc_row[0]) if _tc_row else 0
+                if _tc % 6 == 0:
+                    from modules.hippocampal_index import discover_synonym_edges
+                    from modules.spreading import record_synonym_edges
+                    pairs = discover_synonym_edges(threshold=0.80, max_pairs=100)
+                    if pairs:
+                        synonyms_found = record_synonym_edges(pairs)
+        except Exception as e:
+            _logger.debug("fhrr_encoding synonym discovery: %s", e)
+
+        result["ok"] = True
+        result["detail"] = f"encoded={encoded} errors={errors} total_sessions={stats.get('total_sessions', 0)} prototypes={prototypes_saved} synonyms={synonyms_found}"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    except Exception as e:
+        result["detail"] = str(e)[:100]
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+
+
 def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fast_only: bool = False) -> dict:
     """Execute the full sleep loop with prioritized ticks.
 
@@ -2622,6 +2710,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
         "proactive_contact": _tick_proactive_contact,
         "cx_health": _tick_cx_health,
         "recall_eval": _tick_recall_eval,
+        "fhrr_encoding": _tick_fhrr_encoding,
     }
 
     # Phase 1: Separate eligible ticks from VOC-tiered skips

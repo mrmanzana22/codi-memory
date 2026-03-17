@@ -83,7 +83,8 @@ def _init_edge_table(conn):
 
 
 def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str,
-                   edge_type: str = "co_occurs", strength: float = None):
+                   edge_type: str = "co_occurs", strength: float = None,
+                   no_downgrade: bool = False):
     """Record edges in SQLite with typed relationships (S2-05, Sprint 1).
 
     Edge types: causes, enables, prevents, co_occurs, confounded.
@@ -91,6 +92,7 @@ def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str,
 
     Sprint 5.3: strength encodes causal reliability (0-1).
     If not provided, defaults by edge type: causal=0.7, enables=0.5, else=0.3.
+    no_downgrade: If True, INSERT OR IGNORE (don't overwrite stronger existing types).
     """
     if strength is None:
         if edge_type == 'causes':
@@ -100,15 +102,89 @@ def _record_edges(conn, from_id: str, neighbor_ids: list, ts: str,
         else:
             strength = 0.3
     for to_id in neighbor_ids:
-        conn.execute("""
-            INSERT INTO spreading_edges (from_id, to_id, edge_type, strength, last_seen)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(from_id, to_id) DO UPDATE SET
-                edge_type = excluded.edge_type,
-                strength = excluded.strength,
-                last_seen = excluded.last_seen
-        """, (from_id, to_id, edge_type, strength, ts))
+        if no_downgrade:
+            conn.execute("""
+                INSERT OR IGNORE INTO spreading_edges
+                (from_id, to_id, edge_type, strength, last_seen)
+                VALUES (?, ?, ?, ?, ?)
+            """, (from_id, to_id, edge_type, strength, ts))
+        else:
+            conn.execute("""
+                INSERT INTO spreading_edges (from_id, to_id, edge_type, strength, last_seen)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(from_id, to_id) DO UPDATE SET
+                    edge_type = excluded.edge_type,
+                    strength = excluded.strength,
+                    last_seen = excluded.last_seen
+            """, (from_id, to_id, edge_type, strength, ts))
     conn.commit()
+
+
+def record_synonym_edges(concept_pairs: list, fts_db_path: str = None) -> int:
+    """Store FHRR-discovered synonym edges in spreading_edges.
+
+    Paper: HippoRAG NeurIPS 2024 (parahippocampal synonym detection).
+
+    For each pair, find memory IDs containing those concepts and
+    create 'similarity' edges between them.
+
+    Args:
+        concept_pairs: list of {from, to, similarity} dicts from discover_synonym_edges()
+        fts_db_path: optional path to SQLite DB
+
+    Returns:
+        Number of edges created
+    """
+    if not concept_pairs:
+        return 0
+
+    if not fts_db_path:
+        fts_db_path = _EDGE_DB
+    if not os.path.exists(fts_db_path):
+        return 0
+
+    edges_created = 0
+    try:
+        conn = sqlite3.connect(fts_db_path)
+        _init_edge_table(conn)
+        ts = now_iso()
+
+        for pair in concept_pairs:
+            concept_a = pair.get('from', '')
+            concept_b = pair.get('to', '')
+            sim = pair.get('similarity', 0.5)
+            if not concept_a or not concept_b:
+                continue
+
+            # Find memories mentioning concept_a (via BM25/FTS)
+            try:
+                rows_a = conn.execute(
+                    "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
+                    (f"%{concept_a}%",)
+                ).fetchall()
+                rows_b = conn.execute(
+                    "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
+                    (f"%{concept_b}%",)
+                ).fetchall()
+            except Exception:
+                continue
+
+            ids_a = [r[0] for r in rows_a if r[0]]
+            ids_b = [r[0] for r in rows_b if r[0]]
+
+            if ids_a and ids_b:
+                # Create edges from A memories to B memories
+                for from_id in ids_a[:3]:  # Cap to prevent explosion
+                    _record_edges(conn, from_id, ids_b[:3], ts,
+                                  edge_type='similarity', strength=sim,
+                                  no_downgrade=True)
+                    edges_created += min(len(ids_b), 3)
+
+        conn.close()
+    except Exception as e:
+        _logger.warning("record_synonym_edges error: %s", e)
+
+    return edges_created
 
 
 def is_causal_chain_member(point_id: str, fts_db_path: str = None) -> bool:
@@ -356,7 +432,8 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
                     incoming_typed = _get_incoming_neighbors(edge_conn, node)
                     # Record outgoing edges for future reverse lookups
                     if outgoing:
-                        _record_edges(edge_conn, node, outgoing, ts, edge_type='similarity')
+                        _record_edges(edge_conn, node, outgoing, ts,
+                                      edge_type='similarity', no_downgrade=True)
                 except Exception:
                     pass
 

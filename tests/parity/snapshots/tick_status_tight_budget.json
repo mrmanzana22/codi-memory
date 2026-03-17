@@ -5,13 +5,13 @@
     "tick": "prospective"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "health"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "health_snapshot"
   },
   {
@@ -20,8 +20,13 @@
     "tick": "self_model"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
+    "tick": "fhrr_encoding"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
     "tick": "reconsolidation"
   },
   {
@@ -30,13 +35,13 @@
     "tick": "consolidation"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "homeostasis"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "curiosity"
   },
   {
@@ -45,8 +50,8 @@
     "tick": "curiosity_resolve"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "backup"
   },
   {
@@ -55,23 +60,23 @@
     "tick": "causal_discovery"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "sharpe_insights"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "proactive_contact"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "cx_health"
   },
   {
-    "ok": true,
-    "status": "ok",
+    "ok": false,
+    "status": "skipped",
     "tick": "recall_eval"
   }
 ]

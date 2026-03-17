@@ -417,6 +417,13 @@ def search_memory(query: str, limit: int = 5) -> str:
         import time as _time
         _search_start = _time.monotonic()
 
+        # Clear FHRR session boost cache for this new query
+        try:
+            from modules.hippocampal_index import clear_session_boost_cache
+            clear_session_boost_cache()
+        except Exception:
+            pass
+
         # ============================================================
         # METACOGNITIVE CONTROL (HOT-3): FOK -> strategy adjustment
         # ============================================================
@@ -553,6 +560,20 @@ def search_memory(query: str, limit: int = 5) -> str:
         except Exception:
             pass
 
+        # 3E-prep: FHRR context reinstatement seeds (Tulving 1983 encoding specificity)
+        # One binary_recall call extracts role concepts from matching sessions
+        _fhrr_context_concepts = set()
+        try:
+            from modules.hippocampal_index import binary_recall as _br
+            _br_hits = _br(query, max_results=3)
+            for _h in _br_hits:
+                _matched = _h.get('matched_roles', {})
+                for _role_concepts in _matched.values():
+                    if isinstance(_role_concepts, list):
+                        _fhrr_context_concepts.update(c.lower() for c in _role_concepts)
+        except Exception:
+            pass
+
         # Score episodic memories
         for mid in episodic_ids:
             v_score = vector_map.get(mid, {}).get("vector_score", 0)
@@ -630,12 +651,36 @@ def search_memory(query: str, limit: int = 5) -> str:
             except Exception:
                 pass
 
-            # 3E: Context reinstatement bonus (Godden & Baddeley 1975)
-            # Memories encoded in matching topic context are easier to retrieve.
+            # 3D2: Hippocampal session-coherence boost (Teyler & DiScenna 1986)
+            # FHRR index identifies sessions where the query topic was discussed.
+            # Memories from those sessions get a boost (0.0-0.15), cached per query.
             try:
+                if _mem_session:
+                    from modules.hippocampal_index import get_session_boost
+                    _fhrr_boost = get_session_boost(query, _mem_session)
+                    combined += _fhrr_boost
+            except Exception:
+                pass
+
+            # 3E: Context reinstatement (Tulving 1983 encoding specificity)
+            # FHRR session context provides encoding-specific cues.
+            try:
+                _mem_topics = set()
+                for _field in ['topics', 'entities', 'actions']:
+                    _vals = payload.get(_field, [])
+                    if isinstance(_vals, list):
+                        _mem_topics.update(v.lower() for v in _vals)
+                    elif isinstance(_vals, str) and _vals:
+                        _mem_topics.add(_vals.lower())
+                # Category match (existing)
                 _mem_category = payload.get('category', '')
                 if _query_topic and _mem_category and _query_topic.lower() == str(_mem_category).lower():
-                    combined += 0.06
+                    combined += 0.04
+                # FHRR context reinstatement (Sprint 5B)
+                if _fhrr_context_concepts and _mem_topics:
+                    _overlap = len(_fhrr_context_concepts & _mem_topics)
+                    if _overlap > 0:
+                        combined += min(0.10, _overlap * 0.03)  # cap 0.10, +0.03 per concept
             except Exception:
                 pass
 

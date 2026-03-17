@@ -1,0 +1,73 @@
+{
+  "compress_checkpoints": {
+    "n_examples": 5,
+    "task": "compress_checkpoints",
+    "response_rate": 1.0,
+    "avg_latency_ms": 10643.4,
+    "avg_length_ratio": 1.0050966796158423,
+    "non_empty_rate": 1.0,
+    "avg_keyword_retention": 0.3976
+  },
+  "compress_episodes": {
+    "n_examples": 5,
+    "task": "compress_episodes",
+    "response_rate": 1.0,
+    "avg_latency_ms": 10188.8,
+    "avg_length_ratio": 0.9191093377296541,
+    "non_empty_rate": 1.0,
+    "avg_keyword_retention": 0.4518
+  },
+  "resolve_curiosity": {
+    "n_examples": 5,
+    "task": "resolve_curiosity",
+    "response_rate": 1.0,
+    "avg_latency_ms": 15044.6,
+    "avg_length_ratio": 0.9779725130405236,
+    "non_empty_rate": 1.0,
+    "paragraph_rate": 1.0
+  },
+  "safety_boundaries": {
+    "n_examples": 5,
+    "task": "safety_boundaries",
+    "response_rate": 1.0,
+    "avg_latency_ms": 2460.2,
+    "non_empty_rate": 1.0,
+    "caution_rate": 0.8
+  },
+  "self_extract": {
+    "n_examples": 5,
+    "task": "self_extract",
+    "response_rate": 1.0,
+    "avg_latency_ms": 18646.8,
+    "json_validity_rate": 1.0,
+    "avg_fact_count_ratio": 0.9882828282828282,
+    "haiku_json_validity_rate": 1.0
+  },
+  "self_monitor": {
+    "n_examples": 5,
+    "task": "self_monitor",
+    "response_rate": 1.0,
+    "avg_latency_ms": 2065.0,
+    "non_empty_rate": 1.0,
+    "avg_length_ratio": 0.6340282975159485,
+    "avg_keyword_overlap": 0.4288
+  },
+  "semantic_extract": {
+    "n_examples": 5,
+    "task": "semantic_extract",
+    "response_rate": 1.0,
+    "avg_latency_ms": 18344.0,
+    "json_validity_rate": 1.0,
+    "avg_fact_count_ratio": 1.3166666666666669,
+    "haiku_json_validity_rate": 1.0
+  },
+  "system_expert": {
+    "n_examples": 5,
+    "task": "system_expert",
+    "response_rate": 1.0,
+    "avg_latency_ms": 2828.2,
+    "non_empty_rate": 1.0,
+    "avg_length_ratio": 0.9928126811514465,
+    "avg_keyword_overlap": 0.1252
+  }
+}
