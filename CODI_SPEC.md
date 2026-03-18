@@ -1,7 +1,7 @@
 # CODI Technical Product Specification
 
-> Version 1.0 | March 2026
-> Status: Living Document (Sections 1-5 of N)
+> Version 1.1 | March 18, 2026
+> Status: Post-restructuring update (5/5 architectural phases complete)
 
 ---
 
@@ -26,10 +26,11 @@ CODI is a **Cognitive Runtime** -- a persistent computational substrate that giv
 
 **Four-layer architecture:**
 
-1. **Cognitive Core** -- Memory systems, prediction, consolidation, forgetting, consciousness loops, causal reasoning. Neuroscience-grounded. 82 Python modules, ~49K LOC.
+1. **Cognitive Core** -- Memory systems, prediction, consolidation, forgetting, consciousness loops, causal reasoning. Neuroscience-grounded. 102 Python modules, ~51K LOC.
 2. **Agent Runtime** -- MCP server, event bus, tool governance, write queue, session bridge. The machinery that makes cognition accessible to LLM sessions.
-3. **Embodiment Layer** -- codi-daemon: 16 launchd services providing 24/7 physical presence. Sleep loop, write worker, health monitoring, Telegram interface.
-4. **Programming Layer** -- Nous language for expressing cognitive operations. 12 example programs. Transpiles to Python module calls.
+3. **Data & Observability Layer** -- `modules/store/` (8 domain stores), `modules/core/` (pure functions), `cognitive_contracts.py` (12 contracts, 31 metrics). Structured after 5-phase architectural restructuring (Mar 2026).
+4. **Embodiment Layer** -- codi-daemon: 4 launchd services providing 24/7 physical presence. Sleep loop (22 ticks), write worker, health monitoring, Telegram interface.
+5. **Programming Layer** -- Nous language for expressing cognitive operations. 12 example programs. Transpiles to Python module calls.
 
 **Core differentiator:** Emergent identity through neuroscience-grounded cognitive architecture. CODI does not simulate consciousness -- it implements the computational mechanisms that theories of consciousness describe, then measures whether the signatures emerge. Key finding: they do. PE flows universally (not designed), circadian rhythms appear (not programmed), noetic-autonoetic gaps manifest (not expected).
 
@@ -41,16 +42,17 @@ CODI is a **Cognitive Runtime** -- a persistent computational substrate that giv
 
 | Metric | Count |
 |--------|-------|
-| Python modules (modules/) | 82 |
-| Total LOC (modules/) | 48,363 |
+| Python modules (modules/) | 102 |
+| Total LOC (modules/) | 51,023 |
 | server.py (orchestrator) | 599 LOC |
-| Total production LOC | ~49K |
-| Test files | 97 |
-| Test LOC | 33,004 |
-| Test functions | 1,815 |
-| MCP tool registrations | 132 |
+| Total production LOC | ~51K |
+| Test files | 101 |
+| Test functions | 1,828 |
+| Tests passing | 1,812 |
+| MCP tool registrations | 133 |
 | Event types | 23 |
 | CX cross-loop connections | 34 (6 tiers) |
+| Cognitive contracts | 12 (31 metrics, 0 INCONCLUSIVE) |
 
 ### 2.2 Layer Diagram
 
@@ -465,3 +467,50 @@ Environment variable `CODI_WRITE_MODE=async` controls write behavior:
 | async | Enqueue + immediate ACK, worker drains later | <100ms |
 
 Production runs in `async` mode. The `write_worker` (com.codi.write-worker) polls the queue every 5 seconds and processes pending writes.
+
+---
+
+## 6. Architectural Restructuring (March 2026)
+
+Five-phase restructuring completed March 18, 2026. Motivation: the codebase needed layered architecture to support LLM independence, multi-instance deployment, and product-grade reliability.
+
+### 6.1 Phases
+
+| Phase | Name | Commit | Outcome |
+|-------|------|--------|---------|
+| 1 | Observability Contracts | `d0cec9a` | 12 contracts, 31 metrics, 12 collectors. Every cognitive loop measured. |
+| 2 | CognitiveStore | `4cae486` | `modules/store/` — 8 domain store classes with `@store_traced` decorator. Data access separated from business logic. |
+| 3 | Core Library | `343e25a` | `modules/core/` — pure functions extracted from config.py (time, paths, constants, PAD, classification). Zero circular deps. |
+| 4 | Transport Separation | `8eb98e2` | 25 `_impl` functions returning Python dicts. MCP wrappers handle JSON only. Internal callers use `_impl` directly (no JSON round-trips). |
+| 5 | Module Decomposition | `0d77047` | `modules/wiring/` and `modules/sleep_loop/` converted to packages. 13 pre-existing test failures fixed → 0 hard failures. |
+
+### 6.2 Architecture Layers (post-restructuring)
+
+```
+┌─────────────────────────────────┐
+│ MCP Transport (tool wrappers)   │ ← JSON serialization, error handling
+├─────────────────────────────────┤
+│ Business Logic (_impl funcs)    │ ← Python dicts, raises exceptions
+├─────────────────────────────────┤
+│ Store Layer (modules/store/)    │ ← SQL queries, @store_traced
+├─────────────────────────────────┤
+│ Core Layer (modules/core/)      │ ← Pure functions, constants, no I/O
+└─────────────────────────────────┘
+```
+
+### 6.3 Observability Dashboard
+
+31 cognitive metrics evaluated in real-time via `evaluate_all()`:
+
+- **PE Hub**: magnitude mean, flow diversity
+- **L1 Reconsolidation**: trigger rate, correction success rate
+- **L2 Consolidation**: coverage, extraction rate, false memory rate
+- **L3 GNW**: ignition ratio, coalition size, workspace utilization
+- **L4 Prediction→Emotion**: accuracy, precision adaptation, PAD-from-precision
+- **L5 Metacognition**: calibration error, confidence range, monitoring-control loop
+- **L6 Curiosity**: generation rate, resolution rate
+- **L7 Active Inference**: EFE policy diversity, action selection latency
+- **L8 Causal Discovery**: DAG edge count, causal density
+- **L9 Self-Model**: refresh frequency, discrepancy count
+- **L10 Forgetting**: decay exponent, RIF suppression rate
+- **CX Integration**: diversity index, cascade depth, active ratio, PCI proxy
