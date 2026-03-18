@@ -305,7 +305,8 @@ class TestOllamaChatCompletion:
     @patch("modules.ollama_router._use_ollama", return_value=True)
     @patch.object(OllamaClient, "is_available", return_value=True)
     @patch.object(OllamaClient, "chat")
-    def test_quality_fail_returns_none(self, mock_chat, mock_avail, mock_flag):
+    @patch("modules.ollama_router._nvidia_fallback", return_value=None)
+    def test_quality_fail_returns_none(self, mock_nv, mock_chat, mock_avail, mock_flag):
         mock_chat.return_value = "garbage"
         result = ollama_chat_completion("edge_classify", "test")
         assert result is None

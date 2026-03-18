@@ -22,12 +22,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Performance: lazy PG pool init (no blocking cold-start in tests)
+os.environ.setdefault("CODI_PG_POOL_MIN", "0")
+os.environ.setdefault("CODI_PG_POOL_MAX", "3")
+
+import shutil
+
 import pytest
 from modules.events import event_bus
 
 
+@pytest.fixture(scope="session")
+def _migration_template(tmp_path_factory):
+    """Pre-apply all migrations ONCE, reuse for every test (saves ~25s)."""
+    base = tmp_path_factory.mktemp("migration_template")
+    fts_path = str(base / "memories_fts.db")
+    prosp_path = str(base / "prospective.db")
+
+    from modules.migrations import apply_migrations
+    apply_migrations(fts_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations"))
+    apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
+
+    return {"fts": fts_path, "prosp": prosp_path}
+
+
 @pytest.fixture(autouse=True)
-def _isolate_sqlite(tmp_path, monkeypatch):
+def _isolate_sqlite(tmp_path, monkeypatch, _migration_template):
     """Force all SQLite writes (FTS, event_counts, prospective) to a temp directory.
 
     Prevents tests from writing to the real DBs in the repo root.
@@ -48,12 +68,10 @@ def _isolate_sqlite(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.config.FTS_DB_PATH", db_path, raising=False)
     monkeypatch.setattr("modules.config.PROSPECTIVE_DB_PATH", prosp_path, raising=False)
 
-    # Run migrations BEFORE triggering module imports via monkeypatch.setattr.
-    # consolidation_common.py validates tables at import time — tables must exist
-    # before any monkeypatch.setattr triggers its import chain.
-    from modules.migrations import apply_migrations
-    apply_migrations(db_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations"))
-    apply_migrations(prosp_path, migrations_dir=os.path.join(PROJECT_ROOT, "migrations_prospective"))
+    # Copy pre-migrated template instead of re-running 31+ migrations per test.
+    # Session-scoped _migration_template already has all tables created.
+    shutil.copy2(_migration_template["fts"], db_path)
+    shutil.copy2(_migration_template["prosp"], prosp_path)
 
     # Patch FTS_DB_PATH in modules that import it directly (import aliasing fix)
     for mod in ["modules.memory_smart", "modules.memory_core",
