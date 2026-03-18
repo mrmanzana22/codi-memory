@@ -555,65 +555,20 @@ def append_to_daily_journal(momento: str, que_paso: str, por_que_importa: str):
 
 
 # ============================================================
-# PAD EMOTIONAL MODEL HELPERS
+# PAD EMOTIONAL MODEL HELPERS (Phase 3 — delegates to core/pad.py)
 # ============================================================
-
-def _clamp_pad_value(value: float) -> float:
-    """Fuerza un valor al rango [-1, 1] del espacio PAD."""
-    return max(-1.0, min(1.0, value))
+from modules.core.pad import clamp_pad_value as _clamp_pad_value
 
 
-def _classify_emotion(p: float, a: float, d: float) -> str:
-    """
-    Clasifica un estado PAD en una etiqueta emocional usando octantes.
-
-    Los 8 octantes del espacio PAD:
-    - +P +A +D = exuberant (alegre, entusiasta)
-    - +P +A -D = dependent (emocionado pero dependiente)
-    - +P -A +D = relaxed (relajado, satisfecho)
-    - +P -A -D = docile (tranquilo, sumiso)
-    - -P +A +D = hostile (enojado, dominante)
-    - -P +A -D = anxious (ansioso, temeroso)
-    - -P -A +D = disdainful (desdenoso, aburrido dominante)
-    - -P -A -D = bored (aburrido, apatico)
-    """
-    # Usar signos para determinar octante
-    p_sign = '+' if p >= 0 else '-'
-    a_sign = '+' if a >= 0 else '-'
-    d_sign = '+' if d >= 0 else '-'
-
-    octant = f"{p_sign}P{a_sign}A{d_sign}D"
-
-    emotion_map = {
-        '+P+A+D': 'exuberant',
-        '+P+A-D': 'dependent',
-        '+P-A+D': 'relaxed',
-        '+P-A-D': 'docile',
-        '-P+A+D': 'hostile',
-        '-P+A-D': 'anxious',
-        '-P-A+D': 'disdainful',
-        '-P-A-D': 'bored'
-    }
-
-    return emotion_map.get(octant, 'neutral')
-
-
-def _get_emotion_text(label: str) -> str:
-    """Retorna el texto en espanol para una etiqueta emocional."""
-    return CODI_EMOTION_MAP.get(label, 'en estado neutral')
+from modules.core.pad import classify_emotion as _classify_emotion
+from modules.core.pad import get_emotion_text as _get_emotion_text
+from modules.core.pad import calculate_emotional_intensity as _calculate_emotional_intensity
+from modules.core.pad import compute_pad_retrieval_bias, compute_pad_encoding_boost
 
 
 def _get_emotional_state():
     """Obtiene el estado emocional actual."""
     return _emotional_state
-
-
-def _calculate_emotional_intensity(p: float, a: float, d: float) -> float:
-    """
-    Calcula la intensidad emocional como la distancia desde el origen.
-    Valor entre 0 (neutral) y ~1.73 (maximo).
-    """
-    return math.sqrt(p**2 + a**2 + d**2)
 
 
 # ============================================================
@@ -774,54 +729,5 @@ def compute_activation(
     return result.total
 
 
-def compute_pad_retrieval_bias(
-    memory_valence: str,
-    current_pleasure: float
-) -> float:
-    """
-    Compute mood-congruent retrieval bias based on PAD model.
-
-    Memories whose emotional valence matches current mood get a boost.
-    Based on Bower (1981) mood-congruent memory effect.
-
-    Args:
-        memory_valence: Emotional valence of the memory ('positive', 'negative', 'neutral')
-        current_pleasure: Current pleasure dimension of PAD state (-1 to 1)
-
-    Returns:
-        Bias value to add to retrieval score (range: -0.05 to +0.1)
-    """
-    valence_map = {'positive': 1.0, 'neutral': 0.0, 'negative': -1.0}
-    mem_val = valence_map.get(memory_valence, 0.0)
-
-    # Congruence: positive when mood and memory valence align
-    congruence = mem_val * current_pleasure
-
-    # Scale to small bias (max 0.1 boost, max -0.05 penalty)
-    if congruence > 0:
-        return min(0.1, congruence * 0.1)
-    else:
-        return max(-0.05, congruence * 0.05)
-
-
-def compute_pad_encoding_boost(arousal: float, pleasure: float) -> float:
-    """
-    Compute emotional encoding strength boost based on PAD state.
-
-    High arousal strengthens encoding (LaBar & Cabeza 2006).
-    Emotional memories (high arousal, strong valence) are encoded more strongly.
-
-    Args:
-        arousal: Current arousal level (-1 to 1)
-        pleasure: Current pleasure level (-1 to 1)
-
-    Returns:
-        Salience boost (0.0 to 0.3) to add to base attention_salience
-    """
-    # Arousal is the primary driver of encoding strength
-    arousal_boost = max(0.0, arousal) * 0.2  # 0 to 0.2
-
-    # Strong emotions (high |pleasure|) also boost encoding
-    valence_boost = abs(pleasure) * 0.1  # 0 to 0.1
-
-    return min(0.3, arousal_boost + valence_boost)
+# compute_pad_retrieval_bias and compute_pad_encoding_boost
+# delegated to core/pad.py via import above

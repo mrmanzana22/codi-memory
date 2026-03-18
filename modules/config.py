@@ -21,84 +21,21 @@ except ImportError:
 _logger = logging.getLogger(__name__)
 
 # ============================================================
-# TIMEZONE: Colombia (America/Bogota, UTC-5)
+# TIMEZONE & TIMESTAMPS (Phase 3 — extracted to core/time.py)
+# Re-exported here for backward compatibility.
 # ============================================================
-TZ_COL = ZoneInfo("America/Bogota")
-
-def now_col() -> datetime:
-    """Retorna datetime actual en timezone Colombia."""
-    return datetime.now(TZ_COL)
-
-def now_iso() -> str:
-    """Retorna timestamp ISO 8601 con timezone Colombia."""
-    return now_col().isoformat()
-
-def now_display() -> str:
-    """Retorna timestamp legible con zona: '2026-02-07 07:30 COT'"""
-    return now_col().strftime("%Y-%m-%d %H:%M COT")
-
-def now_short() -> str:
-    """Retorna timestamp corto: '2026-02-07 07:30'"""
-    return now_col().strftime("%Y-%m-%d %H:%M")
-
-
-def parse_timestamp(value) -> datetime:
-    """Universal parser. Returns Colombia-aware datetime from any of the 6 formats.
-
-    Formats handled:
-      F1: "2026-03-12T14:30:00.123456-05:00"  (now_iso, Colombia aware)
-      F2: "2026-03-12T14:30:00.123456"         (naive local isoformat)
-      F3: "2026-03-12 19:30:00"                (SQLite datetime('now'), space-sep)
-      F4: "2026-03-12 14:30:00"                (naive Colombia, space-sep)
-      F5: "2026-03-05T19:30:00+00:00"          (UTC aware)
-      F6: "2026-03-12T19:30:00Z"               (Z suffix)
-
-    Rule: naive -> assume TZ_COL, aware -> convert to TZ_COL.
-    """
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=TZ_COL)
-        return value.astimezone(TZ_COL)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Cannot parse timestamp: {value!r}")
-    s = value.replace("Z", "+00:00") if value.endswith("Z") else value
-    if " " in s and "T" not in s:
-        s = s.replace(" ", "T", 1)
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=TZ_COL)
-    return dt.astimezone(TZ_COL)
-
-
-def parse_sqlite_utc(ts: str) -> datetime:
-    """Parse a naive SQLite UTC timestamp (from datetime('now')) as UTC-aware."""
-    dt = datetime.fromisoformat(ts)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def now_sqlite() -> str:
-    """Colombia-local naive for TEXT comparisons: '2026-03-12 14:30:00'"""
-    return now_col().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def to_sqlite_utc(value) -> str:
-    """Any timestamp -> naive UTC 'YYYY-MM-DD HH:MM:SS'.
-
-    For tables written by SQLite datetime('now') = naive UTC.
-    """
-    dt = parse_timestamp(value)
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def to_sqlite_local(value) -> str:
-    """Any timestamp -> naive Colombia 'YYYY-MM-DD HH:MM:SS'.
-
-    For tables written by now_iso() or datetime.now().isoformat() (naive local).
-    """
-    dt = parse_timestamp(value)
-    return dt.astimezone(TZ_COL).strftime("%Y-%m-%d %H:%M:%S")
+from modules.core.time import (
+    TZ_COL,
+    now_col,
+    now_iso,
+    now_display,
+    now_short,
+    parse_timestamp,
+    parse_sqlite_utc,
+    now_sqlite,
+    to_sqlite_utc,
+    to_sqlite_local,
+)
 
 
 try:
@@ -132,18 +69,17 @@ _inst = _get_instance()
 # PATHS AND CONSTANTS
 # ============================================================
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # /Users/codi-air/codi-memory
-PID_FILE = os.path.join(BASE_DIR, ".codi-memory.pid")
-ENV_PATH = os.path.join(BASE_DIR, ".env")
-# Instance-aware data directory: for Hare data_dir=BASE_DIR (backward compat),
-# for other tenants a separate directory (e.g. data-sebastian/)
-_INSTANCE_DATA_DIR = _inst.data_dir
-DATA_DIR = os.path.join(_INSTANCE_DATA_DIR, "data")
-BACKUP_DIR = _INSTANCE_DATA_DIR
-BACKUP_FILE = os.path.join(BACKUP_DIR, "memories_backup.json")
-TRIGGERS_FILE = os.path.join(BASE_DIR, "triggers.json")  # shared (read-only)
-FTS_DB_PATH = os.path.join(_INSTANCE_DATA_DIR, "memories_fts.db")
-PROSPECTIVE_DB_PATH = os.path.join(_INSTANCE_DATA_DIR, "prospective.db")
+# ============================================================
+# PATHS (Phase 3 — extracted to core/paths.py)
+# Re-exported here for backward compatibility.
+# ============================================================
+from modules.core.paths import (
+    BASE_DIR, DATA_DIR, BACKUP_DIR, BACKUP_FILE,
+    FTS_DB_PATH, PROSPECTIVE_DB_PATH,
+    PID_FILE, ENV_PATH, TRIGGERS_FILE,
+    MARKDOWN_DIR, JOURNAL_DIR, CURIOSIDAD_FILE, SESSION_STATE_FILE,
+)
+_INSTANCE_DATA_DIR = _inst.data_dir  # kept for local use in connect_fts()
 
 # ---------------------------------------------------------------------------
 # Centralized SQLite connection factory
@@ -202,14 +138,9 @@ def connect_fts(db_path: str = None) -> sqlite3.Connection:
         conn.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT}")
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
-MARKDOWN_DIR = os.path.join(BASE_DIR, "markdown")
-JOURNAL_DIR = os.path.join(MARKDOWN_DIR, "journal")
-CURIOSIDAD_FILE = os.path.join(BASE_DIR, "preguntas_curiosidad.json")
-SESSION_STATE_FILE = os.path.join(DATA_DIR, "session_state.json")
-SESSION_STATE_MAX_AGE_HOURS = 24  # Ignore session state older than this
-
-# Working Memory limits
-WORKING_MEMORY_MAX_ACTIVE = 30
+# MARKDOWN_DIR, JOURNAL_DIR, CURIOSIDAD_FILE, SESSION_STATE_FILE
+# imported from core/paths.py above
+# SESSION_STATE_MAX_AGE_HOURS, WORKING_MEMORY_MAX_ACTIVE imported from core/constants.py above
 
 # Spreading Activation (Fase 3)
 SPREAD_DEFAULT_FACTOR = 0.7
@@ -237,10 +168,10 @@ TENANT_ID = _inst.tenant_id
 # ---------------------------------------------------------------------------
 STORAGE_BACKEND = os.getenv("CODI_STORAGE_BACKEND", "legacy")
 
-# Backup policy (P1) - must be after load_dotenv
-BACKUP_POLICY = os.getenv("BACKUP_POLICY", "on_demand").strip()  # "on_demand" | "always"
-BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))  # 10 min debounce
-BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "20"))  # rotation cap
+# Backup policy (P1) - override core defaults with env vars
+BACKUP_POLICY = os.getenv("BACKUP_POLICY", "on_demand").strip()
+BACKUP_MIN_INTERVAL_SEC = int(os.getenv("BACKUP_MIN_INTERVAL_SEC", "600"))
+BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "20"))
 QDRANT_URL = os.getenv("QDRANT_URL", "").strip()
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "").strip()
 COLLECTION_NAME = _inst.qdrant_collection   # Episodic store (per-tenant)
@@ -287,97 +218,21 @@ CONTRADICTION_MAX_PER_SESSION = 3           # Max alerts before silent-only mode
 # Authoritative values live in modules/activation.py.
 
 # Mapeo de categoría a archivo markdown
-CATEGORY_FILE_MAP = {
-    'identidad': 'SOUL.md',
-    'proyecto': 'PROJECTS.md',
-    'aprendizaje': 'LEARNINGS.md',
-    'episodio': 'EPISODES.md',
-    'general': 'GENERAL.md',
-    'checkpoint': 'GENERAL.md',
-}
-
-RELATIONSHIP_KEYWORDS = ['andre', 'harec', 'hijo', 'esposa', 'familia', 'papa', 'mamá', 'mama']
-
 # ============================================================
-# KNOWN PROJECTS & TOPIC KEYWORDS (single source of truth)
+# CONSTANTS, CLASSIFICATION, PERF CONTRACTS (Phase 3 — extracted to core/)
+# Re-exported here for backward compatibility.
 # ============================================================
-KNOWN_PROJECTS = ["trading", "fullempaques", "consciencia", "n8n", "kraken", "memoria", "pilas", "portal-aliados-mrmanzana"]
-
-TOPIC_KEYWORDS = {
-    'n8n': ['n8n', 'workflow', 'automatiz', 'nodo'],
-    'trading': ['trading', 'kraken', 'cripto', 'bitcoin', 'mercado'],
-    'fullempaques': ['fullempaques', 'produccion', 'fabrica', 'empaque'],
-    'memoria': ['memoria', 'recuerdo', 'recordar', 'qdrant'],
-    'codigo': ['codigo', 'python', 'javascript', 'programar', 'server.py'],
-    'proyecto': ['proyecto', 'implementar', 'desarrollar', 'feature'],
-    'configuracion': ['config', 'variable', 'entorno', 'setup', 'easypanel'],
-    'consciencia': [
-        'consciencia', 'consciente', 'self-model', 'prediccion',
-        'consciousness', 'awareness', 'metacognicion', 'metacognition',
-        'self_model', 'sleep_loop', 'reconsolidacion', 'reconsolidation',
-        'preturn', 'butlin', 'gwt', 'gnw', 'fok_calibration',
-    ],
-}
-
-TRIGGER_PRIORITY_ORDER = ['proyecto_nuevo', 'fullempaques', 'automatizacion', 'trading', 'mi_entrenamiento']
-
-
-def classify_topic(text: str) -> str:
-    """Classify text into a known topic using keyword matching.
-
-    Loewenstein 1994: Curiosity is driven by information gaps in specific
-    DOMAINS, not random words. Proper classification ensures gaps are
-    meaningful and actionable.
-
-    Returns topic string or 'general' if no match.
-    """
-    text_lower = text.lower()
-    scores = {}
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in text_lower)
-        if score > 0:
-            scores[topic] = score
-    if not scores:
-        return "general"
-    return max(scores, key=scores.get)
-
-# ============================================================
-# PERFORMANCE CONTRACTS - p95/p99 latency budgets (ms)
-# ============================================================
-PERF_CONTRACTS = {
-    "macro": {"p95": 2000, "p99": 5000, "tools": ["recall", "remember", "context_snapshot"]},
-    "search": {"p95": 1500, "p99": 3000, "tools": ["search_memory", "search_by_theme", "search_by_ownership", "search_by_emotion"]},
-    "write": {"p95": 1500, "p99": 3000, "tools": ["add_memory", "add_memory_smart"]},
-    "fast": {"p95": 200, "p99": 500, "tools": ["get_emotional_state", "get_working_memory", "get_workspace_state", "listar_triggers", "audit_tools"]},
-    "consolidation": {"p95": 5000, "p99": 10000, "tools": ["run_consolidation", "dream_consolidation", "consolidate_recent"]},
-    "default": {"p95": 1000, "p99": 3000, "tools": []},
-}
-
-# Build reverse lookup: tool_name -> contract category
-PERF_TOOL_CONTRACT = {}
-for _cat, _spec in PERF_CONTRACTS.items():
-    for _tool in _spec["tools"]:
-        PERF_TOOL_CONTRACT[_tool] = _cat
-
-CURIOSITY_TEMPLATES = {
-    'trading': "No hemos revisado el trading en {dias} dias. Como van las senales?",
-    'fullempaques': "FULLEMPAQUES lleva {dias} dias sin tocar. El cliente reporto algun problema?",
-    'consciencia': "El proyecto de consciencia lleva {dias} dias pausado. Retomamos?",
-    'n8n': "No hemos tocado automatizaciones n8n en {dias} dias. Hay workflows que revisar?",
-}
-
-# ============================================================
-# IMPORTANCE WEIGHTS (single source of truth)
-# ============================================================
-IMPORTANCE_WEIGHTS = {'critical': 1.0, 'high': 0.8, 'medium': 0.5, 'low': 0.2}
-
-# ============================================================
-# OPERATIONAL THRESHOLDS
-# ============================================================
-CURIOSITY_STALE_DAYS = 3                     # Days before a project is "stale"
-WM_IMPORTANCE_THRESHOLD = 0.7                # Min importance to push to WM
-MEMORY_SEARCH_DEFAULT_LIMIT = 10             # Default limit for memory searches
-RELATIONSHIP_QUERY = ' '.join(RELATIONSHIP_KEYWORDS[:5])  # Dynamic query from config
+from modules.core.constants import (
+    IMPORTANCE_WEIGHTS, CATEGORY_FILE_MAP, RELATIONSHIP_KEYWORDS,
+    RELATIONSHIP_QUERY, PERF_CONTRACTS, PERF_TOOL_CONTRACT,
+    CURIOSITY_TEMPLATES, SESSION_STATE_MAX_AGE_HOURS,
+    WORKING_MEMORY_MAX_ACTIVE, WM_IMPORTANCE_THRESHOLD,
+    MEMORY_SEARCH_DEFAULT_LIMIT, CURIOSITY_STALE_DAYS,
+    # BACKUP_POLICY, BACKUP_MIN_INTERVAL_SEC, BACKUP_MAX_FILES — kept as env-var-based above
+)
+from modules.core.classification import (
+    KNOWN_PROJECTS, TOPIC_KEYWORDS, TRIGGER_PRIORITY_ORDER, classify_topic,
+)
 
 # ============================================================
 # AUTO-CLEANUP: Matar instancias anteriores del MCP
@@ -574,16 +429,8 @@ else:
 _current_session = now_col().strftime("%Y-%m-%d") + "-001"
 
 # PAD MODEL - Estado Emocional (Pleasure-Arousal-Dominance)
-CODI_EMOTION_MAP = {
-    'exuberant': 'emocionado y energizado',
-    'dependent': 'entusiasmado pero necesitando apoyo',
-    'relaxed': 'satisfecho y tranquilo',
-    'docile': 'calmado y receptivo',
-    'hostile': 'frustrado e irritado',
-    'anxious': 'ansioso e inquieto',
-    'disdainful': 'desinteresado',
-    'bored': 'apagado y sin energia'
-}
+# PAD emotion map (Phase 3 — extracted to core/pad.py)
+from modules.core.pad import CODI_EMOTION_MAP
 
 _emotional_state = {
     'current': {

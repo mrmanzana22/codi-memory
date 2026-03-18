@@ -23,7 +23,7 @@ import sqlite3
 import threading
 from typing import Optional
 
-from modules.config import FTS_DB_PATH
+from modules.core.paths import FTS_DB_PATH
 
 # ---------------------------------------------------------------------------
 # Thread-local storage: each thread has a dict {db_path: Connection}
