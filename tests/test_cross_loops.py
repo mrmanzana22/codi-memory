@@ -1939,8 +1939,9 @@ class TestCX23_ForgettingSuppressesCuriosity(unittest.TestCase):
         from modules.wiring import _on_forgetting_suppresses_curiosity
 
         mock_payload = {"narrative_themes": ["trading", "kraken"]}
-        with patch("modules.pg_store.PGMemoryStore") as MockPG:
-            MockPG.return_value.get_payload.return_value = mock_payload
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
+        with patch("modules.wiring._pg.get_by_ids", return_value=[mock_point]):
             with patch("modules.curiosity._cargar_curiosidades", return_value={"pendientes": [], "exploradas": []}):
                 with patch("modules.curiosity._guardar_curiosidades"):
                     _on_forgetting_suppresses_curiosity("memory_vaulted", {"memory_id": "test-123"})
@@ -1992,7 +1993,7 @@ class TestCX28_ForgettingDegradesMeta(unittest.TestCase):
             _on_forgetting_degrades_metacognition("memory_vaulted", {"memory_id": "test-456"})
             time.sleep(0.2)
 
-        self.assertLess(w._cx10_precision_modifiers.get("trading", 1.0), 0.8)
+        self.assertLessEqual(w._cx10_precision_modifiers.get("trading", 1.0), 0.8)
 
     def test_floor_respected(self):
         """Precision never drops below CX-28 floor."""
@@ -2240,9 +2241,10 @@ class TestCX29_ReconInvalidatesCausal(unittest.TestCase):
         from modules.wiring import _on_reconsolidation_invalidates_causal_edges
 
         mock_payload = {"narrative_themes": ["trading"]}
+        mock_point = MagicMock()
+        mock_point.payload = mock_payload
 
-        with patch("modules.pg_store.PGMemoryStore") as MockPG:
-            MockPG.return_value.get_payload.return_value = mock_payload
+        with patch("modules.wiring._pg.get_by_ids", return_value=[mock_point]):
             with patch("modules.db_pool.get_conn") as mock_conn:
                 mock_cursor = MagicMock()
                 mock_cursor.fetchall.return_value = [

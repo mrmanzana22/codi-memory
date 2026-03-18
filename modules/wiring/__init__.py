@@ -2905,9 +2905,9 @@ def _on_forgetting_suppresses_curiosity(event_name: str, data: dict):
 
     def _suppress():
         try:
-            from modules.pg_store import PGMemoryStore
-            pg = PGMemoryStore()
-            payload = pg.get_payload(memory_id)
+            from modules.pg_store import pg as _pg
+            points = _pg.get_by_ids([memory_id])
+            payload = points[0].payload if points else None
             if not payload:
                 return
             themes = payload.get("narrative_themes", [])
@@ -2978,9 +2978,9 @@ def _on_forgetting_degrades_metacognition(event_name: str, data: dict):
 
     def _degrade():
         try:
-            from modules.pg_store import PGMemoryStore
-            pg = PGMemoryStore()
-            payload = pg.get_payload(memory_id)
+            from modules.pg_store import pg as _pg
+            points = _pg.get_by_ids([memory_id])
+            payload = points[0].payload if points else None
             if not payload:
                 return
             themes = payload.get("narrative_themes", [])
@@ -3191,12 +3191,12 @@ def _on_workspace_retrieval_modulates_forgetting(event_name: str, data: dict):
                         pass
 
                     # Direct RIF: reduce salience of same-domain losers
-                    from modules.pg_store import PGMemoryStore
-                    pg = PGMemoryStore()
+                    from modules.pg_store import pg as _pg_rif
                     suppressed = 0
                     for lid in rif_targets[:5]:  # Cap at 5 per tick
                         try:
-                            payload = pg.get_payload(lid)
+                            _rif_pts = _pg_rif.get_by_ids([lid])
+                            payload = _rif_pts[0].payload if _rif_pts else None
                             if not payload:
                                 continue
                             importance = payload.get("importance", payload.get("narrative_importance", "medium"))
@@ -3247,9 +3247,9 @@ def _on_reconsolidation_invalidates_causal_edges(event_name: str, data: dict):
 
     def _invalidate():
         try:
-            from modules.pg_store import PGMemoryStore
-            pg = PGMemoryStore()
-            payload = pg.get_payload(memory_id)
+            from modules.pg_store import pg as _pg
+            points = _pg.get_by_ids([memory_id])
+            payload = points[0].payload if points else None
             if not payload:
                 return
             themes = payload.get("narrative_themes", [])
