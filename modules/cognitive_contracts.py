@@ -889,6 +889,95 @@ def collect_forgetting_metrics() -> Dict[str, Optional[float]]:
 
 
 # ============================================================
+# STORE-BASED COLLECTORS (Phase 2 — CognitiveStore)
+# ============================================================
+
+def _build_store_collectors() -> Dict[str, Callable]:
+    """Build collectors using CognitiveStore repos.
+
+    Falls back to legacy collectors if store import fails.
+    """
+    try:
+        from modules.store import get_store
+        store = get_store()
+    except Exception:
+        _logger.debug("CognitiveStore import failed, using legacy collectors")
+        return {
+            "PE": collect_pe_metrics,
+            "L1": collect_reconsolidation_metrics,
+            "L2": collect_consolidation_metrics,
+            "L3": collect_gnw_metrics,
+            "L4": collect_prediction_metrics,
+            "L5": collect_metacognition_metrics,
+            "L6": collect_curiosity_metrics,
+            "L7": collect_active_inference_metrics,
+            "L8": collect_causal_metrics,
+            "L9": collect_self_model_metrics,
+            "L10": collect_forgetting_metrics,
+            "CX": collect_cx_metrics,
+        }
+
+    def _collect_pe():
+        metrics = {}
+        scores = store.prediction.get_surprise_scores(days=7, limit=100)
+        if scores:
+            metrics["pe_magnitude_mean"] = sum(scores) / len(scores)
+        metrics["pe_flow_diversity"] = store.cx.get_pe_cx_diversity(hours=24)
+        return metrics
+
+    def _collect_l1():
+        return store.consolidation.get_reconsolidation_stats()
+
+    def _collect_l2():
+        return store.consolidation.get_consolidation_metrics()
+
+    def _collect_l3():
+        return store.cx.get_gnw_metrics()
+
+    def _collect_l4():
+        return store.prediction.get_accuracy()
+
+    def _collect_l5():
+        return store.metacognition.get_calibration_metrics()
+
+    def _collect_l6():
+        # Curiosity still uses FTS + JSON — not migrated to store yet
+        return collect_curiosity_metrics()
+
+    def _collect_l7():
+        diversity = store.attention.get_policy_diversity(days=7)
+        return {"efe_policy_diversity": diversity}
+
+    def _collect_l8():
+        return store.causal.get_latest_dag_state()
+
+    def _collect_l9():
+        # Self-model uses function call, not SQL
+        return collect_self_model_metrics()
+
+    def _collect_l10():
+        return store.forgetting.get_forgetting_metrics()
+
+    def _collect_cx():
+        return store.cx.get_aggregated_cx_metrics(hours=24)
+
+    return {
+        "PE": _collect_pe,
+        "L1": _collect_l1,
+        "L2": _collect_l2,
+        "L3": _collect_l3,
+        "L4": _collect_l4,
+        "L5": _collect_l5,
+        "L6": _collect_l6,
+        "L7": _collect_l7,
+        "L8": _collect_l8,
+        "L9": _collect_l9,
+        "L10": _collect_l10,
+        "CX": _collect_cx,
+    }
+
+
+# ============================================================
 # PUBLIC API
 # ============================================================
 
@@ -908,20 +997,7 @@ def evaluate_all(collectors: Optional[Dict[str, Callable]] = None) -> List[Contr
     Returns list of ContractResults, one per contract.
     """
     if collectors is None:
-        collectors = {
-            "PE": collect_pe_metrics,
-            "L1": collect_reconsolidation_metrics,
-            "L2": collect_consolidation_metrics,
-            "L3": collect_gnw_metrics,
-            "L4": collect_prediction_metrics,
-            "L5": collect_metacognition_metrics,
-            "L6": collect_curiosity_metrics,
-            "L7": collect_active_inference_metrics,
-            "L8": collect_causal_metrics,
-            "L9": collect_self_model_metrics,
-            "L10": collect_forgetting_metrics,
-            "CX": collect_cx_metrics,
-        }
+        collectors = _build_store_collectors()
 
     results = []
     for loop_id, contract in CONTRACTS.items():
