@@ -844,6 +844,11 @@ def get_curiosity_quality() -> str:
         return f"Error generating quality report: {redact_secrets(str(e))}"
 
 
+# ============================================================
+# MCP TRANSPORT — register_tools
+# (Business logic above returns strings — no JSON stripping needed)
+# ============================================================
+
 def register_tools(mcp):
     """Register curiosity MCP tools."""
     mcp.tool()(detectar_sorpresa)

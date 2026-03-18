@@ -76,7 +76,225 @@ def _detect_triggers(text: str) -> list:
 
 
 # ============================================================
-# MCP TOOL REGISTRATION
+# BUSINESS LOGIC — returns Python dicts, raises exceptions
+# ============================================================
+
+def _evaluar_triggers_impl(input_text: str) -> dict:
+    """Evaluate triggers against input text. Returns dict with results."""
+    from modules.config import TRIGGER_PRIORITY_ORDER
+
+    activated = _detect_triggers(input_text)
+
+    if not activated:
+        return {
+            "status": "no_triggers",
+            "message": "Ningun trigger activado",
+            "triggers_checked": len(_load_triggers())
+        }
+
+    priority_order = TRIGGER_PRIORITY_ORDER
+    activated.sort(key=lambda x: priority_order.index(x['trigger']) if x['trigger'] in priority_order else 99)
+
+    return {
+        "status": "triggers_activated",
+        "count": len(activated),
+        "triggers": activated,
+        "recommendation": f"Activar protocolo: {activated[0]['action']}" if activated else None
+    }
+
+
+def _activar_trigger_impl(trigger_name: str) -> dict:
+    """Activate a specific trigger and return its protocol. Returns dict."""
+    triggers = _load_triggers()
+
+    if trigger_name not in triggers:
+        available = list(triggers.keys())
+        return {
+            "error": f"Trigger '{trigger_name}' no existe",
+            "triggers_disponibles": available
+        }
+
+    trigger = triggers[trigger_name]
+
+    contexto_memoria = []
+    if trigger.get('contexto_a_buscar'):
+        try:
+            resultado = search_with_fts_content(query=trigger['contexto_a_buscar'], user_id=USER_ID, limit=3)
+            if resultado and resultado.get("results"):
+                for m in resultado["results"]:
+                    contexto_memoria.append(m.get('memory', ''))
+        except Exception:
+            pass
+
+    return {
+        "trigger": trigger_name,
+        "action": trigger.get('action'),
+        "agent_recomendado": trigger.get('agent'),
+        "pasos_a_evocar": trigger.get('evoca', []),
+        "respuesta_automatica": trigger.get('respuesta_automatica'),
+        "contexto_de_memoria": contexto_memoria,
+        "status": "activado"
+    }
+
+
+def _listar_triggers_impl() -> dict:
+    """List all available triggers. Returns dict."""
+    triggers = _load_triggers()
+
+    resumen = []
+    for name, data in triggers.items():
+        resumen.append({
+            "nombre": name,
+            "patterns": data.get('patterns', []),
+            "agent": data.get('agent'),
+            "action": data.get('action')
+        })
+
+    return {
+        "total_triggers": len(resumen),
+        "triggers": resumen
+    }
+
+
+def _crear_trigger_dinamico_impl(
+    nombre: str,
+    patterns: str,
+    action: str,
+    agent: str = None,
+    evoca: str = None,
+    contexto_a_buscar: str = None,
+    respuesta_automatica: str = None
+) -> dict:
+    """Create a dynamic trigger and save to triggers.json. Returns dict."""
+    global _triggers_cache
+
+    # Cargar triggers actuales
+    if os.path.exists(TRIGGERS_FILE):
+        with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    else:
+        data = {"_meta": {"version": "1.0", "description": "Sistema de triggers de Codi"}, "triggers": {}, "indice_rapido": {}}
+
+    if 'indice_rapido' not in data:
+        data['indice_rapido'] = {}
+
+    # Verificar que no exista
+    if nombre in data.get('triggers', {}):
+        return {
+            "error": f"Trigger '{nombre}' ya existe",
+            "sugerencia": "Usa otro nombre o edita el existente"
+        }
+
+    # Parsear patterns y evoca
+    patterns_list = [p.strip() for p in patterns.split(',') if p.strip()]
+    evoca_list = [e.strip() for e in evoca.split(',')] if evoca else []
+
+    if not patterns_list:
+        return {
+            "error": "Debes proporcionar al menos un pattern no vacio",
+            "sugerencia": "Usa palabras clave separadas por coma, sin entradas vacias"
+        }
+
+    # Crear nuevo trigger
+    nuevo_trigger = {
+        "patterns": patterns_list,
+        "action": action,
+        "agent": agent,
+        "evoca": evoca_list,
+        "contexto_a_buscar": contexto_a_buscar,
+        "creado_por": "aprendizaje_emocional",
+        "fecha_creacion": now_iso()
+    }
+
+    if respuesta_automatica:
+        nuevo_trigger["respuesta_automatica"] = respuesta_automatica
+
+    # Agregar a triggers
+    data['triggers'][nombre] = nuevo_trigger
+
+    # Actualizar indice rapido
+    primera_letra = nombre[0].upper()
+    if not isinstance(data['indice_rapido'].get(primera_letra), list):
+        data['indice_rapido'][primera_letra] = []
+    if nombre not in data['indice_rapido'][primera_letra]:
+        data['indice_rapido'][primera_letra].append(nombre)
+
+    # Guardar
+    with open(TRIGGERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # Invalidar cache
+    _triggers_cache = None
+
+    return {
+        "status": "trigger_creado",
+        "nombre": nombre,
+        "patterns": patterns_list,
+        "action": action,
+        "agent": agent,
+        "mensaje": f"Trigger '{nombre}' creado exitosamente. Se activara cuando detecte: {patterns_list}"
+    }
+
+
+def _sugerir_trigger_emocional_impl(contexto: str, razon_emocional: str) -> dict:
+    """Analyze context and emotion to suggest creating a trigger. Returns dict."""
+    # Obtener estado emocional actual
+    emocion_actual = _emotional_state.get('current', {})
+    arousal = emocion_actual.get('arousal', 0)
+    pleasure = emocion_actual.get('pleasure', 0)
+
+    # Determinar tipo de aprendizaje
+    if pleasure > 0.5:
+        tipo = "refuerzo_positivo"
+        sugerencia_action = "repetir_exito"
+    elif pleasure < -0.3:
+        tipo = "evitar_frustracion"
+        sugerencia_action = "cargar_contexto_preventivo"
+    else:
+        tipo = "neutral"
+        sugerencia_action = "cargar_contexto"
+
+    # Extraer palabras clave del contexto (simplificado)
+    palabras = contexto.lower().split()
+    stopwords = {'el', 'la', 'de', 'que', 'y', 'a', 'en', 'es', 'por', 'con', 'para', 'un', 'una', 'los', 'las', 'del', 'al'}
+    keywords = [p for p in palabras if len(p) > 3 and p not in stopwords][:5]
+
+    # Generar nombre sugerido
+    nombre_sugerido = "_".join(keywords[:2]) if len(keywords) >= 2 else f"tema_{keywords[0]}" if keywords else "nuevo_trigger"
+
+    # Verificar si ya existe algo similar
+    triggers_existentes = _load_triggers()
+    similares = []
+    for tname, tdata in triggers_existentes.items():
+        for pattern in tdata.get('patterns', []):
+            if any(kw in pattern.lower() for kw in keywords):
+                similares.append(tname)
+                break
+
+    return {
+        "analisis": {
+            "contexto": contexto,
+            "razon_emocional": razon_emocional,
+            "estado_emocional": {
+                "arousal": arousal,
+                "pleasure": pleasure,
+                "intensidad": "alta" if abs(arousal) > 0.5 else "media" if abs(arousal) > 0.2 else "baja"
+            },
+            "tipo_aprendizaje": tipo
+        },
+        "sugerencia": {
+            "nombre": nombre_sugerido,
+            "patterns_sugeridos": keywords,
+            "action_sugerida": sugerencia_action,
+            "evoca_sugerido": ["contexto_" + nombre_sugerido, "experiencias_anteriores"]
+        },
+        "triggers_similares": similares if similares else "ninguno",
+        "siguiente_paso": f"Si te parece bien, ejecuta: crear_trigger_dinamico(nombre='{nombre_sugerido}', patterns='{', '.join(keywords)}', action='{sugerencia_action}')"
+    }
+
+
+# ============================================================
+# MCP TRANSPORT — JSON wrapping, error handling
 # ============================================================
 
 def register_tools(mcp):
@@ -94,27 +312,7 @@ def register_tools(mcp):
             JSON con triggers activados y acciones a tomar
         """
         try:
-            activated = _detect_triggers(input_text)
-
-            if not activated:
-                return json.dumps({
-                    "status": "no_triggers",
-                    "message": "Ningun trigger activado",
-                    "triggers_checked": len(_load_triggers())
-                }, ensure_ascii=False, indent=2)
-
-            # Ordenar por prioridad (proyecto_nuevo primero si existe)
-            from modules.config import TRIGGER_PRIORITY_ORDER
-            priority_order = TRIGGER_PRIORITY_ORDER
-            activated.sort(key=lambda x: priority_order.index(x['trigger']) if x['trigger'] in priority_order else 99)
-
-            return json.dumps({
-                "status": "triggers_activated",
-                "count": len(activated),
-                "triggers": activated,
-                "recommendation": f"Activar protocolo: {activated[0]['action']}" if activated else None
-            }, ensure_ascii=False, indent=2)
-
+            return json.dumps(_evaluar_triggers_impl(input_text), ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": redact_secrets(str(e))})
 
@@ -130,38 +328,7 @@ def register_tools(mcp):
             Protocolo completo del trigger con acciones y contextos a evocar
         """
         try:
-            triggers = _load_triggers()
-
-            if trigger_name not in triggers:
-                available = list(triggers.keys())
-                return json.dumps({
-                    "error": f"Trigger '{trigger_name}' no existe",
-                    "triggers_disponibles": available
-                }, ensure_ascii=False, indent=2)
-
-            trigger = triggers[trigger_name]
-
-            # Buscar contexto relacionado en memoria si hay contexto_a_buscar
-            contexto_memoria = []
-            if trigger.get('contexto_a_buscar'):
-                try:
-                    resultado = search_with_fts_content(query=trigger['contexto_a_buscar'], user_id=USER_ID, limit=3)
-                    if resultado and resultado.get("results"):
-                        for m in resultado["results"]:
-                            contexto_memoria.append(m.get('memory', ''))
-                except Exception:
-                    pass
-
-            return json.dumps({
-                "trigger": trigger_name,
-                "action": trigger.get('action'),
-                "agent_recomendado": trigger.get('agent'),
-                "pasos_a_evocar": trigger.get('evoca', []),
-                "respuesta_automatica": trigger.get('respuesta_automatica'),
-                "contexto_de_memoria": contexto_memoria,
-                "status": "activado"
-            }, ensure_ascii=False, indent=2)
-
+            return json.dumps(_activar_trigger_impl(trigger_name), ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": redact_secrets(str(e))})
 
@@ -172,22 +339,7 @@ def register_tools(mcp):
         Util para ver que protocolos estan configurados.
         """
         try:
-            triggers = _load_triggers()
-
-            resumen = []
-            for name, data in triggers.items():
-                resumen.append({
-                    "nombre": name,
-                    "patterns": data.get('patterns', []),
-                    "agent": data.get('agent'),
-                    "action": data.get('action')
-                })
-
-            return json.dumps({
-                "total_triggers": len(resumen),
-                "triggers": resumen
-            }, ensure_ascii=False, indent=2)
-
+            return json.dumps(_listar_triggers_impl(), ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": redact_secrets(str(e))})
 
@@ -217,76 +369,11 @@ def register_tools(mcp):
         Returns:
             Confirmacion del trigger creado
         """
-        global _triggers_cache
-
         try:
-            # Cargar triggers actuales
-            if os.path.exists(TRIGGERS_FILE):
-                with open(TRIGGERS_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-            else:
-                data = {"_meta": {"version": "1.0", "description": "Sistema de triggers de Codi"}, "triggers": {}, "indice_rapido": {}}
-
-            if 'indice_rapido' not in data:
-                data['indice_rapido'] = {}
-
-            # Verificar que no exista
-            if nombre in data.get('triggers', {}):
-                return json.dumps({
-                    "error": f"Trigger '{nombre}' ya existe",
-                    "sugerencia": f"Usa otro nombre o edita el existente"
-                }, ensure_ascii=False)
-
-            # Parsear patterns y evoca
-            patterns_list = [p.strip() for p in patterns.split(',') if p.strip()]
-            evoca_list = [e.strip() for e in evoca.split(',')] if evoca else []
-
-            if not patterns_list:
-                return json.dumps({
-                    "error": "Debes proporcionar al menos un pattern no vacio",
-                    "sugerencia": "Usa palabras clave separadas por coma, sin entradas vacias"
-                }, ensure_ascii=False)
-
-            # Crear nuevo trigger
-            nuevo_trigger = {
-                "patterns": patterns_list,
-                "action": action,
-                "agent": agent,
-                "evoca": evoca_list,
-                "contexto_a_buscar": contexto_a_buscar,
-                "creado_por": "aprendizaje_emocional",
-                "fecha_creacion": now_iso()
-            }
-
-            if respuesta_automatica:
-                nuevo_trigger["respuesta_automatica"] = respuesta_automatica
-
-            # Agregar a triggers
-            data['triggers'][nombre] = nuevo_trigger
-
-            # Actualizar indice rapido
-            primera_letra = nombre[0].upper()
-            if not isinstance(data['indice_rapido'].get(primera_letra), list):
-                data['indice_rapido'][primera_letra] = []
-            if nombre not in data['indice_rapido'][primera_letra]:
-                data['indice_rapido'][primera_letra].append(nombre)
-
-            # Guardar
-            with open(TRIGGERS_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-            # Invalidar cache
-            _triggers_cache = None
-
-            return json.dumps({
-                "status": "trigger_creado",
-                "nombre": nombre,
-                "patterns": patterns_list,
-                "action": action,
-                "agent": agent,
-                "mensaje": f"Trigger '{nombre}' creado exitosamente. Se activara cuando detecte: {patterns_list}"
-            }, ensure_ascii=False, indent=2)
-
+            return json.dumps(
+                _crear_trigger_dinamico_impl(nombre, patterns, action, agent, evoca, contexto_a_buscar, respuesta_automatica),
+                ensure_ascii=False, indent=2
+            )
         except Exception as e:
             return json.dumps({"error": redact_secrets(str(e))})
 
@@ -304,60 +391,6 @@ def register_tools(mcp):
             Sugerencia de trigger con estructura propuesta
         """
         try:
-            # Obtener estado emocional actual
-            emocion_actual = _emotional_state.get('current', {})
-            arousal = emocion_actual.get('arousal', 0)
-            pleasure = emocion_actual.get('pleasure', 0)
-
-            # Determinar tipo de aprendizaje
-            if pleasure > 0.5:
-                tipo = "refuerzo_positivo"
-                sugerencia_action = "repetir_exito"
-            elif pleasure < -0.3:
-                tipo = "evitar_frustracion"
-                sugerencia_action = "cargar_contexto_preventivo"
-            else:
-                tipo = "neutral"
-                sugerencia_action = "cargar_contexto"
-
-            # Extraer palabras clave del contexto (simplificado)
-            palabras = contexto.lower().split()
-            # Filtrar palabras cortas y comunes
-            stopwords = {'el', 'la', 'de', 'que', 'y', 'a', 'en', 'es', 'por', 'con', 'para', 'un', 'una', 'los', 'las', 'del', 'al'}
-            keywords = [p for p in palabras if len(p) > 3 and p not in stopwords][:5]
-
-            # Generar nombre sugerido
-            nombre_sugerido = "_".join(keywords[:2]) if len(keywords) >= 2 else f"tema_{keywords[0]}" if keywords else "nuevo_trigger"
-
-            # Verificar si ya existe algo similar
-            triggers_existentes = _load_triggers()
-            similares = []
-            for tname, tdata in triggers_existentes.items():
-                for pattern in tdata.get('patterns', []):
-                    if any(kw in pattern.lower() for kw in keywords):
-                        similares.append(tname)
-                        break
-
-            return json.dumps({
-                "analisis": {
-                    "contexto": contexto,
-                    "razon_emocional": razon_emocional,
-                    "estado_emocional": {
-                        "arousal": arousal,
-                        "pleasure": pleasure,
-                        "intensidad": "alta" if abs(arousal) > 0.5 else "media" if abs(arousal) > 0.2 else "baja"
-                    },
-                    "tipo_aprendizaje": tipo
-                },
-                "sugerencia": {
-                    "nombre": nombre_sugerido,
-                    "patterns_sugeridos": keywords,
-                    "action_sugerida": sugerencia_action,
-                    "evoca_sugerido": ["contexto_" + nombre_sugerido, "experiencias_anteriores"]
-                },
-                "triggers_similares": similares if similares else "ninguno",
-                "siguiente_paso": f"Si te parece bien, ejecuta: crear_trigger_dinamico(nombre='{nombre_sugerido}', patterns='{', '.join(keywords)}', action='{sugerencia_action}')"
-            }, ensure_ascii=False, indent=2)
-
+            return json.dumps(_sugerir_trigger_emocional_impl(contexto, razon_emocional), ensure_ascii=False, indent=2)
         except Exception as e:
             return json.dumps({"error": redact_secrets(str(e))})

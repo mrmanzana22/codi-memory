@@ -936,6 +936,11 @@ def ciclo_vida() -> str:
         return f"Error en ciclo de vida: {redact_secrets(str(e))}"
 
 
+# ============================================================
+# MCP TRANSPORT — register_tools
+# (Business logic above returns strings — no JSON stripping needed)
+# ============================================================
+
 def register_tools(mcp):
     """Register lifecycle MCP tools."""
     mcp.tool()(verificar_salud_memoria)

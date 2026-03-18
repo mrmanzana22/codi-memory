@@ -598,7 +598,8 @@ def recurrent_cycle(seed_ids: list, cycles: int = 2, depth: int = 1,
 
 
 # ============================================================
-# MCP TOOLS
+# MCP TRANSPORT — register_tools
+# (Business logic returns strings — no JSON stripping needed)
 # ============================================================
 
 def register_tools(mcp):

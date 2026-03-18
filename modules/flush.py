@@ -14,6 +14,11 @@ from modules.utils import enrich_with_ownership, maybe_backup, export_memories_t
 from modules.memory_smart import add_memory_smart, process_fts_queue
 
 
+# ============================================================
+# BUSINESS LOGIC — module-level functions, raise exceptions
+# ============================================================
+
+
 def _checkpoint_memoria_sync(momento: str, que_paso: str, por_que_importa: str) -> str:
     """Synchronous checkpoint implementation (original pipeline)."""
     timestamp = now_short()
@@ -409,6 +414,10 @@ def _export_to_markdown() -> str:
     except Exception as e:
         return f"Error exportando: {redact_secrets(str(e))}"
 
+
+# ============================================================
+# MCP TRANSPORT — thin wrappers, register_tools
+# ============================================================
 
 def register_tools(mcp):
     """Register all flush/export tools with the MCP server."""

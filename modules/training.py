@@ -34,6 +34,10 @@ def _audit_supabase_op(
         _logger.debug("audit log write failed: %s", e)
 
 
+# ============================================================
+# BUSINESS LOGIC — module-level functions, raise exceptions
+# ============================================================
+
 def _capturar_ejemplo_training(categoria: str, contexto: str, respuesta_ideal: str) -> str:
     """
     Captura un ejemplo para el dataset de entrenamiento de Codi LoRA.
@@ -262,6 +266,10 @@ def _contar_ejemplos_training() -> str:
     except Exception as e:
         return f"Error contando ejemplos: {str(e)}"
 
+
+# ============================================================
+# MCP TRANSPORT — thin wrappers, register_tools
+# ============================================================
 
 def register_tools(mcp):
     """Register all training tools with the MCP server."""

@@ -1704,7 +1704,8 @@ def update_memory_importance(memory_id: str, new_importance: str) -> str:
 
 
 # ============================================================
-# REGISTER TOOLS
+# MCP TRANSPORT — register_tools
+# (Business logic above returns strings — no JSON stripping needed)
 # ============================================================
 
 def register_tools(mcp):

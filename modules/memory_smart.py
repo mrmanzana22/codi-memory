@@ -1194,6 +1194,10 @@ def _get_fts_queue_stats() -> str:
     return f"Error obteniendo stats: {s.get('error')}"
 
 
+# ============================================================
+# MCP TRANSPORT — register_tools
+# ============================================================
+
 def register_tools(mcp):
     """Registra las herramientas de memoria smart en el servidor MCP."""
     mcp.tool()(add_memory_smart)

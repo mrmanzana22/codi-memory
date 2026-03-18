@@ -837,6 +837,10 @@ def recalibrate_importance(
         return f"Error en recalibración de importancia: {str(e)[:80]}"
 
 
+# ============================================================
+# MCP TRANSPORT — register_tools
+# ============================================================
+
 def register_tools(mcp):
     """Register workspace MCP tools."""
     mcp.tool()(focus_attention)

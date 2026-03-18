@@ -38,6 +38,352 @@ __all__ = [
 ]
 
 
+# ============================================================
+# BUSINESS LOGIC — returns Python dicts, raises exceptions
+# ============================================================
+
+def _set_emotional_state_impl(pleasure: float, arousal: float, dominance: float, trigger: str = None) -> dict:
+    """Set PAD emotional state. Returns state dict."""
+    global _emotional_state
+    p = _clamp_pad_value(pleasure)
+    a = _clamp_pad_value(arousal)
+    d = _clamp_pad_value(dominance)
+
+    if _emotional_state['current']['timestamp']:
+        _emotional_state['history'].append(_emotional_state['current'].copy())
+        _emotional_state['history'] = _emotional_state['history'][-20:]
+
+    _emotional_state['current'] = {
+        'pleasure': p, 'arousal': a, 'dominance': d,
+        'timestamp': now_iso(), 'trigger': trigger
+    }
+    emotion_label = _classify_emotion(p, a, d)
+    emotion_text = _get_emotion_text(emotion_label)
+    intensity = _calculate_emotional_intensity(p, a, d)
+
+    try:
+        from modules.events import event_bus, Events
+        event_bus.emit(Events.EMOTION_CHANGED, {
+            'pleasure': p, 'arousal': a, 'dominance': d,
+            'emotion': emotion_label, 'intensity': round(intensity, 2),
+            'trigger': trigger,
+        })
+    except Exception:
+        logger.warning("Failed to emit EMOTION_CHANGED event", exc_info=True)
+
+    try:
+        from modules.config import FTS_DB_PATH
+        import sqlite3
+        _db = sqlite3.connect(FTS_DB_PATH, timeout=2)
+        _db.execute(
+            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+            ("pad_current", json.dumps({
+                'pleasure': p, 'arousal': a, 'dominance': d,
+                'timestamp': _emotional_state['current']['timestamp'],
+                'trigger': trigger or '',
+            }))
+        )
+        _db.commit()
+        _db.close()
+    except Exception:
+        pass
+
+    return {
+        'result': 'Estado emocional actualizado',
+        'state': {'pleasure': p, 'arousal': a, 'dominance': d, 'emotion': emotion_label, 'description': emotion_text, 'intensity': round(intensity, 2), 'trigger': trigger}
+    }
+
+
+def _get_emotional_state_impl(include_history: bool = False) -> dict:
+    """Get current emotional state. Returns dict."""
+    current = _emotional_state['current']
+    mood = _emotional_state['mood']
+
+    if current['timestamp']:
+        emotion_label = _classify_emotion(current['pleasure'], current['arousal'], current['dominance'])
+        emotion_text = _get_emotion_text(emotion_label)
+        intensity = _calculate_emotional_intensity(current['pleasure'], current['arousal'], current['dominance'])
+    else:
+        emotion_label = 'neutral'
+        emotion_text = 'sin estado emocional establecido'
+        intensity = 0.0
+
+    mood_label = _classify_emotion(mood['pleasure'], mood['arousal'], mood['dominance'])
+    mood_text = _get_emotion_text(mood_label)
+
+    result = {
+        'result': 'Estado emocional obtenido',
+        'current': {
+            'pleasure': current['pleasure'], 'arousal': current['arousal'], 'dominance': current['dominance'],
+            'emotion': emotion_label, 'description': emotion_text, 'intensity': round(intensity, 2),
+            'trigger': current['trigger'], 'timestamp': current['timestamp']
+        },
+        'mood_baseline': {
+            'pleasure': mood['pleasure'], 'arousal': mood['arousal'], 'dominance': mood['dominance'],
+            'emotion': mood_label, 'description': mood_text
+        }
+    }
+    if include_history:
+        result['history'] = _emotional_state['history'][-20:]
+    return result
+
+
+def _update_mood_baseline_impl(pleasure: float = None, arousal: float = None, dominance: float = None) -> dict:
+    """Adjust mood baseline. Returns dict."""
+    global _emotional_state
+    if pleasure is not None:
+        _emotional_state['mood']['pleasure'] = _clamp_pad_value(pleasure)
+    if arousal is not None:
+        _emotional_state['mood']['arousal'] = _clamp_pad_value(arousal)
+    if dominance is not None:
+        _emotional_state['mood']['dominance'] = _clamp_pad_value(dominance)
+    _emotional_state['mood']['last_updated'] = now_iso()
+
+    mood = _emotional_state['mood']
+    mood_label = _classify_emotion(mood['pleasure'], mood['arousal'], mood['dominance'])
+    mood_text = _get_emotion_text(mood_label)
+
+    return {
+        'result': 'Mood baseline actualizado',
+        'mood': {'pleasure': mood['pleasure'], 'arousal': mood['arousal'], 'dominance': mood['dominance'], 'emotion': mood_label, 'description': mood_text, 'last_updated': mood['last_updated']}
+    }
+
+
+def _apply_emotional_decay_impl() -> dict:
+    """Apply decay to emotional state toward mood baseline. Returns dict."""
+    global _emotional_state
+    current = _emotional_state['current']
+    mood = _emotional_state['mood']
+    decay_rate = _emotional_state['decay_rate']
+
+    if not current['timestamp']:
+        return {'result': 'Sin estado emocional para decaer', 'applied': False}
+
+    p_decay = decay_rate * 1.5 if current['pleasure'] > mood['pleasure'] else decay_rate * 0.8
+    new_p = _clamp_pad_value(current['pleasure'] + (mood['pleasure'] - current['pleasure']) * p_decay)
+    new_a = _clamp_pad_value(current['arousal'] + (mood['arousal'] - current['arousal']) * decay_rate)
+    new_d = _clamp_pad_value(current['dominance'] + (mood['dominance'] - current['dominance']) * decay_rate)
+
+    _emotional_state['history'].append(current.copy())
+    _emotional_state['history'] = _emotional_state['history'][-20:]
+
+    _emotional_state['current'] = {
+        'pleasure': new_p, 'arousal': new_a, 'dominance': new_d,
+        'timestamp': now_iso(), 'trigger': 'decay'
+    }
+    emotion_label = _classify_emotion(new_p, new_a, new_d)
+    emotion_text = _get_emotion_text(emotion_label)
+
+    return {
+        'result': 'Decay emocional aplicado', 'decay_rate': decay_rate,
+        'previous': {'pleasure': current['pleasure'], 'arousal': current['arousal'], 'dominance': current['dominance']},
+        'current': {'pleasure': round(new_p, 3), 'arousal': round(new_a, 3), 'dominance': round(new_d, 3), 'emotion': emotion_label, 'description': emotion_text}
+    }
+
+
+def _get_emotional_expression_impl() -> dict:
+    """Get natural text expression of current emotional state. Returns dict."""
+    current = _emotional_state['current']
+    if not current['timestamp']:
+        return {'result': 'Sin estado emocional', 'expression': 'Me siento en estado neutral, sin emociones particulares.', 'intensity': 'none'}
+
+    p, a, d = current['pleasure'], current['arousal'], current['dominance']
+    emotion_label = _classify_emotion(p, a, d)
+    emotion_text = _get_emotion_text(emotion_label)
+    intensity = _calculate_emotional_intensity(p, a, d)
+
+    if intensity < 0.3:
+        intensity_level, intensity_word = 'baja', 'ligeramente'
+    elif intensity < 0.7:
+        intensity_level, intensity_word = 'moderada', 'moderadamente'
+    elif intensity < 0.9:
+        intensity_level, intensity_word = 'alta', 'bastante'
+    else:
+        intensity_level, intensity_word = 'muy alta', 'muy'
+
+    expression = f"Me siento {intensity_word} {emotion_text}" + (f" debido a: {current['trigger']}" if current['trigger'] else "")
+    if d > 0.5:
+        expression += ". Me siento en control de la situacion."
+    elif d < -0.5:
+        expression += ". Me siento algo vulnerable o dependiente."
+
+    return {
+        'result': 'Expresion emocional generada', 'expression': expression,
+        'emotion': emotion_label, 'emotion_spanish': emotion_text,
+        'intensity': intensity_level, 'intensity_value': round(intensity, 2),
+        'components': {
+            'pleasure': 'positivo' if p > 0 else 'negativo' if p < 0 else 'neutral',
+            'arousal': 'activado' if a > 0 else 'calmado' if a < 0 else 'neutral',
+            'dominance': 'dominante' if d > 0 else 'sumiso' if d < 0 else 'equilibrado'
+        }
+    }
+
+
+def _add_memory_with_emotion_impl(content: str, category: str = "general",
+                                   pleasure: float = 0.0, arousal: float = 0.0,
+                                   dominance: float = 0.0, source: str = "experienced",
+                                   importance: str = "medium") -> dict:
+    """Save memory with PAD emotional state. Returns dict."""
+    p = _clamp_pad_value(pleasure)
+    a = _clamp_pad_value(arousal)
+    d = _clamp_pad_value(dominance)
+    emotion_label = _classify_emotion(p, a, d)
+    intensity = _calculate_emotional_intensity(p, a, d)
+
+    result = pg.add(content=content, category=category, source=source, importance=importance)
+
+    if result and result.get("results"):
+        for r in result["results"]:
+            mem_id = r.get("id")
+            if mem_id:
+                themes = infer_themes(content)
+                if not themes:
+                    themes = [category]
+                self_ref = is_self_referential(content)
+                if self_ref and 'identidad' not in themes:
+                    themes.append('identidad')
+
+                ownership_metadata = {
+                    'ownership_is_mine': True, 'ownership_source': source,
+                    'ownership_confidence': 0.9 if source == 'experienced' else 0.7,
+                    'experiential_emotional_weight': min(intensity / 1.73, 1.0),
+                    'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral',
+                    'narrative_importance': importance, 'narrative_themes': themes,
+                    'attention_salience': 0.7 if importance in ['critical', 'high'] else 0.5,
+                    'attention_access_count': 0, 'attention_last_accessed': None,
+                    'temporal_session_id': get_session_id(), 'self_reference': self_ref,
+                    'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
+                    'pad_emotion': emotion_label, 'pad_intensity': intensity, '_v': 2.2
+                }
+                pg.update_payload(mem_id, ownership_metadata)
+
+    return {
+        'result': 'Memoria guardada con emocion',
+        'memory_id': result.get('results', [{}])[0].get('id', 'unknown')[:8] if result else 'unknown',
+        'emotion': {'label': emotion_label, 'description': _get_emotion_text(emotion_label), 'pleasure': p, 'arousal': a, 'dominance': d, 'intensity': round(intensity, 2)}
+    }
+
+
+def _tag_memory_emotion_impl(memory_id: str, pleasure: float, arousal: float, dominance: float) -> dict:
+    """Tag existing memory with PAD emotional state. Returns dict."""
+    full_id = resolve_memory_id(memory_id)
+    if not full_id:
+        return {'result': 'error', 'message': f"No encontre memoria con ID que empiece con '{memory_id}'"}
+
+    p = _clamp_pad_value(pleasure)
+    a = _clamp_pad_value(arousal)
+    d = _clamp_pad_value(dominance)
+    emotion_label = _classify_emotion(p, a, d)
+    intensity = _calculate_emotional_intensity(p, a, d)
+
+    pg.update_payload(full_id, {
+        'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
+        'pad_emotion': emotion_label, 'pad_intensity': intensity,
+        'experiential_emotional_weight': min(intensity / 1.73, 1.0),
+        'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral',
+    })
+    return {
+        'result': 'Memoria etiquetada con emocion', 'memory_id': memory_id,
+        'emotion': {'label': emotion_label, 'description': _get_emotion_text(emotion_label), 'pleasure': p, 'arousal': a, 'dominance': d, 'intensity': round(intensity, 2)}
+    }
+
+
+def _search_by_emotion_impl(emotion_type: str, threshold: float = 0.3, limit: int = 10) -> dict:
+    """Search memories by emotion type. Returns dict."""
+    valid_emotions = ['exuberant', 'dependent', 'relaxed', 'docile', 'hostile', 'anxious', 'disdainful', 'bored']
+    if emotion_type not in valid_emotions:
+        return {'result': 'error', 'message': f"Emocion no valida. Usar: {', '.join(valid_emotions)}"}
+
+    all_points, _ = pg.scroll(filters={"metadata_key": {"key": "pad_emotion", "value": emotion_type}}, limit=limit * 5, is_semantic=False)
+    points = [p for p in all_points if (p.payload or {}).get('pad_intensity', 0) >= threshold][:limit]
+
+    if not points:
+        return {'result': 'Sin resultados', 'emotion': emotion_type, 'memories': []}
+
+    try:
+        from modules.memory_core import _track_scroll_access
+        _track_scroll_access(points)
+    except Exception:
+        logger.warning("Failed to emit SCROLL_ACCESSED event", exc_info=True)
+
+    try:
+        from modules.memory_core import _emit_retrieval_event
+        _emit_retrieval_event(f"emotion:{emotion_type}", points, source="emotion")
+    except Exception:
+        pass
+
+    memories = []
+    for p in points:
+        memories.append({
+            'id': str(p.id)[:8], 'content': p.payload.get('data', 'N/A')[:80],
+            'emotion': p.payload.get('pad_emotion', 'unknown'),
+            'intensity': round(p.payload.get('pad_intensity', 0), 2),
+            'pleasure': p.payload.get('pad_pleasure', 0), 'arousal': p.payload.get('pad_arousal', 0),
+            'dominance': p.payload.get('pad_dominance', 0)
+        })
+
+    return {
+        'result': f'Encontradas {len(memories)} memorias',
+        'emotion': emotion_type, 'emotion_description': _get_emotion_text(emotion_type), 'memories': memories
+    }
+
+
+def _get_emotional_memories_impl(pleasure_range: str = None, arousal_range: str = None, limit: int = 10) -> dict:
+    """Search memories by PAD ranges. Returns dict."""
+    all_points, _ = pg.scroll(filters={}, limit=limit * 10, is_semantic=False)
+
+    def _matches(p):
+        pl = p.payload or {}
+        pad_p = pl.get('pad_pleasure', None)
+        pad_a = pl.get('pad_arousal', None)
+        pad_i = pl.get('pad_intensity', None)
+        if pad_i is None:
+            return False
+        if pleasure_range == 'positive' and (pad_p is None or pad_p < 0.2):
+            return False
+        if pleasure_range == 'negative' and (pad_p is None or pad_p > -0.2):
+            return False
+        if pleasure_range == 'neutral' and (pad_p is None or pad_p < -0.2 or pad_p > 0.2):
+            return False
+        if arousal_range == 'high' and (pad_a is None or pad_a < 0.3):
+            return False
+        if arousal_range == 'low' and (pad_a is None or pad_a > -0.3):
+            return False
+        if arousal_range == 'neutral' and (pad_a is None or pad_a < -0.3 or pad_a > 0.3):
+            return False
+        return True
+
+    points = [p for p in all_points if _matches(p)][:limit]
+
+    if not points:
+        return {'result': 'Sin resultados', 'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': []}
+
+    try:
+        from modules.memory_core import _track_scroll_access
+        _track_scroll_access(points)
+    except Exception:
+        pass
+
+    memories = []
+    for p in points:
+        memories.append({
+            'id': str(p.id)[:8], 'content': p.payload.get('data', 'N/A')[:80],
+            'emotion': p.payload.get('pad_emotion', 'unknown'),
+            'intensity': round(p.payload.get('pad_intensity', 0), 2),
+            'pleasure': round(p.payload.get('pad_pleasure', 0), 2),
+            'arousal': round(p.payload.get('pad_arousal', 0), 2),
+            'dominance': round(p.payload.get('pad_dominance', 0), 2)
+        })
+    return {
+        'result': f'Encontradas {len(memories)} memorias',
+        'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': memories
+    }
+
+
+# ============================================================
+# MCP TRANSPORT — JSON wrapping, error handling
+# ============================================================
+
 def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigger: str = None) -> str:
     """
     Establece el estado emocional actual usando el modelo PAD.
@@ -49,58 +395,7 @@ def set_emotional_state(pleasure: float, arousal: float, dominance: float, trigg
         trigger: Evento que causo el estado emocional (opcional)
     """
     try:
-        global _emotional_state
-        p = _clamp_pad_value(pleasure)
-        a = _clamp_pad_value(arousal)
-        d = _clamp_pad_value(dominance)
-
-        if _emotional_state['current']['timestamp']:
-            _emotional_state['history'].append(_emotional_state['current'].copy())
-            _emotional_state['history'] = _emotional_state['history'][-20:]
-
-        _emotional_state['current'] = {
-            'pleasure': p, 'arousal': a, 'dominance': d,
-            'timestamp': now_iso(), 'trigger': trigger
-        }
-        emotion_label = _classify_emotion(p, a, d)
-        emotion_text = _get_emotion_text(emotion_label)
-        intensity = _calculate_emotional_intensity(p, a, d)
-
-        # Emit EMOTION_CHANGED event for cross-module communication
-        try:
-            from modules.events import event_bus, Events
-            event_bus.emit(Events.EMOTION_CHANGED, {
-                'pleasure': p, 'arousal': a, 'dominance': d,
-                'emotion': emotion_label, 'intensity': round(intensity, 2),
-                'trigger': trigger,
-            })
-        except Exception:
-            logger.warning("Failed to emit EMOTION_CHANGED event", exc_info=True)
-
-        # Proposal #182: Persist PAD to SQLite for cross-process access
-        # (Russell 2003 Core Affect: affective state must persist)
-        try:
-            from modules.config import FTS_DB_PATH
-            import sqlite3
-            _db = sqlite3.connect(FTS_DB_PATH, timeout=2)
-            _db.execute(
-                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-                ("pad_current", json.dumps({
-                    'pleasure': p, 'arousal': a, 'dominance': d,
-                    'timestamp': _emotional_state['current']['timestamp'],
-                    'trigger': trigger or '',
-                }))
-            )
-            _db.commit()
-            _db.close()
-        except Exception:
-            pass
-
-        result = {
-            'result': 'Estado emocional actualizado',
-            'state': {'pleasure': p, 'arousal': a, 'dominance': d, 'emotion': emotion_label, 'description': emotion_text, 'intensity': round(intensity, 2), 'trigger': trigger}
-        }
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_set_emotional_state_impl(pleasure, arousal, dominance, trigger), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -113,36 +408,7 @@ def get_emotional_state(include_history: bool = False) -> str:
         include_history: Si incluir el historial de estados (default False)
     """
     try:
-        current = _emotional_state['current']
-        mood = _emotional_state['mood']
-
-        if current['timestamp']:
-            emotion_label = _classify_emotion(current['pleasure'], current['arousal'], current['dominance'])
-            emotion_text = _get_emotion_text(emotion_label)
-            intensity = _calculate_emotional_intensity(current['pleasure'], current['arousal'], current['dominance'])
-        else:
-            emotion_label = 'neutral'
-            emotion_text = 'sin estado emocional establecido'
-            intensity = 0.0
-
-        mood_label = _classify_emotion(mood['pleasure'], mood['arousal'], mood['dominance'])
-        mood_text = _get_emotion_text(mood_label)
-
-        result = {
-            'result': 'Estado emocional obtenido',
-            'current': {
-                'pleasure': current['pleasure'], 'arousal': current['arousal'], 'dominance': current['dominance'],
-                'emotion': emotion_label, 'description': emotion_text, 'intensity': round(intensity, 2),
-                'trigger': current['trigger'], 'timestamp': current['timestamp']
-            },
-            'mood_baseline': {
-                'pleasure': mood['pleasure'], 'arousal': mood['arousal'], 'dominance': mood['dominance'],
-                'emotion': mood_label, 'description': mood_text
-            }
-        }
-        if include_history:
-            result['history'] = _emotional_state['history'][-20:]
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_get_emotional_state_impl(include_history), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -157,24 +423,7 @@ def update_mood_baseline(pleasure: float = None, arousal: float = None, dominanc
         dominance: Nuevo nivel de dominancia baseline (-1.0 a 1.0, opcional)
     """
     try:
-        global _emotional_state
-        if pleasure is not None:
-            _emotional_state['mood']['pleasure'] = _clamp_pad_value(pleasure)
-        if arousal is not None:
-            _emotional_state['mood']['arousal'] = _clamp_pad_value(arousal)
-        if dominance is not None:
-            _emotional_state['mood']['dominance'] = _clamp_pad_value(dominance)
-        _emotional_state['mood']['last_updated'] = now_iso()
-
-        mood = _emotional_state['mood']
-        mood_label = _classify_emotion(mood['pleasure'], mood['arousal'], mood['dominance'])
-        mood_text = _get_emotion_text(mood_label)
-
-        result = {
-            'result': 'Mood baseline actualizado',
-            'mood': {'pleasure': mood['pleasure'], 'arousal': mood['arousal'], 'dominance': mood['dominance'], 'emotion': mood_label, 'description': mood_text, 'last_updated': mood['last_updated']}
-        }
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_update_mood_baseline_impl(pleasure, arousal, dominance), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -182,37 +431,7 @@ def update_mood_baseline(pleasure: float = None, arousal: float = None, dominanc
 def apply_emotional_decay() -> str:
     """Aplica decay al estado emocional actual, acercandolo al mood baseline."""
     try:
-        global _emotional_state
-        current = _emotional_state['current']
-        mood = _emotional_state['mood']
-        decay_rate = _emotional_state['decay_rate']
-
-        if not current['timestamp']:
-            return json.dumps({'result': 'Sin estado emocional para decaer', 'applied': False})
-
-        # Asymmetric decay: positive fades faster, negative persists
-        # Baumeister et al. 2001, Larsen & Prizmic 2008
-        p_decay = decay_rate * 1.5 if current['pleasure'] > mood['pleasure'] else decay_rate * 0.8
-        new_p = _clamp_pad_value(current['pleasure'] + (mood['pleasure'] - current['pleasure']) * p_decay)
-        new_a = _clamp_pad_value(current['arousal'] + (mood['arousal'] - current['arousal']) * decay_rate)
-        new_d = _clamp_pad_value(current['dominance'] + (mood['dominance'] - current['dominance']) * decay_rate)
-
-        _emotional_state['history'].append(current.copy())
-        _emotional_state['history'] = _emotional_state['history'][-20:]
-
-        _emotional_state['current'] = {
-            'pleasure': new_p, 'arousal': new_a, 'dominance': new_d,
-            'timestamp': now_iso(), 'trigger': 'decay'
-        }
-        emotion_label = _classify_emotion(new_p, new_a, new_d)
-        emotion_text = _get_emotion_text(emotion_label)
-
-        result = {
-            'result': 'Decay emocional aplicado', 'decay_rate': decay_rate,
-            'previous': {'pleasure': current['pleasure'], 'arousal': current['arousal'], 'dominance': current['dominance']},
-            'current': {'pleasure': round(new_p, 3), 'arousal': round(new_a, 3), 'dominance': round(new_d, 3), 'emotion': emotion_label, 'description': emotion_text}
-        }
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_apply_emotional_decay_impl(), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -220,41 +439,7 @@ def apply_emotional_decay() -> str:
 def get_emotional_expression() -> str:
     """Obtiene una expresion natural en texto del estado emocional actual."""
     try:
-        current = _emotional_state['current']
-        if not current['timestamp']:
-            return json.dumps({'result': 'Sin estado emocional', 'expression': 'Me siento en estado neutral, sin emociones particulares.', 'intensity': 'none'})
-
-        p, a, d = current['pleasure'], current['arousal'], current['dominance']
-        emotion_label = _classify_emotion(p, a, d)
-        emotion_text = _get_emotion_text(emotion_label)
-        intensity = _calculate_emotional_intensity(p, a, d)
-
-        if intensity < 0.3:
-            intensity_level, intensity_word = 'baja', 'ligeramente'
-        elif intensity < 0.7:
-            intensity_level, intensity_word = 'moderada', 'moderadamente'
-        elif intensity < 0.9:
-            intensity_level, intensity_word = 'alta', 'bastante'
-        else:
-            intensity_level, intensity_word = 'muy alta', 'muy'
-
-        expression = f"Me siento {intensity_word} {emotion_text}" + (f" debido a: {current['trigger']}" if current['trigger'] else "")
-        if d > 0.5:
-            expression += ". Me siento en control de la situacion."
-        elif d < -0.5:
-            expression += ". Me siento algo vulnerable o dependiente."
-
-        result = {
-            'result': 'Expresion emocional generada', 'expression': expression,
-            'emotion': emotion_label, 'emotion_spanish': emotion_text,
-            'intensity': intensity_level, 'intensity_value': round(intensity, 2),
-            'components': {
-                'pleasure': 'positivo' if p > 0 else 'negativo' if p < 0 else 'neutral',
-                'arousal': 'activado' if a > 0 else 'calmado' if a < 0 else 'neutral',
-                'dominance': 'dominante' if d > 0 else 'sumiso' if d < 0 else 'equilibrado'
-            }
-        }
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_get_emotional_expression_impl(), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -276,46 +461,7 @@ def add_memory_with_emotion(content: str, category: str = "general",
         importance: Importancia (critical, high, medium, low)
     """
     try:
-        p = _clamp_pad_value(pleasure)
-        a = _clamp_pad_value(arousal)
-        d = _clamp_pad_value(dominance)
-        emotion_label = _classify_emotion(p, a, d)
-        intensity = _calculate_emotional_intensity(p, a, d)
-
-        result = pg.add(content=content, category=category, source=source, importance=importance)
-
-        if result and result.get("results"):
-            for r in result["results"]:
-                mem_id = r.get("id")
-                if mem_id:
-                    themes = infer_themes(content)
-                    if not themes:
-                        themes = [category]
-                    self_ref = is_self_referential(content)
-                    if self_ref and 'identidad' not in themes:
-                        themes.append('identidad')
-
-                    ownership_metadata = {
-                        'ownership_is_mine': True, 'ownership_source': source,
-                        'ownership_confidence': 0.9 if source == 'experienced' else 0.7,
-                        'experiential_emotional_weight': min(intensity / 1.73, 1.0),
-                        'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral',
-                        'narrative_importance': importance, 'narrative_themes': themes,
-                        'attention_salience': 0.7 if importance in ['critical', 'high'] else 0.5,
-                        'attention_access_count': 0, 'attention_last_accessed': None,
-                        'temporal_session_id': get_session_id(), 'self_reference': self_ref,
-                        'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
-                        'pad_emotion': emotion_label, 'pad_intensity': intensity, '_v': 2.2
-                    }
-                    pg.update_payload(mem_id, ownership_metadata)
-
-        # P1: backup removed from hot path
-        result_json = {
-            'result': 'Memoria guardada con emocion',
-            'memory_id': result.get('results', [{}])[0].get('id', 'unknown')[:8] if result else 'unknown',
-            'emotion': {'label': emotion_label, 'description': _get_emotion_text(emotion_label), 'pleasure': p, 'arousal': a, 'dominance': d, 'intensity': round(intensity, 2)}
-        }
-        return json.dumps(result_json, ensure_ascii=False)
+        return json.dumps(_add_memory_with_emotion_impl(content, category, pleasure, arousal, dominance, source, importance), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -331,27 +477,7 @@ def tag_memory_emotion(memory_id: str, pleasure: float, arousal: float, dominanc
         dominance: Nivel de dominancia (-1.0 a 1.0)
     """
     try:
-        full_id = resolve_memory_id(memory_id)
-        if not full_id:
-            return json.dumps({'result': 'error', 'message': f"No encontre memoria con ID que empiece con '{memory_id}'"})
-
-        p = _clamp_pad_value(pleasure)
-        a = _clamp_pad_value(arousal)
-        d = _clamp_pad_value(dominance)
-        emotion_label = _classify_emotion(p, a, d)
-        intensity = _calculate_emotional_intensity(p, a, d)
-
-        pg.update_payload(full_id, {
-            'pad_pleasure': p, 'pad_arousal': a, 'pad_dominance': d,
-            'pad_emotion': emotion_label, 'pad_intensity': intensity,
-            'experiential_emotional_weight': min(intensity / 1.73, 1.0),
-            'experiential_emotional_valence': 'positive' if p > 0.2 else 'negative' if p < -0.2 else 'neutral',
-        })
-        result = {
-            'result': 'Memoria etiquetada con emocion', 'memory_id': memory_id,
-            'emotion': {'label': emotion_label, 'description': _get_emotion_text(emotion_label), 'pleasure': p, 'arousal': a, 'dominance': d, 'intensity': round(intensity, 2)}
-        }
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(_tag_memory_emotion_impl(memory_id, pleasure, arousal, dominance), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -366,45 +492,7 @@ def search_by_emotion(emotion_type: str, threshold: float = 0.3, limit: int = 10
         limit: Maximo de resultados (default 10)
     """
     try:
-        valid_emotions = ['exuberant', 'dependent', 'relaxed', 'docile', 'hostile', 'anxious', 'disdainful', 'bored']
-        if emotion_type not in valid_emotions:
-            return json.dumps({'result': 'error', 'message': f"Emocion no valida. Usar: {', '.join(valid_emotions)}"})
-
-        all_points, _ = pg.scroll(filters={"metadata_key": {"key": "pad_emotion", "value": emotion_type}}, limit=limit * 5, is_semantic=False)
-        # Post-filter by pad_intensity >= threshold (Range filter)
-        points = [p for p in all_points if (p.payload or {}).get('pad_intensity', 0) >= threshold][:limit]
-
-        if not points:
-            return json.dumps({'result': 'Sin resultados', 'emotion': emotion_type, 'memories': []})
-
-        # Access tracking (delegates to shared helper for consistency)
-        try:
-            from modules.memory_core import _track_scroll_access
-            _track_scroll_access(points)
-        except Exception:
-            logger.warning("Failed to emit SCROLL_ACCESSED event", exc_info=True)
-
-        # Proposal #67 Fix 3: Emit retrieval event for emotion searches
-        try:
-            from modules.memory_core import _emit_retrieval_event
-            _emit_retrieval_event(f"emotion:{emotion_type}", points, source="emotion")
-        except Exception:
-            pass
-
-        memories = []
-        for p in points:
-            memories.append({
-                'id': str(p.id)[:8], 'content': p.payload.get('data', 'N/A')[:80],
-                'emotion': p.payload.get('pad_emotion', 'unknown'),
-                'intensity': round(p.payload.get('pad_intensity', 0), 2),
-                'pleasure': p.payload.get('pad_pleasure', 0), 'arousal': p.payload.get('pad_arousal', 0),
-                'dominance': p.payload.get('pad_dominance', 0)
-            })
-
-        return json.dumps({
-            'result': f'Encontradas {len(memories)} memorias',
-            'emotion': emotion_type, 'emotion_description': _get_emotion_text(emotion_type), 'memories': memories
-        }, ensure_ascii=False)
+        return json.dumps(_search_by_emotion_impl(emotion_type, threshold, limit), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 
@@ -419,56 +507,7 @@ def get_emotional_memories(pleasure_range: str = None, arousal_range: str = None
         limit: Maximo de resultados (default 10)
     """
     try:
-        all_points, _ = pg.scroll(filters={}, limit=limit * 10, is_semantic=False)
-
-        # Post-filter by PAD ranges (Range filters applied in Python)
-        def _matches(p):
-            pl = p.payload or {}
-            pad_p = pl.get('pad_pleasure', None)
-            pad_a = pl.get('pad_arousal', None)
-            pad_i = pl.get('pad_intensity', None)
-            if pad_i is None:
-                return False
-            if pleasure_range == 'positive' and (pad_p is None or pad_p < 0.2):
-                return False
-            if pleasure_range == 'negative' and (pad_p is None or pad_p > -0.2):
-                return False
-            if pleasure_range == 'neutral' and (pad_p is None or pad_p < -0.2 or pad_p > 0.2):
-                return False
-            if arousal_range == 'high' and (pad_a is None or pad_a < 0.3):
-                return False
-            if arousal_range == 'low' and (pad_a is None or pad_a > -0.3):
-                return False
-            if arousal_range == 'neutral' and (pad_a is None or pad_a < -0.3 or pad_a > 0.3):
-                return False
-            return True
-
-        points = [p for p in all_points if _matches(p)][:limit]
-
-        if not points:
-            return json.dumps({'result': 'Sin resultados', 'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': []})
-
-        # Proposal #54: Access tracking for ACT-R base-level update
-        try:
-            from modules.memory_core import _track_scroll_access
-            _track_scroll_access(points)
-        except Exception:
-            pass
-
-        memories = []
-        for p in points:
-            memories.append({
-                'id': str(p.id)[:8], 'content': p.payload.get('data', 'N/A')[:80],
-                'emotion': p.payload.get('pad_emotion', 'unknown'),
-                'intensity': round(p.payload.get('pad_intensity', 0), 2),
-                'pleasure': round(p.payload.get('pad_pleasure', 0), 2),
-                'arousal': round(p.payload.get('pad_arousal', 0), 2),
-                'dominance': round(p.payload.get('pad_dominance', 0), 2)
-            })
-        return json.dumps({
-            'result': f'Encontradas {len(memories)} memorias',
-            'filters': {'pleasure_range': pleasure_range, 'arousal_range': arousal_range}, 'memories': memories
-        }, ensure_ascii=False)
+        return json.dumps(_get_emotional_memories_impl(pleasure_range, arousal_range, limit), ensure_ascii=False)
     except Exception as e:
         return json.dumps({'result': 'error', 'message': redact_secrets(str(e))})
 

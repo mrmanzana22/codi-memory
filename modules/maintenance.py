@@ -11,7 +11,7 @@ from modules.pg_store import pg
 
 
 # ============================================================
-# MANTENIMIENTO PERIODICO
+# BUSINESS LOGIC — module-level functions, raise exceptions
 # ============================================================
 
 MANTENIMIENTO_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mantenimiento.json")
@@ -423,6 +423,10 @@ def _limpiar_recordatorios() -> str:
     except Exception as e:
         return f"Error: {redact_secrets(str(e))}"
 
+
+# ============================================================
+# MCP TRANSPORT — thin wrappers, register_tools
+# ============================================================
 
 def register_tools(mcp):
     """Register all maintenance and recordatorio tools with the MCP server."""

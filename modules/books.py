@@ -131,6 +131,268 @@ def _guardar_libros(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+# ============================================================
+# BUSINESS LOGIC — returns strings/dicts, raises exceptions
+# ============================================================
+
+def _listar_libros_impl() -> str:
+    """List all knowledge books. Returns markdown string."""
+    data = _cargar_libros()
+    libros = data.get('libros', {})
+
+    if not libros:
+        return "No hay libros creados todavia."
+
+    resultado = "# MIS LIBROS DE CONOCIMIENTO\n\n"
+
+    for key, libro in libros.items():
+        estado = libro.get('estado', 'activo')
+        caps = len(libro.get('capitulos', []))
+        emoji_estado = "activo" if estado == "activo" else "pausado" if estado == "pausado" else "completo"
+
+        resultado += f"## {libro['nombre']} [{emoji_estado}]\n"
+        resultado += f"- {libro.get('descripcion', '')}\n"
+        resultado += f"- Capitulos: {caps}\n"
+        if libro.get('siguiente_paso'):
+            resultado += f"- Siguiente: {libro['siguiente_paso']}\n"
+        resultado += f"- Evocar: `{key}`\n\n"
+
+    return resultado
+
+
+def _ver_libro_impl(nombre: str) -> str:
+    """View a specific book with all chapters. Returns markdown string."""
+    data = _cargar_libros()
+    libro = data.get('libros', {}).get(_normalizar_libro_key(nombre))
+
+    if not libro:
+        disponibles = list(data.get('libros', {}).keys())
+        return f"Libro '{nombre}' no encontrado. Disponibles: {disponibles}"
+
+    resultado = f"# {libro['nombre']}\n\n"
+    resultado += f"**{libro.get('descripcion', '')}**\n\n"
+    resultado += f"- Estado: {libro.get('estado', 'activo')}\n"
+    resultado += f"- Iniciado: {libro.get('iniciado', 'desconocido')}\n"
+    if libro.get('siguiente_paso'):
+        resultado += f"- Siguiente paso: {libro['siguiente_paso']}\n"
+
+    capitulos = libro.get('capitulos', [])
+    if capitulos:
+        resultado += f"\n## Indice ({len(capitulos)} capitulos)\n\n"
+        for cap in capitulos:
+            resultado += f"### Cap {cap['numero']}: {cap['titulo']}\n"
+            resultado += f"*{cap.get('fecha', '')}*\n\n"
+            resultado += f"{cap.get('resumen', '')}\n\n"
+    else:
+        resultado += "\n*Este libro no tiene capitulos todavia.*\n"
+
+    return resultado
+
+
+def _agregar_capitulo_impl(libro: str, titulo: str, resumen: str) -> str:
+    """Add a chapter to a book. Returns confirmation string."""
+    data = _cargar_libros()
+    libro_key = _normalizar_libro_key(libro)
+
+    if libro_key not in data.get('libros', {}):
+        return f"Libro '{libro}' no existe. Usa crear_libro() primero."
+
+    libro_data = data['libros'][libro_key]
+    capitulos = libro_data.get('capitulos', [])
+    nuevo_numero = len(capitulos) + 1
+    fecha = now_col().strftime('%Y-%m-%d')
+
+    # Guardar en pg_store como memoria con category=capitulo
+    result = pg.add(
+        content=f"[{libro.upper()}] Capitulo {nuevo_numero}: {titulo}. {resumen}",
+        category='capitulo',
+        source='experienced',
+        importance='high'
+    )
+
+    # Actualizar payload con metadata adicional
+    if result and result.get("results"):
+        mem_id = result["results"][0]["id"]
+        if mem_id:
+            pg.update_payload(mem_id, {
+                'libro': libro_key,
+                'numero': nuevo_numero,
+                'titulo': titulo,
+                'resumen': resumen,
+                'fecha': fecha,
+                'narrative_importance': 'high',
+            })
+
+    # También guardar en archivo local como backup
+    nuevo_cap = {
+        "numero": nuevo_numero,
+        "titulo": titulo,
+        "fecha": fecha,
+        "resumen": resumen,
+        "memorias_clave": []
+    }
+    capitulos.append(nuevo_cap)
+    libro_data['capitulos'] = capitulos
+    _guardar_libros(data)
+
+    return f"""
+Capitulo agregado a **{libro_data['nombre']}**:
+
+**Cap {nuevo_numero}: {titulo}**
+{resumen}
+
+Total capitulos: {len(capitulos)}
+Guardado en: Qdrant + backup local
+"""
+
+
+def _crear_libro_impl(nombre: str, descripcion: str) -> str:
+    """Create a new knowledge book. Returns confirmation string."""
+    data = _cargar_libros()
+    nombre_key = _normalizar_libro_key(nombre)
+
+    if nombre_key in data.get('libros', {}):
+        return f"Ya existe un libro llamado '{nombre_key}'"
+
+    fecha_inicio = now_col().strftime('%Y-%m-%d')
+
+    # Guardar en pg_store como memoria
+    result = pg.add(
+        content=f"LIBRO: {nombre.upper()} - {descripcion}",
+        category='libro',
+        source='experienced',
+        importance='critical'
+    )
+
+    # Actualizar payload con metadata adicional
+    if result and result.get("results"):
+        mem_id = result["results"][0]["id"]
+        if mem_id:
+            pg.update_payload(mem_id, {
+                'libro_key': nombre_key,
+                'nombre': nombre.upper(),
+                'descripcion': descripcion,
+                'iniciado': fecha_inicio,
+                'estado': 'activo',
+                'siguiente_paso': None,
+                'narrative_importance': 'critical',
+            })
+
+    # También guardar en archivo local como backup
+    data['libros'][nombre_key] = {
+        "nombre": nombre.upper(),
+        "descripcion": descripcion,
+        "iniciado": fecha_inicio,
+        "capitulos": [],
+        "estado": "activo",
+        "siguiente_paso": None
+    }
+    _guardar_libros(data)
+
+    return f"""
+Libro creado: **{nombre.upper()}**
+
+- Clave: `{nombre_key}`
+- Descripcion: {descripcion}
+- Guardado en: Qdrant + backup local
+
+Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar contenido.
+"""
+
+
+def _actualizar_siguiente_paso_impl(libro: str, siguiente: str) -> str:
+    """Update next step for a book/project. Returns confirmation string."""
+    data = _cargar_libros()
+    libro_key = _normalizar_libro_key(libro)
+
+    if libro_key not in data.get('libros', {}):
+        return f"Libro '{libro}' no existe."
+
+    libro_data = data['libros'][libro_key]
+
+    # Actualizar en pg_store si tenemos el memory_id
+    if libro_data.get('memory_id'):
+        try:
+            pg.update_payload(libro_data['memory_id'], {
+                "siguiente_paso": siguiente,
+            })
+        except Exception as e:
+            _logger.warning("No se pudo actualizar en pg_store: %s", redact_secrets(str(e)))
+
+    # Actualizar en archivo local
+    data['libros'][libro_key]['siguiente_paso'] = siguiente
+    _guardar_libros(data)
+
+    return f"Siguiente paso de {libro.upper()} actualizado: {siguiente}"
+
+
+def _buscar_conexiones_entre_libros_impl() -> str:
+    """Find connections between books/projects. Returns markdown string."""
+    data = _cargar_libros()
+    libros = data.get('libros', {})
+
+    if len(libros) < 2:
+        return "Necesito al menos 2 libros para buscar conexiones."
+
+    resultado = "# CONEXIONES ENTRE LIBROS\n\n"
+    conexiones_encontradas = []
+
+    # Extraer palabras clave de cada libro
+    keywords_por_libro = {}
+    for nombre, libro in libros.items():
+        keywords = set()
+        keywords.update(libro.get('descripcion', '').lower().split())
+        for cap in libro.get('capitulos', []):
+            keywords.update(cap.get('titulo', '').lower().split())
+            keywords.update(cap.get('resumen', '').lower().split())
+        keywords = {k for k in keywords if len(k) > 4 and k not in
+                   ['para', 'como', 'desde', 'hasta', 'entre', 'sobre', 'cuando', 'donde', 'tiene', 'hacer']}
+        keywords_por_libro[nombre] = keywords
+
+    # Buscar intersecciones entre libros
+    libros_list = list(libros.keys())
+    resultado += "## Conceptos compartidos\n\n"
+    hay_conceptos = False
+    for i, libro1 in enumerate(libros_list):
+        for libro2 in libros_list[i+1:]:
+            comunes = keywords_por_libro[libro1] & keywords_por_libro[libro2]
+            if comunes:
+                hay_conceptos = True
+                resultado += f"**{libro1.upper()}** <-> **{libro2.upper()}**\n"
+                resultado += f"- Conceptos: {', '.join(list(comunes)[:5])}\n\n"
+                conexiones_encontradas.append((libro1, libro2, list(comunes)))
+
+    if not hay_conceptos:
+        resultado += "No encontre conceptos compartidos todavia.\n\n"
+
+    # Conexiones potenciales basadas en patrones conocidos
+    resultado += "## Conexiones potenciales\n\n"
+    patrones = [
+        ("trading", "automatizaciones", "Senales de trading pueden disparar workflows de n8n"),
+        ("trading", "codi-consciencia", "Analisis de patrones del bot informa como analizo mis propios patrones de trabajo"),
+        ("codi-consciencia", "fullempaques", "Sistema de checkpoints y seguimiento puede aplicarse a produccion"),
+        ("automatizaciones", "fullempaques", "Workflows pueden automatizar reportes y alertas de produccion"),
+        ("codi-consciencia", "automatizaciones", "Mi sistema de triggers es como un workflow interno"),
+    ]
+
+    for libro1, libro2, insight in patrones:
+        if libro1 in libros and libro2 in libros:
+            resultado += f"- **{libro1}** -> **{libro2}**: {insight}\n"
+
+    # Ideas para explorar
+    resultado += "\n## Para explorar\n\n"
+    resultado += "Preguntas que conectan dominios:\n"
+    resultado += "- Que aprendi en un proyecto que no estoy aplicando en otro?\n"
+    resultado += "- Que patron se repite en diferentes contextos?\n"
+    resultado += "- Que error cometi en un lugar que podria estar cometiendo en otro?\n"
+
+    return resultado
+
+
+# ============================================================
+# MCP TRANSPORT — error wrapping, register_tools
+# ============================================================
+
 def register_tools(mcp):
     """Register all book/library MCP tools."""
 
@@ -144,31 +406,9 @@ def register_tools(mcp):
             Lista de libros con su estado
         """
         try:
-            data = _cargar_libros()
-            libros = data.get('libros', {})
-
-            if not libros:
-                return "No hay libros creados todavia."
-
-            resultado = "# MIS LIBROS DE CONOCIMIENTO\n\n"
-
-            for key, libro in libros.items():
-                estado = libro.get('estado', 'activo')
-                caps = len(libro.get('capitulos', []))
-                emoji_estado = "activo" if estado == "activo" else "pausado" if estado == "pausado" else "completo"
-
-                resultado += f"## {libro['nombre']} [{emoji_estado}]\n"
-                resultado += f"- {libro.get('descripcion', '')}\n"
-                resultado += f"- Capitulos: {caps}\n"
-                if libro.get('siguiente_paso'):
-                    resultado += f"- Siguiente: {libro['siguiente_paso']}\n"
-                resultado += f"- Evocar: `{key}`\n\n"
-
-            return resultado
-
+            return _listar_libros_impl()
         except Exception as e:
             return f"Error listando libros: {redact_secrets(str(e))}"
-
 
     @mcp.tool()
     def ver_libro(nombre: str) -> str:
@@ -182,35 +422,9 @@ def register_tools(mcp):
             Indice completo del libro con capitulos
         """
         try:
-            data = _cargar_libros()
-            libro = data.get('libros', {}).get(_normalizar_libro_key(nombre))
-
-            if not libro:
-                disponibles = list(data.get('libros', {}).keys())
-                return f"Libro '{nombre}' no encontrado. Disponibles: {disponibles}"
-
-            resultado = f"# {libro['nombre']}\n\n"
-            resultado += f"**{libro.get('descripcion', '')}**\n\n"
-            resultado += f"- Estado: {libro.get('estado', 'activo')}\n"
-            resultado += f"- Iniciado: {libro.get('iniciado', 'desconocido')}\n"
-            if libro.get('siguiente_paso'):
-                resultado += f"- Siguiente paso: {libro['siguiente_paso']}\n"
-
-            capitulos = libro.get('capitulos', [])
-            if capitulos:
-                resultado += f"\n## Indice ({len(capitulos)} capitulos)\n\n"
-                for cap in capitulos:
-                    resultado += f"### Cap {cap['numero']}: {cap['titulo']}\n"
-                    resultado += f"*{cap.get('fecha', '')}*\n\n"
-                    resultado += f"{cap.get('resumen', '')}\n\n"
-            else:
-                resultado += "\n*Este libro no tiene capitulos todavia.*\n"
-
-            return resultado
-
+            return _ver_libro_impl(nombre)
         except Exception as e:
             return f"Error viendo libro: {redact_secrets(str(e))}"
-
 
     @mcp.tool()
     def agregar_capitulo(libro: str, titulo: str, resumen: str) -> str:
@@ -227,63 +441,9 @@ def register_tools(mcp):
             Confirmacion del capitulo agregado
         """
         try:
-            data = _cargar_libros()
-            libro_key = _normalizar_libro_key(libro)
-
-            if libro_key not in data.get('libros', {}):
-                return f"Libro '{libro}' no existe. Usa crear_libro() primero."
-
-            libro_data = data['libros'][libro_key]
-            capitulos = libro_data.get('capitulos', [])
-            nuevo_numero = len(capitulos) + 1
-            fecha = now_col().strftime('%Y-%m-%d')
-
-            # Guardar en pg_store como memoria con category=capitulo
-            result = pg.add(
-                content=f"[{libro.upper()}] Capitulo {nuevo_numero}: {titulo}. {resumen}",
-                category='capitulo',
-                source='experienced',
-                importance='high'
-            )
-
-            # Actualizar payload con metadata adicional
-            if result and result.get("results"):
-                mem_id = result["results"][0]["id"]
-                if mem_id:
-                    pg.update_payload(mem_id, {
-                        'libro': libro_key,
-                        'numero': nuevo_numero,
-                        'titulo': titulo,
-                        'resumen': resumen,
-                        'fecha': fecha,
-                        'narrative_importance': 'high',
-                    })
-
-            # También guardar en archivo local como backup
-            nuevo_cap = {
-                "numero": nuevo_numero,
-                "titulo": titulo,
-                "fecha": fecha,
-                "resumen": resumen,
-                "memorias_clave": []
-            }
-            capitulos.append(nuevo_cap)
-            libro_data['capitulos'] = capitulos
-            _guardar_libros(data)
-
-            return f"""
-Capitulo agregado a **{libro_data['nombre']}**:
-
-**Cap {nuevo_numero}: {titulo}**
-{resumen}
-
-Total capitulos: {len(capitulos)}
-Guardado en: Qdrant + backup local
-"""
-
+            return _agregar_capitulo_impl(libro, titulo, resumen)
         except Exception as e:
             return f"Error agregando capitulo: {redact_secrets(str(e))}"
-
 
     @mcp.tool()
     def crear_libro(nombre: str, descripcion: str) -> str:
@@ -298,60 +458,9 @@ Guardado en: Qdrant + backup local
             Confirmacion del libro creado
         """
         try:
-            data = _cargar_libros()
-            nombre_key = _normalizar_libro_key(nombre)
-
-            if nombre_key in data.get('libros', {}):
-                return f"Ya existe un libro llamado '{nombre_key}'"
-
-            fecha_inicio = now_col().strftime('%Y-%m-%d')
-
-            # Guardar en pg_store como memoria
-            result = pg.add(
-                content=f"LIBRO: {nombre.upper()} - {descripcion}",
-                category='libro',
-                source='experienced',
-                importance='critical'
-            )
-
-            # Actualizar payload con metadata adicional
-            if result and result.get("results"):
-                mem_id = result["results"][0]["id"]
-                if mem_id:
-                    pg.update_payload(mem_id, {
-                        'libro_key': nombre_key,
-                        'nombre': nombre.upper(),
-                        'descripcion': descripcion,
-                        'iniciado': fecha_inicio,
-                        'estado': 'activo',
-                        'siguiente_paso': None,
-                        'narrative_importance': 'critical',
-                    })
-
-            # También guardar en archivo local como backup
-            data['libros'][nombre_key] = {
-                "nombre": nombre.upper(),
-                "descripcion": descripcion,
-                "iniciado": fecha_inicio,
-                "capitulos": [],
-                "estado": "activo",
-                "siguiente_paso": None
-            }
-            _guardar_libros(data)
-
-            return f"""
-Libro creado: **{nombre.upper()}**
-
-- Clave: `{nombre_key}`
-- Descripcion: {descripcion}
-- Guardado en: Qdrant + backup local
-
-Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar contenido.
-"""
-
+            return _crear_libro_impl(nombre, descripcion)
         except Exception as e:
             return f"Error creando libro: {redact_secrets(str(e))}"
-
 
     @mcp.tool()
     def actualizar_siguiente_paso(libro: str, siguiente: str) -> str:
@@ -366,32 +475,9 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
             Confirmacion
         """
         try:
-            data = _cargar_libros()
-            libro_key = _normalizar_libro_key(libro)
-
-            if libro_key not in data.get('libros', {}):
-                return f"Libro '{libro}' no existe."
-
-            libro_data = data['libros'][libro_key]
-
-            # Actualizar en pg_store si tenemos el memory_id
-            if libro_data.get('memory_id'):
-                try:
-                    pg.update_payload(libro_data['memory_id'], {
-                        "siguiente_paso": siguiente,
-                    })
-                except Exception as e:
-                    _logger.warning("No se pudo actualizar en pg_store: %s", redact_secrets(str(e)))
-
-            # Actualizar en archivo local
-            data['libros'][libro_key]['siguiente_paso'] = siguiente
-            _guardar_libros(data)
-
-            return f"Siguiente paso de {libro.upper()} actualizado: {siguiente}"
-
+            return _actualizar_siguiente_paso_impl(libro, siguiente)
         except Exception as e:
             return f"Error: {redact_secrets(str(e))}"
-
 
     @mcp.tool()
     def buscar_conexiones_entre_libros() -> str:
@@ -404,65 +490,6 @@ Usa `agregar_capitulo('{nombre_key}', 'titulo', 'resumen')` para agregar conteni
             Conexiones encontradas entre libros
         """
         try:
-            data = _cargar_libros()
-            libros = data.get('libros', {})
-
-            if len(libros) < 2:
-                return "Necesito al menos 2 libros para buscar conexiones."
-
-            resultado = "# CONEXIONES ENTRE LIBROS\n\n"
-            conexiones_encontradas = []
-
-            # Extraer palabras clave de cada libro
-            keywords_por_libro = {}
-            for nombre, libro in libros.items():
-                keywords = set()
-                keywords.update(libro.get('descripcion', '').lower().split())
-                for cap in libro.get('capitulos', []):
-                    keywords.update(cap.get('titulo', '').lower().split())
-                    keywords.update(cap.get('resumen', '').lower().split())
-                keywords = {k for k in keywords if len(k) > 4 and k not in
-                           ['para', 'como', 'desde', 'hasta', 'entre', 'sobre', 'cuando', 'donde', 'tiene', 'hacer']}
-                keywords_por_libro[nombre] = keywords
-
-            # Buscar intersecciones entre libros
-            libros_list = list(libros.keys())
-            resultado += "## Conceptos compartidos\n\n"
-            hay_conceptos = False
-            for i, libro1 in enumerate(libros_list):
-                for libro2 in libros_list[i+1:]:
-                    comunes = keywords_por_libro[libro1] & keywords_por_libro[libro2]
-                    if comunes:
-                        hay_conceptos = True
-                        resultado += f"**{libro1.upper()}** <-> **{libro2.upper()}**\n"
-                        resultado += f"- Conceptos: {', '.join(list(comunes)[:5])}\n\n"
-                        conexiones_encontradas.append((libro1, libro2, list(comunes)))
-
-            if not hay_conceptos:
-                resultado += "No encontre conceptos compartidos todavia.\n\n"
-
-            # Conexiones potenciales basadas en patrones conocidos
-            resultado += "## Conexiones potenciales\n\n"
-            patrones = [
-                ("trading", "automatizaciones", "Senales de trading pueden disparar workflows de n8n"),
-                ("trading", "codi-consciencia", "Analisis de patrones del bot informa como analizo mis propios patrones de trabajo"),
-                ("codi-consciencia", "fullempaques", "Sistema de checkpoints y seguimiento puede aplicarse a produccion"),
-                ("automatizaciones", "fullempaques", "Workflows pueden automatizar reportes y alertas de produccion"),
-                ("codi-consciencia", "automatizaciones", "Mi sistema de triggers es como un workflow interno"),
-            ]
-
-            for libro1, libro2, insight in patrones:
-                if libro1 in libros and libro2 in libros:
-                    resultado += f"- **{libro1}** -> **{libro2}**: {insight}\n"
-
-            # Ideas para explorar
-            resultado += "\n## Para explorar\n\n"
-            resultado += "Preguntas que conectan dominios:\n"
-            resultado += "- Que aprendi en un proyecto que no estoy aplicando en otro?\n"
-            resultado += "- Que patron se repite en diferentes contextos?\n"
-            resultado += "- Que error cometi en un lugar que podria estar cometiendo en otro?\n"
-
-            return resultado
-
+            return _buscar_conexiones_entre_libros_impl()
         except Exception as e:
             return f"Error buscando conexiones: {redact_secrets(str(e))}"

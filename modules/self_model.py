@@ -1139,10 +1139,9 @@ def detect_self_discrepancies() -> dict:
         for pd in pred_discs:
             if pd["discrepancy_type"] == "actual/ought":
                 try:
-                    from modules.working_memory import push_to_working_memory, get_working_memory
-                    import json as _json
+                    from modules.working_memory import push_to_working_memory, _get_working_memory_impl
                     # Proposal #57 Fix 3: Dedup metacognitive alerts
-                    existing_wm = _json.loads(get_working_memory())
+                    existing_wm = _get_working_memory_impl()
                     active_items = existing_wm.get("items", [])
                     if any(item.get("content", "").startswith("METACOGNITIVE ALERT")
                            for item in active_items):
@@ -1373,6 +1372,11 @@ def get_self_as_agent_model():
         predictions=predictions,
     )
 
+
+# ============================================================
+# MCP TRANSPORT — register_tools
+# (Business logic above returns strings — no JSON stripping needed)
+# ============================================================
 
 def register_tools(mcp):
     """Register self-model MCP tools."""

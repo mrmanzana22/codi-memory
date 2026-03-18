@@ -18,7 +18,7 @@ from modules.memory_core import (
     get_project_timeline,
 )
 from modules.memory_smart import add_memory_smart
-from modules.working_memory import push_to_working_memory, get_working_memory
+from modules.working_memory import push_to_working_memory, get_working_memory, _get_working_memory_impl
 from modules.consciousness import get_workspace_state, despertar_codi, search_by_emotion
 from modules.maintenance import _ver_recordatorios_externos
 from modules.tracing import new_trace_id, get_trace_id
@@ -369,8 +369,7 @@ def recall(query: str, mode: str = "auto", limit: int = 8) -> str:
         # 1) Try working memory quick scan (cheap)
         wm_raw = None
         try:
-            wm_raw = get_working_memory()
-            wm = json.loads(wm_raw)
+            wm = _get_working_memory_impl()
             wm_items = wm.get("items", [])
             hits = []
             for it in wm_items:
@@ -512,8 +511,7 @@ def remember(content: str, importance: str = "auto", topic: str = "general",
             from modules.utils import _get_emotional_state
             wm_ctx = ""
             try:
-                wm_raw_ctx = get_working_memory()
-                wm_data_ctx = json.loads(wm_raw_ctx)
+                wm_data_ctx = _get_working_memory_impl()
                 wm_items_ctx = wm_data_ctx.get("items", [])[:10]
                 wm_ctx = "\n".join(
                     f"[{it.get('topic', '?')}] {it.get('content', '')}"
@@ -808,8 +806,7 @@ def context_snapshot(level: str = "light") -> str:
     wm_raw = ""
     wm_pretty = ""
     try:
-        wm_raw = get_working_memory()
-        wm_j = json.loads(wm_raw)
+        wm_j = _get_working_memory_impl()
         wm_pretty = wm_j.get("pretty", "")
         pretty_lines.append("## Working Memory\n" + (wm_pretty or "*Vacia.*"))
     except Exception:

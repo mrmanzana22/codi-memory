@@ -287,6 +287,11 @@ def update_beliefs(topic: str, old_belief: str, new_belief: str, reason: str) ->
         return f"Error actualizando creencia: {redact_secrets(str(e))}"
 
 
+# ============================================================
+# MCP TRANSPORT — register_tools
+# (Business logic above returns strings — no JSON stripping needed)
+# ============================================================
+
 def register_tools(mcp):
     """Register prediction MCP tools."""
     mcp.tool()(predict_context)

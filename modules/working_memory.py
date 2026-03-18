@@ -390,7 +390,295 @@ def wm_apply_decay(multiplier: float) -> int:
 
 
 # ============================================================
-# TOOLS
+# BUSINESS LOGIC — returns Python dicts, raises exceptions
+# ============================================================
+
+def _get_working_memory_impl() -> dict:
+    """Retrieve all active working memory items. Returns dict with items."""
+    with _get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM working_memory WHERE active = TRUE")
+            rows = cur.fetchall()
+
+        if not rows:
+            return {"items": [], "count": 0, "pretty": "# WORKING MEMORY\nVacia."}
+
+        now = now_iso()
+        ids = [r["id"] for r in rows]
+        conn.execute(
+            "UPDATE working_memory SET access_count = access_count + 1, "
+            "last_accessed_at = %s WHERE id = ANY(%s)",
+            (now, ids)
+        )
+
+        items = []
+        for r in rows:
+            s = _effective_score(r["relevance"], r["last_accessed_at"],
+                                 r["access_count"], r["created_at"])
+            items.append({
+                "id": r["id"],
+                "content": r["content"],
+                "topic": r["topic"],
+                "relevance": r["relevance"],
+                "chain_id": r["chain_id"],
+                "source": r["source"],
+                "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+                "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
+                "related_memory_id": r["related_memory_id"],
+                "access_count": (r["access_count"] or 0) + 1,
+                "last_accessed_at": now,
+                "effective_score": round(s, 4),
+            })
+
+        items.sort(key=lambda x: x["effective_score"], reverse=True)
+
+        chains = {}
+        for item in items:
+            cid = item["chain_id"] or "ungrouped"
+            chains.setdefault(cid, []).append(item)
+
+        pretty_lines = ["# WORKING MEMORY", f"Active: {len(items)} items\n"]
+        for cid, chain_items in chains.items():
+            pretty_lines.append(f"## Chain: {cid}")
+            for it in chain_items:
+                pretty_lines.append(
+                    f"- [{it['effective_score']:.2f}] {it['content'][:80]}"
+                )
+            pretty_lines.append("")
+
+        return {"items": items, "count": len(items), "pretty": "\n".join(pretty_lines)}
+
+
+def _push_to_working_memory_impl(
+    content: str,
+    topic: str = "general",
+    relevance: float = 0.5,
+    occurred_at: str = None,
+    source: str = "interaction"
+) -> dict:
+    """Push a new item into working memory. Returns dict."""
+    content_hash = hashlib.md5(content[:300].encode()).hexdigest()
+    _now = time.time()
+    if content_hash in _push_dedup and (_now - _push_dedup[content_hash]) < _DEDUP_WINDOW_S:
+        return {
+            "id": None, "deduped": True, "chain_id": None,
+            "topic": topic, "relevance": relevance,
+            "pretty": f"# WORKING MEMORY\nDeduped: {content[:60]}... (same content pushed <{_DEDUP_WINDOW_S}s ago)",
+        }
+    if len(_push_dedup) > 100:
+        cutoff = _now - _DEDUP_WINDOW_S
+        for k in list(_push_dedup):
+            if _push_dedup[k] < cutoff:
+                del _push_dedup[k]
+
+    created_at = now_iso()
+    if occurred_at is None:
+        occurred_at = created_at
+
+    relevance = min(1.0, max(0.0, float(relevance)))
+    base_relevance = relevance
+
+    try:
+        from modules.config import _emotional_state
+        current_arousal = abs(float(_emotional_state["current"].get("arousal", 0.0)))
+        if current_arousal > 0.05:
+            relevance = min(1.0, relevance + current_arousal * 0.15)
+    except Exception:
+        pass
+
+    with _get_conn() as conn:
+        with conn.transaction():
+            chain_id = _resolve_chain_id(conn, topic, occurred_at)
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO working_memory
+                       (content, topic, relevance, created_at, occurred_at,
+                        source, chain_id, active, access_count, machine_id)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
+                       RETURNING id""",
+                    (content, topic, relevance, created_at, occurred_at,
+                     source, chain_id, _MACHINE_ID)
+                )
+                new_id = cur.fetchone()[0]
+
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id, content FROM working_memory "
+                    "WHERE active = TRUE AND topic = %s AND id != %s",
+                    (topic, new_id)
+                )
+                for row in cur.fetchall():
+                    if _detect_contradiction(content, row["content"]) or \
+                       _content_similarity(content, row["content"]) > 0.85:
+                        conn.execute(
+                            "UPDATE working_memory SET active = FALSE WHERE id = %s",
+                            (row["id"],)
+                        )
+
+            _auto_curate_buffer(conn)
+
+        _push_dedup[content_hash] = _now
+
+        return {
+            "id": new_id,
+            "chain_id": chain_id,
+            "topic": topic,
+            "relevance": base_relevance,
+            "effective_relevance": relevance,
+            "created_at": created_at,
+            "occurred_at": occurred_at,
+            "pretty": f"# WORKING MEMORY\nPushed: {content[:60]}... -> chain {chain_id}",
+        }
+
+
+def _update_working_memory_impl(item_id: int, relevance: float = None, active: int = None) -> dict:
+    """Update a working memory item. Returns dict."""
+    if relevance is None and active is None:
+        return {"error": "Nothing to update"}
+
+    sets = []
+    params = []
+    if relevance is not None:
+        relevance = min(1.0, max(0.0, float(relevance)))
+        sets.append("relevance = %s")
+        params.append(relevance)
+    if active is not None:
+        active_bool = bool(active)
+        sets.append("active = %s")
+        params.append(active_bool)
+
+    params.append(int(item_id))
+
+    with _get_conn() as conn:
+        cursor = conn.execute(
+            f"UPDATE working_memory SET {', '.join(sets)} "
+            f"WHERE id = %s AND active = TRUE",
+            params
+        )
+
+        if cursor.rowcount == 0:
+            return {"error": "Item archivado o inexistente, no se puede modificar", "item_id": int(item_id)}
+
+        return {
+            "updated": True,
+            "item_id": int(item_id),
+            "changes": {k: v for k, v in [("relevance", relevance), ("active", active)] if v is not None},
+            "pretty": f"# WORKING MEMORY\nUpdated item {item_id}",
+        }
+
+
+def _get_narrative_chain_impl(topic_or_chain_id: str, depth: int = 20) -> dict:
+    """Retrieve a narrative chain. Returns dict."""
+    depth = min(100, max(1, int(depth)))
+
+    with _get_conn() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT * FROM working_memory WHERE chain_id = %s "
+                "ORDER BY occurred_at ASC LIMIT %s",
+                (topic_or_chain_id, depth)
+            )
+            rows = cur.fetchall()
+
+        if not rows:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT * FROM working_memory WHERE topic = %s "
+                    "ORDER BY occurred_at ASC LIMIT %s",
+                    (topic_or_chain_id, depth)
+                )
+                rows = cur.fetchall()
+
+    if not rows:
+        return {"items": [], "count": 0, "pretty": f"# NARRATIVE CHAIN\nNo items for '{topic_or_chain_id}'"}
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": r["id"],
+            "content": r["content"],
+            "topic": r["topic"],
+            "relevance": r["relevance"],
+            "chain_id": r["chain_id"],
+            "source": r["source"],
+            "created_at": r["created_at"].isoformat() if r["created_at"] and hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
+            "related_memory_id": r["related_memory_id"],
+            "active": r["active"],
+            "access_count": r["access_count"],
+        })
+
+    pretty_lines = [f"# NARRATIVE CHAIN: {topic_or_chain_id}", f"Items: {len(items)}\n"]
+    for it in items:
+        status = "active" if it.get("active") else "archived"
+        pretty_lines.append(f"- [{it['occurred_at']}] ({status}) {it['content'][:80]}")
+
+    return {"items": items, "count": len(items), "pretty": "\n".join(pretty_lines)}
+
+
+def _link_narrative_trace_impl(trace_name: str, chain_ids: list, theme: str = None) -> dict:
+    """Link chains into a narrative trace. Returns dict."""
+    if not chain_ids or not isinstance(chain_ids, list):
+        return {"error": "chain_ids must be a non-empty list"}
+
+    now = now_iso()
+    chain_ids_json = json.dumps(chain_ids, ensure_ascii=False)
+
+    with _get_conn() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT id FROM narrative_traces WHERE trace_name = %s",
+                    (trace_name,)
+                )
+                existing = cur.fetchone()
+
+            if existing:
+                trace_id = existing["id"]
+                conn.execute(
+                    "UPDATE narrative_traces SET chain_ids = %s::jsonb, theme = %s, "
+                    "last_updated = %s WHERE id = %s",
+                    (chain_ids_json, theme, now, trace_id)
+                )
+                conn.execute("DELETE FROM trace_chains WHERE trace_id = %s", (trace_id,))
+                for cid in chain_ids:
+                    conn.execute(
+                        "INSERT INTO trace_chains (trace_id, chain_id) "
+                        "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (trace_id, cid)
+                    )
+                action = "updated"
+            else:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO narrative_traces "
+                        "(trace_name, chain_ids, theme, created_at, last_updated, active) "
+                        "VALUES (%s, %s::jsonb, %s, %s, %s, TRUE) RETURNING id",
+                        (trace_name, chain_ids_json, theme, now, now)
+                    )
+                    trace_id = cur.fetchone()[0]
+                for cid in chain_ids:
+                    conn.execute(
+                        "INSERT INTO trace_chains (trace_id, chain_id) "
+                        "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (trace_id, cid)
+                    )
+                action = "created"
+
+        return {
+            "trace_id": trace_id,
+            "trace_name": trace_name,
+            "chain_ids": chain_ids,
+            "theme": theme,
+            "action": action,
+            "pretty": f"# NARRATIVE TRACE\n{action.title()}: {trace_name} "
+                      f"({len(chain_ids)} chains)",
+        }
+
+
+# ============================================================
+# MCP TRANSPORT — JSON wrapping, error handling
 # ============================================================
 
 def get_working_memory() -> str:
@@ -399,71 +687,7 @@ def get_working_memory() -> str:
     Groups by chain_id. Updates access_count and last_accessed_at.
     """
     try:
-        with _get_conn() as conn:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT * FROM working_memory WHERE active = TRUE")
-                rows = cur.fetchall()
-
-            if not rows:
-                return json.dumps({
-                    "items": [], "count": 0,
-                    "pretty": "# WORKING MEMORY\nVacia."
-                }, ensure_ascii=False)
-
-            now = now_iso()
-            ids = [r["id"] for r in rows]
-
-            # Update access in same connection (autocommit handles each statement)
-            conn.execute(
-                "UPDATE working_memory SET access_count = access_count + 1, "
-                "last_accessed_at = %s WHERE id = ANY(%s)",
-                (now, ids)
-            )
-
-            # Score and sort
-            items = []
-            for r in rows:
-                s = _effective_score(r["relevance"], r["last_accessed_at"],
-                                     r["access_count"], r["created_at"])
-                items.append({
-                    "id": r["id"],
-                    "content": r["content"],
-                    "topic": r["topic"],
-                    "relevance": r["relevance"],
-                    "chain_id": r["chain_id"],
-                    "source": r["source"],
-                    "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
-                    "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
-                    "related_memory_id": r["related_memory_id"],
-                    "access_count": (r["access_count"] or 0) + 1,
-                    "last_accessed_at": now,
-                    "effective_score": round(s, 4),
-                })
-
-            items.sort(key=lambda x: x["effective_score"], reverse=True)
-
-            # Group by chain
-            chains = {}
-            for item in items:
-                cid = item["chain_id"] or "ungrouped"
-                chains.setdefault(cid, []).append(item)
-
-            # Pretty
-            pretty_lines = ["# WORKING MEMORY", f"Active: {len(items)} items\n"]
-            for cid, chain_items in chains.items():
-                pretty_lines.append(f"## Chain: {cid}")
-                for it in chain_items:
-                    pretty_lines.append(
-                        f"- [{it['effective_score']:.2f}] {it['content'][:80]}"
-                    )
-                pretty_lines.append("")
-
-            return json.dumps({
-                "items": items,
-                "count": len(items),
-                "pretty": "\n".join(pretty_lines),
-            }, ensure_ascii=False)
-
+        return json.dumps(_get_working_memory_impl(), ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
@@ -487,87 +711,7 @@ def push_to_working_memory(
         source: Origin of info ('interaction', 'system', 'observation')
     """
     try:
-        # Dedup: skip if identical content pushed in last 120 seconds
-        content_hash = hashlib.md5(content[:300].encode()).hexdigest()
-        _now = time.time()
-        if content_hash in _push_dedup and (_now - _push_dedup[content_hash]) < _DEDUP_WINDOW_S:
-            return json.dumps({
-                "id": None, "deduped": True, "chain_id": None,
-                "topic": topic, "relevance": relevance,
-                "pretty": f"# WORKING MEMORY\nDeduped: {content[:60]}... (same content pushed <{_DEDUP_WINDOW_S}s ago)",
-            }, ensure_ascii=False)
-        # Periodic cleanup of stale entries
-        if len(_push_dedup) > 100:
-            cutoff = _now - _DEDUP_WINDOW_S
-            for k in list(_push_dedup):
-                if _push_dedup[k] < cutoff:
-                    del _push_dedup[k]
-
-        created_at = now_iso()
-        if occurred_at is None:
-            occurred_at = created_at
-
-        relevance = min(1.0, max(0.0, float(relevance)))
-        base_relevance = relevance
-
-        # Arousal modulates WM admission priority (Phelps 2006)
-        try:
-            from modules.config import _emotional_state
-            current_arousal = abs(float(_emotional_state["current"].get("arousal", 0.0)))
-            if current_arousal > 0.05:
-                relevance = min(1.0, relevance + current_arousal * 0.15)
-        except Exception:
-            pass
-
-        with _get_conn() as conn:
-            with conn.transaction():
-                chain_id = _resolve_chain_id(conn, topic, occurred_at)
-
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO working_memory
-                           (content, topic, relevance, created_at, occurred_at,
-                            source, chain_id, active, access_count, machine_id)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
-                           RETURNING id""",
-                        (content, topic, relevance, created_at, occurred_at,
-                         source, chain_id, _MACHINE_ID)
-                    )
-                    new_id = cur.fetchone()[0]
-
-                # Belief revision + duplicate consolidation (single pass)
-                # 1. Contradiction (Gärdenfors 1988): antonym-based retraction
-                # 2. Near-duplicate (Jaccard > 0.85): keeps only newest
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(
-                        "SELECT id, content FROM working_memory "
-                        "WHERE active = TRUE AND topic = %s AND id != %s",
-                        (topic, new_id)
-                    )
-                    for row in cur.fetchall():
-                        if _detect_contradiction(content, row["content"]) or \
-                           _content_similarity(content, row["content"]) > 0.85:
-                            conn.execute(
-                                "UPDATE working_memory SET active = FALSE WHERE id = %s",
-                                (row["id"],)
-                            )
-
-                _auto_curate_buffer(conn)
-
-            # Cache dedup AFTER successful transaction (Bug #009)
-            _push_dedup[content_hash] = _now
-
-            return json.dumps({
-                "id": new_id,
-                "chain_id": chain_id,
-                "topic": topic,
-                "relevance": base_relevance,
-                "effective_relevance": relevance,
-                "created_at": created_at,
-                "occurred_at": occurred_at,
-                "pretty": f"# WORKING MEMORY\nPushed: {content[:60]}... -> chain {chain_id}",
-            }, ensure_ascii=False)
-
+        return json.dumps(_push_to_working_memory_impl(content, topic, relevance, occurred_at, source), ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
@@ -587,46 +731,7 @@ def update_working_memory(
         active: Set to 0 to archive, 1 to keep active
     """
     try:
-        if relevance is None and active is None:
-            return json.dumps({"error": "Nothing to update"}, ensure_ascii=False)
-
-        sets = []
-        params = []
-        if relevance is not None:
-            relevance = min(1.0, max(0.0, float(relevance)))
-            sets.append("relevance = %s")
-            params.append(relevance)
-        if active is not None:
-            active_bool = bool(active)
-            sets.append("active = %s")
-            params.append(active_bool)
-
-        params.append(int(item_id))
-
-        with _get_conn() as conn:
-            cursor = conn.execute(
-                f"UPDATE working_memory SET {', '.join(sets)} "
-                f"WHERE id = %s AND active = TRUE",
-                params
-            )
-
-            if cursor.rowcount == 0:
-                return json.dumps({
-                    "error": "Item archivado o inexistente, no se puede modificar",
-                    "item_id": int(item_id),
-                }, ensure_ascii=False)
-
-            return json.dumps({
-                "updated": True,
-                "item_id": int(item_id),
-                "changes": {
-                    k: v for k, v in
-                    [("relevance", relevance), ("active", active)]
-                    if v is not None
-                },
-                "pretty": f"# WORKING MEMORY\nUpdated item {item_id}",
-            }, ensure_ascii=False)
-
+        return json.dumps(_update_working_memory_impl(item_id, relevance, active), ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
@@ -644,69 +749,7 @@ def get_narrative_chain(
         depth: Max items to return (default 20)
     """
     try:
-        depth = min(100, max(1, int(depth)))
-
-        with _get_conn() as conn:
-            # Step 1: Try as chain_id
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
-                    "SELECT * FROM working_memory WHERE chain_id = %s "
-                    "ORDER BY occurred_at ASC LIMIT %s",
-                    (topic_or_chain_id, depth)
-                )
-                rows = cur.fetchall()
-
-            # Step 2: Fallback to topic
-            if not rows:
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(
-                        "SELECT * FROM working_memory WHERE topic = %s "
-                        "ORDER BY occurred_at ASC LIMIT %s",
-                        (topic_or_chain_id, depth)
-                    )
-                    rows = cur.fetchall()
-
-        if not rows:
-            return json.dumps({
-                "items": [], "count": 0,
-                "pretty": f"# NARRATIVE CHAIN\nNo items for '{topic_or_chain_id}'",
-            }, ensure_ascii=False)
-
-        items = []
-        for r in rows:
-            item = {
-                "id": r["id"],
-                "content": r["content"],
-                "topic": r["topic"],
-                "relevance": r["relevance"],
-                "chain_id": r["chain_id"],
-                "source": r["source"],
-                "created_at": r["created_at"].isoformat() if r["created_at"] and hasattr(r["created_at"], "isoformat") else r["created_at"],
-                "occurred_at": r["occurred_at"].isoformat() if r["occurred_at"] and hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
-                "related_memory_id": r["related_memory_id"],
-                "active": r["active"],
-                "access_count": r["access_count"],
-            }
-
-            items.append(item)
-
-        # Pretty
-        pretty_lines = [
-            f"# NARRATIVE CHAIN: {topic_or_chain_id}",
-            f"Items: {len(items)}\n",
-        ]
-        for it in items:
-            status = "active" if it.get("active") else "archived"
-            pretty_lines.append(
-                f"- [{it['occurred_at']}] ({status}) {it['content'][:80]}"
-            )
-
-        return json.dumps({
-            "items": items,
-            "count": len(items),
-            "pretty": "\n".join(pretty_lines),
-        }, ensure_ascii=False)
-
+        return json.dumps(_get_narrative_chain_impl(topic_or_chain_id, depth), ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
@@ -726,69 +769,7 @@ def link_narrative_trace(
         theme: Optional thematic label
     """
     try:
-        if not chain_ids or not isinstance(chain_ids, list):
-            return json.dumps({"error": "chain_ids must be a non-empty list"},
-                              ensure_ascii=False)
-
-        now = now_iso()
-        chain_ids_json = json.dumps(chain_ids, ensure_ascii=False)
-
-        with _get_conn() as conn:
-            with conn.transaction():
-                with conn.cursor(row_factory=dict_row) as cur:
-                    cur.execute(
-                        "SELECT id FROM narrative_traces WHERE trace_name = %s",
-                        (trace_name,)
-                    )
-                    existing = cur.fetchone()
-
-                if existing:
-                    trace_id = existing["id"]
-                    conn.execute(
-                        "UPDATE narrative_traces SET chain_ids = %s::jsonb, theme = %s, "
-                        "last_updated = %s WHERE id = %s",
-                        (chain_ids_json, theme, now, trace_id)
-                    )
-                    # Clean and re-insert trace_chains
-                    conn.execute(
-                        "DELETE FROM trace_chains WHERE trace_id = %s",
-                        (trace_id,)
-                    )
-                    for cid in chain_ids:
-                        conn.execute(
-                            "INSERT INTO trace_chains (trace_id, chain_id) "
-                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                            (trace_id, cid)
-                        )
-                    action = "updated"
-                else:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO narrative_traces "
-                            "(trace_name, chain_ids, theme, created_at, last_updated, active) "
-                            "VALUES (%s, %s::jsonb, %s, %s, %s, TRUE) "
-                            "RETURNING id",
-                            (trace_name, chain_ids_json, theme, now, now)
-                        )
-                        trace_id = cur.fetchone()[0]
-                    for cid in chain_ids:
-                        conn.execute(
-                            "INSERT INTO trace_chains (trace_id, chain_id) "
-                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                            (trace_id, cid)
-                        )
-                    action = "created"
-
-            return json.dumps({
-                "trace_id": trace_id,
-                "trace_name": trace_name,
-                "chain_ids": chain_ids,
-                "theme": theme,
-                "action": action,
-                "pretty": f"# NARRATIVE TRACE\n{action.title()}: {trace_name} "
-                          f"({len(chain_ids)} chains)",
-            }, ensure_ascii=False)
-
+        return json.dumps(_link_narrative_trace_impl(trace_name, chain_ids, theme), ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": redact_secrets(str(e))}, ensure_ascii=False)
 
