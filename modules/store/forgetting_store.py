@@ -38,7 +38,7 @@ class ForgettingStore:
         conn = self._get_conn()
         try:
             rif_row = conn.execute(
-                "SELECT COUNT(*) FROM strength_log WHERE event_type = 'rif_suppression'"
+                "SELECT COUNT(*) FROM strength_log WHERE event = 'rif_suppression'"
             ).fetchone()
             total_row = conn.execute("SELECT COUNT(*) FROM strength_log").fetchone()
 

@@ -188,17 +188,17 @@ def _build_contracts() -> Dict[str, Contract]:
                    target_lo=0.30, target_hi=0.70,
                    red_flag_lo=0.20, red_flag_hi=0.90,
                    paper="Dehaene & Changeux 2011"),
-            Metric("coalition_size", MetricDomain.GNW_IGNITION,
-                   "Items crossing ignition threshold",
-                   target_lo=2, target_hi=5,
-                   red_flag_lo=0, red_flag_hi=None,
-                   paper="Dehaene 2014"),
-            Metric("workspace_utilization", MetricDomain.GNW_IGNITION,
-                   "Fraction of 5 workspace slots occupied",
-                   target_lo=0.20, target_hi=0.80,
-                   red_flag_lo=0.0, red_flag_hi=1.0,
+            Metric("coalition_size", MetricDomain.INTEGRATION,
+                   "Mean active CX connections per snapshot (proxy for GNW breadth)",
+                   target_lo=3, target_hi=15,
+                   red_flag_lo=0, red_flag_hi=25,
+                   paper="Dehaene 2014 (proxy: CX active breadth)"),
+            Metric("workspace_utilization", MetricDomain.INTEGRATION,
+                   "Fraction of CX connections active (cx_active/cx_total)",
+                   target_lo=0.10, target_hi=0.60,
+                   red_flag_lo=0.0, red_flag_hi=0.90,
                    unit="%",
-                   paper="Cowan 2001"),
+                   paper="Integration breadth metric"),
             Metric("recurrent_pass_count", MetricDomain.RECURRENCE,
                    "Number of recurrent amplification passes",
                    target_lo=3, target_hi=5,
@@ -266,9 +266,9 @@ def _build_contracts() -> Dict[str, Contract]:
         theory="Schmidhuber 2010, Gottlieb 2013",
         metrics=[
             Metric("curiosity_generation_rate", MetricDomain.COMPLEXITY,
-                   "Questions generated per sleep cycle",
-                   target_lo=0.5, target_hi=5.0,
-                   red_flag_lo=0.0,
+                   "Questions generated per day (daemon + interactive)",
+                   target_lo=1.0, target_hi=50.0,
+                   red_flag_lo=0.0, red_flag_hi=100.0,
                    paper="Schmidhuber 2010"),
             Metric("curiosity_resolution_rate", MetricDomain.COMPLEXITY,
                    "Fraction of curiosities resolved within 7 days",
@@ -327,9 +327,9 @@ def _build_contracts() -> Dict[str, Contract]:
         theory="Graziano 2013, Rosenthal 2005",
         metrics=[
             Metric("self_model_refresh_frequency", MetricDomain.METACOGNITION,
-                   "How often self-model refreshes (interactions)",
-                   target_lo=10, target_hi=100,
-                   red_flag_hi=200,
+                   "Self-model tool calls per day (daemon + interactive)",
+                   target_lo=10, target_hi=300,
+                   red_flag_hi=500,
                    unit="interactions",
                    paper="Graziano 2013"),
             Metric("discrepancy_count", MetricDomain.METACOGNITION,
@@ -547,8 +547,16 @@ def collect_cx_metrics() -> Dict[str, Optional[float]]:
                         p = count / total_all
                         entropy -= p * math.log2(p)
                 metrics["cx_diversity_index"] = entropy
+                # PCI proxy: entropy_normalized * cascade_depth_normalized
+                # Casali et al 2013: perturbational complexity = integration * differentiation
+                max_entropy = math.log2(max(len(aggregated_fires), 1)) or 1.0
+                entropy_norm = entropy / max_entropy if max_entropy > 0 else 0
+                cascade_depth = metrics.get("cascade_depth", 0)
+                cascade_norm = min(1.0, cascade_depth / 6.0)  # Max expected depth ~6
+                metrics["pci_proxy"] = round(entropy_norm * cascade_norm, 4)
             else:
                 metrics["cx_diversity_index"] = 0.0
+                metrics["pci_proxy"] = 0.0
     except Exception as e:
         _logger.debug("collect_cx_metrics: %s", e)
     return metrics
@@ -568,11 +576,7 @@ def collect_gnw_metrics() -> Dict[str, Optional[float]]:
         db = connect_fts(FTS_DB_PATH)
         # GNW fires are tracked in cx_snapshots fire_counts
         # CX-5, CX-9, CX-16 are GNW-triggered (WORKSPACE_COMPETITION_COMPLETE)
-        rows = db.execute(
-            "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 10"
-        ).fetchall()
-        db.close()
-        # Aggregate across ALL stored snapshots for GNW data
+        # Aggregate across stored snapshots for GNW data
         all_rows = db.execute(
             "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 50"
         ).fetchall()
@@ -597,9 +601,30 @@ def collect_gnw_metrics() -> Dict[str, Optional[float]]:
             # Note: GNW fires mainly during interactive sessions, not sleep-loop
             if total_fires > 0:
                 metrics["ignition_ratio"] = total_gnw_fires / total_fires
+        # Coalition size proxy: active_cx from snapshots (mean of recent)
+        if all_rows:
+            active_counts = []
+            total_cx_counts = []
+            for r in all_rows:
+                try:
+                    snap = json.loads(r[0])
+                    ac = snap.get("active_cx")
+                    tc = snap.get("total_cx")
+                    if ac is not None:
+                        active_counts.append(ac)
+                    if tc is not None:
+                        total_cx_counts.append(tc)
+                except Exception:
+                    pass
+            if active_counts:
+                metrics["coalition_size"] = sum(active_counts) / len(active_counts)
+            if active_counts and total_cx_counts:
+                avg_active = sum(active_counts) / len(active_counts)
+                avg_total = sum(total_cx_counts) / len(total_cx_counts)
+                if avg_total > 0:
+                    metrics["workspace_utilization"] = avg_active / avg_total
         # Architectural constants
         metrics["recurrent_pass_count"] = 3  # Hardcoded N=3 in competition.py
-        metrics["coalition_size"] = None  # Needs runtime tracking — TODO
     except Exception as e:
         _logger.debug("collect_gnw_metrics: %s", e)
     return metrics
@@ -635,6 +660,23 @@ def collect_prediction_metrics() -> Dict[str, Optional[float]]:
                 variance = sum((s - mean_s) ** 2 for s in surprises) / len(surprises)
                 # Lower variance = more adapted. Map to turns-to-adapt proxy.
                 metrics["precision_adaptation_speed"] = max(1, min(20, 10 * (1 - variance)))
+                # PAD-from-precision: fraction of recent PAD updates from precision pathway
+                # Checks trigger field for AC/precision sources vs keyword sources
+                try:
+                    from modules.config import _emotional_state
+                    history = _emotional_state.get('history', [])
+                    current = _emotional_state.get('current', {})
+                    all_states = history[-20:] + ([current] if current.get('timestamp') else [])
+                    if all_states:
+                        precision_triggers = {"affective_charge", "text_inference", "decay",
+                                              "ac_update", "precision_dynamics"}
+                        from_precision = sum(1 for s in all_states
+                                             if any(t in (s.get('trigger') or '') for t in precision_triggers))
+                        metrics["pad_from_precision"] = from_precision / len(all_states)
+                    else:
+                        metrics["pad_from_precision"] = 0.0
+                except Exception:
+                    metrics["pad_from_precision"] = 0.0
     except Exception as e:
         _logger.debug("collect_prediction_metrics: %s", e)
     return metrics
@@ -665,43 +707,61 @@ def collect_causal_metrics() -> Dict[str, Optional[float]]:
 
 
 def collect_curiosity_metrics() -> Dict[str, Optional[float]]:
-    """Collect curiosity metrics from curiosity.py."""
+    """Collect curiosity metrics from preguntas_curiosidad.json (authoritative source)."""
     metrics = {}
     try:
-        from modules.config import connect_fts, FTS_DB_PATH
-        db = connect_fts(FTS_DB_PATH)
-        # Count recent curiosities generated (last 7 days)
-        row = db.execute(
-            """SELECT COUNT(*) FROM memories_fts
-               WHERE content LIKE '%curiosi%'
-               AND created_at > datetime('now', '-7 days')"""
-        ).fetchone()
-        if row:
-            metrics["curiosity_generation_rate"] = (row[0] or 0) / 7.0
+        from modules.curiosity import _cargar_curiosidades
+        from datetime import datetime, timedelta
+        data = _cargar_curiosidades()
+        pendientes = data.get("pendientes", [])
+        exploradas = data.get("exploradas", [])
 
-        # Resolution rate: curiosities with answers / total
-        total = db.execute(
-            "SELECT COUNT(*) FROM memories_fts WHERE content LIKE '%curiosi%'"
-        ).fetchone()
-        resolved = db.execute(
-            "SELECT COUNT(*) FROM memories_fts WHERE content LIKE '%curiosi%' AND content LIKE '%| A:%'"
-        ).fetchone()
-        if total and total[0] > 0:
-            metrics["curiosity_resolution_rate"] = (resolved[0] or 0) / total[0]
-        db.close()
+        # Generation rate: pendientes added in last 7 days / 7
+        cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent_pending = [c for c in pendientes if (c.get("agregada") or "") >= cutoff]
+        recent_explored = [c for c in exploradas if (c.get("agregada") or "") >= cutoff]
+        metrics["curiosity_generation_rate"] = (len(recent_pending) + len(recent_explored)) / 7.0
+
+        # Resolution rate: explored with meaningful outcome / total in window
+        total_in_window = len(recent_pending) + len(recent_explored)
+        resolved = [c for c in recent_explored
+                    if c.get("outcome") in ("discovery", "partial")]
+        if total_in_window > 0:
+            metrics["curiosity_resolution_rate"] = len(resolved) / total_in_window
+        else:
+            # Fallback: all-time rate
+            all_resolved = [c for c in exploradas
+                           if c.get("outcome") in ("discovery", "partial")]
+            total_all = len(pendientes) + len(exploradas)
+            if total_all > 0:
+                metrics["curiosity_resolution_rate"] = len(all_resolved) / total_all
     except Exception as e:
         _logger.debug("collect_curiosity_metrics: %s", e)
     return metrics
 
 
 def collect_self_model_metrics() -> Dict[str, Optional[float]]:
-    """Collect self-model metrics from self_model.py."""
+    """Collect self-model metrics from self_model.py + tool_calls."""
     metrics = {}
     try:
         from modules.self_model import detect_self_discrepancies
         result = detect_self_discrepancies()
         if isinstance(result, dict):
             metrics["discrepancy_count"] = result.get("count", 0)
+        # Self-model refresh frequency: tool_calls for self_model in last 7 days
+        try:
+            from modules.config import connect_fts, FTS_DB_PATH
+            db = connect_fts(FTS_DB_PATH)
+            row = db.execute(
+                """SELECT COUNT(*) FROM tool_calls
+                   WHERE tool_name LIKE '%self_model%'
+                   AND started_at > datetime('now', '-7 days')"""
+            ).fetchone()
+            db.close()
+            if row and row[0] is not None:
+                metrics["self_model_refresh_frequency"] = row[0] / 7.0
+        except Exception:
+            pass
     except Exception as e:
         _logger.debug("collect_self_model_metrics: %s", e)
     return metrics
@@ -710,6 +770,7 @@ def collect_self_model_metrics() -> Dict[str, Optional[float]]:
 def collect_reconsolidation_metrics() -> Dict[str, Optional[float]]:
     """Collect L1 reconsolidation metrics from DB logs."""
     metrics = {}
+    db = None
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
@@ -725,7 +786,6 @@ def collect_reconsolidation_metrics() -> Dict[str, Optional[float]]:
         pe_events = db.execute("SELECT COUNT(*) FROM prediction_results WHERE surprise_score > 0.6").fetchone()[0]
         if pe_events > 0:
             metrics["reconsolidation_trigger_rate"] = total / pe_events
-        db.close()
     except Exception as e:
         _logger.debug("collect_reconsolidation_metrics: %s", e)
     return metrics
@@ -734,6 +794,7 @@ def collect_reconsolidation_metrics() -> Dict[str, Optional[float]]:
 def collect_consolidation_metrics() -> Dict[str, Optional[float]]:
     """Collect L2 consolidation metrics from consolidation_log."""
     metrics = {}
+    db = None
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
@@ -758,7 +819,6 @@ def collect_consolidation_metrics() -> Dict[str, Optional[float]]:
             daily_episodes_est = 50
             daily_consolidated = total_episodes / 7.0
             metrics["consolidation_coverage"] = min(1.0, daily_consolidated / daily_episodes_est)
-        db.close()
     except Exception as e:
         _logger.debug("collect_consolidation_metrics: %s", e)
     return metrics
@@ -767,6 +827,7 @@ def collect_consolidation_metrics() -> Dict[str, Optional[float]]:
 def collect_metacognition_metrics() -> Dict[str, Optional[float]]:
     """Collect L5 metacognition metrics from FOK calibration + metacognition traces."""
     metrics = {}
+    db = None
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
@@ -798,7 +859,6 @@ def collect_metacognition_metrics() -> Dict[str, Optional[float]]:
             metrics["monitoring_control_loop"] = 1.0  # Multiple strategies = control loop active
         elif mc_rows:
             metrics["monitoring_control_loop"] = 0.0
-        db.close()
     except Exception as e:
         _logger.debug("collect_metacognition_metrics: %s", e)
     return metrics
@@ -859,6 +919,26 @@ def collect_active_inference_metrics() -> Dict[str, Optional[float]]:
         ).fetchall()
         if rows:
             metrics["efe_policy_diversity"] = min(4, len(rows))
+        # Action selection latency proxy: avg CX handler p50 latency from recent snapshots
+        try:
+            import json as _j
+            snap_rows = db.execute(
+                "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 5"
+            ).fetchall()
+            all_p50s = []
+            for snap_row in snap_rows:
+                try:
+                    snap = _j.loads(snap_row[0])
+                    lat_summary = snap.get("latency_summary", {})
+                    for v in lat_summary.values():
+                        if isinstance(v, dict) and v.get("p50") is not None:
+                            all_p50s.append(v["p50"])
+                except Exception:
+                    pass
+            if all_p50s:
+                metrics["action_selection_latency"] = sum(all_p50s) / len(all_p50s)
+        except Exception:
+            pass
         db.close()
     except Exception as e:
         _logger.debug("collect_active_inference_metrics: %s", e)
@@ -877,12 +957,15 @@ def collect_forgetting_metrics() -> Dict[str, Optional[float]]:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
         rif_count = db.execute(
-            "SELECT COUNT(*) FROM strength_log WHERE event_type = 'rif_suppression'"
+            "SELECT COUNT(*) FROM strength_log WHERE event = 'rif_suppression'"
         ).fetchone()
         total = db.execute("SELECT COUNT(*) FROM strength_log").fetchone()
         db.close()
         if total and total[0] > 0 and rif_count:
             metrics["rif_suppression_rate"] = rif_count[0] / total[0]
+        else:
+            # No forgetting events yet — rate is 0.0 (valid measurement, not inconclusive)
+            metrics["rif_suppression_rate"] = 0.0
     except Exception as e:
         _logger.debug("collect_forgetting_metrics: %s", e)
     return metrics
@@ -932,10 +1015,21 @@ def _build_store_collectors() -> Dict[str, Callable]:
         return store.consolidation.get_consolidation_metrics()
 
     def _collect_l3():
-        return store.cx.get_gnw_metrics()
+        metrics = store.cx.get_gnw_metrics()
+        # Merge coalition_size + workspace_utilization from legacy collector
+        legacy = collect_gnw_metrics()
+        for k in ("coalition_size", "workspace_utilization"):
+            if k not in metrics or metrics[k] is None:
+                metrics[k] = legacy.get(k)
+        return metrics
 
     def _collect_l4():
-        return store.prediction.get_accuracy()
+        metrics = store.prediction.get_accuracy()
+        # Merge pad_from_precision from legacy collector
+        legacy = collect_prediction_metrics()
+        if "pad_from_precision" not in metrics or metrics.get("pad_from_precision") is None:
+            metrics["pad_from_precision"] = legacy.get("pad_from_precision")
+        return metrics
 
     def _collect_l5():
         return store.metacognition.get_calibration_metrics()
@@ -946,7 +1040,12 @@ def _build_store_collectors() -> Dict[str, Callable]:
 
     def _collect_l7():
         diversity = store.attention.get_policy_diversity(days=7)
-        return {"efe_policy_diversity": diversity}
+        metrics = {"efe_policy_diversity": diversity}
+        # Merge action_selection_latency from legacy collector
+        legacy = collect_active_inference_metrics()
+        if legacy.get("action_selection_latency") is not None:
+            metrics["action_selection_latency"] = legacy["action_selection_latency"]
+        return metrics
 
     def _collect_l8():
         return store.causal.get_latest_dag_state()
@@ -956,10 +1055,20 @@ def _build_store_collectors() -> Dict[str, Callable]:
         return collect_self_model_metrics()
 
     def _collect_l10():
-        return store.forgetting.get_forgetting_metrics()
+        metrics = store.forgetting.get_forgetting_metrics()
+        # Merge rif_suppression_rate from legacy collector (handles 0-data case)
+        legacy = collect_forgetting_metrics()
+        if "rif_suppression_rate" not in metrics or metrics.get("rif_suppression_rate") is None:
+            metrics["rif_suppression_rate"] = legacy.get("rif_suppression_rate")
+        return metrics
 
     def _collect_cx():
-        return store.cx.get_aggregated_cx_metrics(hours=24)
+        metrics = store.cx.get_aggregated_cx_metrics(hours=24)
+        # Merge pci_proxy from legacy collector
+        legacy = collect_cx_metrics()
+        if "pci_proxy" not in metrics or metrics.get("pci_proxy") is None:
+            metrics["pci_proxy"] = legacy.get("pci_proxy")
+        return metrics
 
     return {
         "PE": _collect_pe,
