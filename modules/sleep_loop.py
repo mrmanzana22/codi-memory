@@ -97,7 +97,7 @@ DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 FAST_TICKS = {"prospective", "health", "proactive_contact", "self_model"}
 
 # Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "fhrr_encoding", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval"]
+TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "fhrr_encoding", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval", "cognitive_health"]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -119,6 +119,7 @@ TICK_TIER = {
     "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
     "cx_health": 2,               # CPO v2: CX observability snapshot + HTML dashboard update
     "fhrr_encoding": 2,           # Hippocampal offline replay (Diekelmann & Born 2010)
+    "cognitive_health": 3,        # Cognitive contracts evaluation (12 contracts, 31 metrics)
 }
 
 # ============================================================
@@ -2554,6 +2555,50 @@ def _tick_recall_eval(budget_ms: int) -> dict:
                 "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
 
+def _tick_cognitive_health(budget_ms: int) -> dict:
+    """Tier 3: Run cognitive observability contracts evaluation.
+
+    Evaluates 12 contracts (10 loops + PE + CX) against neuro-informed
+    thresholds. Stores results in working memory for visibility.
+    """
+    t0 = time.monotonic()
+    try:
+        from modules.cognitive_contracts import evaluate_all, format_health_report
+        results = evaluate_all()
+
+        # Count statuses
+        status_counts = {}
+        for r in results:
+            s = r.overall_status.value
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        # Push summary to working memory if any degraded
+        degraded = [r for r in results if r.overall_status.value == "degraded"]
+        if degraded:
+            try:
+                from modules.working_memory import push_to_working_memory
+                names = ", ".join(f"{r.loop_id}:{r.name}" for r in degraded)
+                push_to_working_memory(
+                    f"[COGNITIVE HEALTH] Degraded: {names}",
+                    topic="consciencia", relevance=0.7,
+                )
+            except Exception:
+                pass
+
+        detail_parts = [f"{k}={v}" for k, v in sorted(status_counts.items())]
+        return {
+            "tick": "cognitive_health", "ok": True, "status": "ok",
+            "detail": " ".join(detail_parts),
+            "elapsed_ms": int((time.monotonic() - t0) * 1000),
+        }
+    except Exception as e:
+        return {
+            "tick": "cognitive_health", "ok": False, "status": "error",
+            "detail": str(e)[:100],
+            "elapsed_ms": int((time.monotonic() - t0) * 1000),
+        }
+
+
 def _tick_fhrr_encoding(budget_ms: int) -> dict:
     """Tier 2: Encode un-indexed sessions into FHRR hippocampal index.
 
@@ -2720,6 +2765,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
         "cx_health": _tick_cx_health,
         "recall_eval": _tick_recall_eval,
         "fhrr_encoding": _tick_fhrr_encoding,
+        "cognitive_health": _tick_cognitive_health,
     }
 
     # Phase 1: Separate eligible ticks from VOC-tiered skips

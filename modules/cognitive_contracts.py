@@ -846,6 +846,48 @@ def collect_pe_metrics() -> Dict[str, Optional[float]]:
     return metrics
 
 
+def collect_active_inference_metrics() -> Dict[str, Optional[float]]:
+    """Collect L7 Active Inference metrics from generative_model_transitions."""
+    metrics = {}
+    try:
+        from modules.config import connect_fts, FTS_DB_PATH
+        db = connect_fts(FTS_DB_PATH)
+        # Policy diversity: distinct actions selected recently
+        rows = db.execute(
+            """SELECT DISTINCT driver FROM attention_transitions
+               WHERE created_at > datetime('now', '-7 days')"""
+        ).fetchall()
+        if rows:
+            metrics["efe_policy_diversity"] = min(4, len(rows))
+        db.close()
+    except Exception as e:
+        _logger.debug("collect_active_inference_metrics: %s", e)
+    return metrics
+
+
+def collect_forgetting_metrics() -> Dict[str, Optional[float]]:
+    """Collect L10 Forgetting metrics from strength_log + forgetting constants."""
+    metrics = {}
+    try:
+        # Decay exponent is a code constant in activation.py
+        from modules.activation import ACTR_DECAY_DEFAULT
+        metrics["decay_curve_exponent"] = ACTR_DECAY_DEFAULT
+
+        # RIF: check strength_log for suppression events
+        from modules.config import connect_fts, FTS_DB_PATH
+        db = connect_fts(FTS_DB_PATH)
+        rif_count = db.execute(
+            "SELECT COUNT(*) FROM strength_log WHERE event_type = 'rif_suppression'"
+        ).fetchone()
+        total = db.execute("SELECT COUNT(*) FROM strength_log").fetchone()
+        db.close()
+        if total and total[0] > 0 and rif_count:
+            metrics["rif_suppression_rate"] = rif_count[0] / total[0]
+    except Exception as e:
+        _logger.debug("collect_forgetting_metrics: %s", e)
+    return metrics
+
+
 # ============================================================
 # PUBLIC API
 # ============================================================
@@ -874,8 +916,10 @@ def evaluate_all(collectors: Optional[Dict[str, Callable]] = None) -> List[Contr
             "L4": collect_prediction_metrics,
             "L5": collect_metacognition_metrics,
             "L6": collect_curiosity_metrics,
+            "L7": collect_active_inference_metrics,
             "L8": collect_causal_metrics,
             "L9": collect_self_model_metrics,
+            "L10": collect_forgetting_metrics,
             "CX": collect_cx_metrics,
         }
 
