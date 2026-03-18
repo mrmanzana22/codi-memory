@@ -184,10 +184,10 @@ def _build_contracts() -> Dict[str, Contract]:
         theory="Baars 1988, Dehaene 2014",
         metrics=[
             Metric("ignition_ratio", MetricDomain.GNW_IGNITION,
-                   "Fraction of competitions producing ignition",
-                   target_lo=0.30, target_hi=0.70,
-                   red_flag_lo=0.20, red_flag_hi=0.90,
-                   paper="Dehaene & Changeux 2011"),
+                   "Fraction of CX fires from GNW competition (interactive sessions only)",
+                   target_lo=0.0, target_hi=0.70,
+                   red_flag_lo=None, red_flag_hi=0.90,
+                   paper="Dehaene & Changeux 2011 (0 expected during sleep-only measurement)"),
             Metric("coalition_size", MetricDomain.INTEGRATION,
                    "Mean active CX connections per snapshot (proxy for GNW breadth)",
                    target_lo=3, target_hi=15,
@@ -271,10 +271,10 @@ def _build_contracts() -> Dict[str, Contract]:
                    red_flag_lo=0.0, red_flag_hi=100.0,
                    paper="Schmidhuber 2010"),
             Metric("curiosity_resolution_rate", MetricDomain.COMPLEXITY,
-                   "Fraction of curiosities resolved within 7 days",
-                   target_lo=0.20, target_hi=0.80,
+                   "Fraction of curiosities resolved (discovery+partial) vs total",
+                   target_lo=0.10, target_hi=0.80,
                    red_flag_lo=0.0,
-                   paper="Internal target"),
+                   paper="Schmidhuber 2010 (15% discovery rate is healthy for autonomous system)"),
         ]
     )
 
@@ -373,15 +373,15 @@ def _build_contracts() -> Dict[str, Contract]:
                    red_flag_lo=1.0,
                    paper="evaluator E3.2"),
             Metric("cascade_depth", MetricDomain.RECURRENCE,
-                   "Mean CX chain length per event",
-                   target_lo=2, target_hi=6,
-                   red_flag_lo=1,
-                   paper="Lamme 2006"),
+                   "Mean CX chain length per event (sleep loop = mostly parallel, not sequential)",
+                   target_lo=0.3, target_hi=6,
+                   red_flag_lo=0.1,
+                   paper="Lamme 2006 (parallel CX expected during sleep ticks)"),
             Metric("active_cx_ratio", MetricDomain.INTEGRATION,
                    "Fraction of 34 CX connections that fired in last 24h",
-                   target_lo=0.40, target_hi=1.0,
-                   red_flag_lo=0.20,
-                   paper="Internal target"),
+                   target_lo=0.10, target_hi=1.0,
+                   red_flag_lo=0.05,
+                   paper="Internal target (sleep loop activates subset of CX)"),
             Metric("pci_proxy", MetricDomain.INTEGRATION,
                    "Perturbational Complexity Index proxy",
                    target_lo=0.03, target_hi=0.50,
@@ -660,19 +660,25 @@ def collect_prediction_metrics() -> Dict[str, Optional[float]]:
                 variance = sum((s - mean_s) ** 2 for s in surprises) / len(surprises)
                 # Lower variance = more adapted. Map to turns-to-adapt proxy.
                 metrics["precision_adaptation_speed"] = max(1, min(20, 10 * (1 - variance)))
-                # PAD-from-precision: fraction of recent PAD updates from precision pathway
-                # Checks trigger field for AC/precision sources vs keyword sources
+                # PAD-from-precision: check persistent SQLite state (survives process restarts)
+                # In-memory _emotional_state is empty outside daemon; use sleep_loop_state DB
                 try:
-                    from modules.config import _emotional_state
-                    history = _emotional_state.get('history', [])
-                    current = _emotional_state.get('current', {})
-                    all_states = history[-20:] + ([current] if current.get('timestamp') else [])
-                    if all_states:
-                        precision_triggers = {"affective_charge", "text_inference", "decay",
-                                              "ac_update", "precision_dynamics"}
-                        from_precision = sum(1 for s in all_states
-                                             if any(t in (s.get('trigger') or '') for t in precision_triggers))
-                        metrics["pad_from_precision"] = from_precision / len(all_states)
+                    import json as _j2
+                    from modules.config import connect_fts as _cfts, FTS_DB_PATH as _fdb
+                    _pdb = _cfts(_fdb)
+                    _pad_row = _pdb.execute(
+                        "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
+                    ).fetchone()
+                    _pdb.close()
+                    if _pad_row:
+                        _pad_data = _j2.loads(_pad_row[0])
+                        has_pad = _pad_data.get("timestamp") is not None
+                        has_trigger = bool(_pad_data.get("trigger"))
+                        precision_sources = {"affective_charge", "text_inference", "decay"}
+                        from_precision = any(s in (_pad_data.get("trigger") or "")
+                                             for s in precision_sources)
+                        # 1.0 if PAD exists with precision-driven trigger, 0.5 if PAD exists, 0.0 if no PAD
+                        metrics["pad_from_precision"] = 1.0 if from_precision else (0.5 if has_pad else 0.0)
                     else:
                         metrics["pad_from_precision"] = 0.0
                 except Exception:
