@@ -56,6 +56,77 @@ OPENAI_MODEL = "gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
+# Provider: MLX-LM (local fine-tuned Qwen3-4B, free, fastest)
+# ---------------------------------------------------------------------------
+_mlx_model = None
+_mlx_tokenizer = None
+_MLX_ADAPTER_PATH = pathlib.Path(__file__).resolve().parent.parent / "adapters" / "codi-v1"
+_MLX_BASE_MODEL = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
+
+# Tasks suitable for the fine-tuned model (trained on these task types)
+_MLX_SUPPORTED_TASKS = {
+    "semantic_extract", "self_extract", "compress_episodes",
+    "compress_checkpoints",
+}
+
+
+def _get_mlx():
+    """Lazy-load MLX model + adapter. Returns (model, tokenizer) or (None, None)."""
+    global _mlx_model, _mlx_tokenizer
+    if _mlx_model is not None:
+        return _mlx_model, _mlx_tokenizer
+    if not _MLX_ADAPTER_PATH.exists():
+        return None, None
+    try:
+        from mlx_lm import load
+        _mlx_model, _mlx_tokenizer = load(
+            str(_MLX_BASE_MODEL),
+            adapter_path=str(_MLX_ADAPTER_PATH),
+        )
+        _logger.info("[llm_router] MLX model loaded: %s + %s", _MLX_BASE_MODEL, _MLX_ADAPTER_PATH.name)
+        return _mlx_model, _mlx_tokenizer
+    except Exception as e:
+        _logger.warning("[llm_router] MLX load failed: %s", e)
+        return None, None
+
+
+def _try_mlx(task_type: str, prompt: str, system: str = "") -> Optional[str]:
+    """Try local fine-tuned model via MLX-LM. Only for supported task types."""
+    if task_type not in _MLX_SUPPORTED_TASKS:
+        return None
+    model, tokenizer = _get_mlx()
+    if model is None:
+        return None
+
+    config = TASK_CONFIG.get(task_type, {"temperature": 0.2, "max_tokens": 2048})
+
+    try:
+        from mlx_lm import generate
+        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        messages = [{"role": "user", "content": full_prompt}]
+        formatted = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        response = generate(
+            model, tokenizer, prompt=formatted,
+            max_tokens=config["max_tokens"],
+        )
+        # Strip thinking tags if present
+        text = response.strip()
+        if text.startswith("<think>"):
+            think_end = text.find("</think>")
+            if think_end != -1:
+                text = text[think_end + len("</think>"):].strip()
+        if text:
+            _logger.info("[llm_router] MLX succeeded for %s (%d chars)", task_type, len(text))
+            return text
+    except Exception as e:
+        _logger.warning("[llm_router] MLX failed for %s: %s", task_type, e)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Provider: Ollama (optional, free)
 # ---------------------------------------------------------------------------
 def _try_ollama(task_type: str, prompt: str, system: str = "") -> Optional[str]:
@@ -263,6 +334,16 @@ def llm_complete(task_type: str, prompt: str, system: str = "",
     """
     t0 = time.time()
     prompt_chars = len(prompt) + len(system)
+
+    # 0. MLX fine-tuned model (free, local, fastest — only for trained tasks)
+    answer = _try_mlx(task_type, prompt, system)
+    if answer:
+        duration_ms = int((time.time() - t0) * 1000)
+        _log_to_pg(task_type, "mlx_local", "codi-v1", duration_ms,
+                   prompt_chars, len(answer), True)
+        if not _no_log:
+            _log_training_data(task_type, prompt, answer, system)
+        return answer
 
     # 1. Ollama (free, local) — concatenates system into prompt internally
     answer = _try_ollama(task_type, prompt, system)
