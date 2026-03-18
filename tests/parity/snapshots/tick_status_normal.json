@@ -76,7 +76,12 @@
   },
   {
     "ok": true,
-    "status": "ok",
+    "status": "budget_deferred",
     "tick": "recall_eval"
+  },
+  {
+    "ok": true,
+    "status": "budget_deferred",
+    "tick": "cognitive_health"
   }
 ]

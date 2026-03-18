@@ -362,7 +362,8 @@ class TestNoCreateTableOutsideMigrations:
         pattern = re.compile(r"\bCREATE\s+TABLE\b", re.IGNORECASE | re.MULTILINE)
         WHITELIST = {
             "migrations.py", "self_model.py", "spreading.py",
-            "sleep_loop.py", "active_inference.py", "temporal_renorm.py",
+            "sleep_loop.py", "__init__.py",  # sleep_loop/__init__.py after package conversion
+            "active_inference.py", "temporal_renorm.py",
             "working_memory.py", "active_inference_integration.py",
             "goals.py", "prospective.py", "reward_tracking.py",
             "ollama_router.py",

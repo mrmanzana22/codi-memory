@@ -317,7 +317,7 @@ class TestStalenessMonitoringInfra:
         """Sleep loop must have a health tick that runs staleness checks."""
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "modules", "sleep_loop.py"
+            "modules", "sleep_loop", "__init__.py"
         )
         with open(path) as f:
             source = f.read()
@@ -330,7 +330,7 @@ class TestStalenessMonitoringInfra:
         """Sprint 14.4 closed-loop validation should exist in reconsolidation."""
         path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "modules", "sleep_loop.py"
+            "modules", "sleep_loop", "__init__.py"
         )
         with open(path) as f:
             source = f.read()

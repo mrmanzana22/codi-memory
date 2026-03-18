@@ -78,5 +78,10 @@
     "ok": false,
     "status": "skipped",
     "tick": "recall_eval"
+  },
+  {
+    "ok": false,
+    "status": "skipped",
+    "tick": "cognitive_health"
   }
 ]
