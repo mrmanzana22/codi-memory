@@ -100,6 +100,7 @@ from modules import cx_observability
 from modules import pet
 from modules import source_tracking
 from modules import hippocampal_index
+from modules import cognitive_contracts
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -138,6 +139,7 @@ cx_observability.register_tools(mcp)
 pet.register_tools(mcp)
 source_tracking.register_tools(mcp)
 hippocampal_index.register_tools(mcp)
+cognitive_contracts.register_tools(mcp)
 
 # ============================================================
 # TOOL GOVERNANCE - Apply bundle-based visibility filter

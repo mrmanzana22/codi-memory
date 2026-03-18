@@ -35,6 +35,7 @@ _predictive_state = {
     'predictions': [],
     'surprises': [],
     'belief_updates': [],
+    'accuracy_history': [],
 }
 _state_lock = threading.Lock()
 

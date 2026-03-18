@@ -66,6 +66,10 @@ SESSION_BOOST_CAP = 0.15
 # Storage
 FHRR_SESSIONS_DIR = os.path.join(DATA_DIR, "fhrr_sessions")
 
+# Hot index paths (pre-compiled vectorized query)
+HOT_INDEX_PATH = os.path.join(DATA_DIR, "fhrr_hot_index.npz")
+HOT_META_PATH = os.path.join(DATA_DIR, "fhrr_hot_meta.json")
+
 # Role fields for FHRR encoding
 ROLE_FIELDS = [
     ('TOPIC', 'topics'),
@@ -101,13 +105,22 @@ def _fhrr_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.abs(np.dot(np.conj(a), b)) / d)
 
 
+_concept_cache: Dict[tuple, np.ndarray] = {}
+
+
 def concept_to_fhrr(concept: str, D: int = D_DEFAULT) -> np.ndarray:
-    """Deterministic FHRR vector from concept string via hash-seed."""
+    """Deterministic FHRR vector from concept string via hash-seed. Cached."""
     key = _canonicalize(concept)
+    cache_key = (key, D)
+    cached = _concept_cache.get(cache_key)
+    if cached is not None:
+        return cached
     seed = int(hashlib.sha256(key.encode()).hexdigest(), 16) % (2**32)
     rng = np.random.default_rng(seed)
     angles = rng.uniform(-np.pi, np.pi, D)
-    return np.exp(1j * angles).astype(np.complex64)
+    vec = np.exp(1j * angles).astype(np.complex64)
+    _concept_cache[cache_key] = vec
+    return vec
 
 
 _role_vectors: Dict[tuple, np.ndarray] = {}
@@ -843,6 +856,9 @@ def save_session_record(record: Dict[str, Any], directory: str = None) -> str:
     except Exception as e:
         _logger.warning("Failed to register session %s in SQLite: %s", sid, e)
 
+    # Invalidate hot index so next query rebuilds with new session
+    _invalidate_hot_index()
+
     return directory
 
 
@@ -923,6 +939,201 @@ def load_all_sessions(directory: str = None) -> List[Dict[str, Any]]:
 
 
 # ============================================================
+# HOT INDEX — Pre-compiled vectorized query (22s → <50ms)
+# ============================================================
+
+@dataclass
+class _HotIndexData:
+    """Pre-compiled session-level data for vectorized querying."""
+    session_ids: List[str]
+    bloom_matrix: np.ndarray      # (N, BLOOM_BITS) uint8
+    topic_heads: np.ndarray       # (N, D) complex64
+    turn_heads: np.ndarray        # (N, D) complex64
+    roles: List[Dict[str, list]]  # session-level roles metadata
+    compiled_at: str
+    num_sessions: int
+
+
+# Module-level singleton
+_HOT_INDEX: Optional[_HotIndexData] = None
+_hot_index_stale: bool = True
+
+
+def _invalidate_hot_index():
+    """Mark hot index as stale (e.g., after new session encoded)."""
+    global _hot_index_stale
+    _hot_index_stale = True
+
+
+def _bloom_hash_indices(term: str) -> List[int]:
+    """Compute Bloom hash indices for a term (matches BloomFilter._indexes)."""
+    key = term.strip().lower()
+    return [
+        int(hashlib.sha256(f"{i}:{key}".encode()).hexdigest(), 16) % BLOOM_BITS
+        for i in range(BLOOM_HASHES)
+    ]
+
+
+def _vectorized_bloom_check(bloom_matrix: np.ndarray, terms: list) -> np.ndarray:
+    """Check which sessions MAY contain ANY of the terms. Returns (N,) bool mask."""
+    N = bloom_matrix.shape[0]
+    any_match = np.zeros(N, dtype=bool)
+
+    for term in terms:
+        indices = _bloom_hash_indices(term)
+        # All hash bits must be set for this term (contains semantics)
+        term_match = np.ones(N, dtype=bool)
+        for idx in indices:
+            term_match &= (bloom_matrix[:, idx] == 1)
+        any_match |= term_match  # contains_any semantics
+
+    return any_match
+
+
+def compile_hot_index(directory: str = None) -> Optional[_HotIndexData]:
+    """Compile session-level arrays for vectorized querying.
+
+    Reads only s_bloom, s_TOPIC, s_turn from each NPZ (skips chunk arrays).
+    Saves to fhrr_hot_index.npz + fhrr_hot_meta.json.
+    """
+    global _HOT_INDEX, _hot_index_stale
+
+    directory = directory or FHRR_SESSIONS_DIR
+    if not os.path.exists(directory):
+        return None
+
+    session_ids = sorted([
+        f[:-5] for f in os.listdir(directory) if f.endswith('.json')
+    ])
+    N = len(session_ids)
+    if N == 0:
+        return None
+
+    D = D_DEFAULT
+    t0 = time.monotonic()
+
+    bloom_matrix = np.zeros((N, BLOOM_BITS), dtype=np.uint8)
+    topic_heads = np.zeros((N, D), dtype=np.complex64)
+    turn_heads = np.zeros((N, D), dtype=np.complex64)
+    roles_list = []
+    loaded = 0
+
+    for i, sid in enumerate(session_ids):
+        npz_path = os.path.join(directory, f"{sid}.npz")
+        json_path = os.path.join(directory, f"{sid}.json")
+
+        try:
+            # Selective NPZ load: only session-level arrays (no chunk decompression)
+            npz = np.load(npz_path)
+            bloom_matrix[i] = npz['s_bloom']
+            npz_files = npz.files
+            if 's_TOPIC' in npz_files:
+                topic_heads[i] = npz['s_TOPIC']
+            if 's_turn' in npz_files:
+                turn_heads[i] = npz['s_turn']
+            npz.close()
+
+            with open(json_path) as f:
+                meta = json.load(f)
+            # Pre-canonicalize roles for fast overlap at query time
+            raw_roles = meta.get('roles', {})
+            canon_roles = {}
+            all_terms_set = set()
+            for _, fn in ROLE_FIELDS:
+                terms = [_canonicalize(t) for t in raw_roles.get(fn, []) if t]
+                canon_roles[fn] = terms
+                all_terms_set.update(terms)
+            canon_roles['_all'] = sorted(all_terms_set)
+            roles_list.append(canon_roles)
+            loaded += 1
+        except Exception as e:
+            _logger.warning("compile_hot_index: skip %s: %s", sid, e)
+            roles_list.append({})
+
+    compile_ms = (time.monotonic() - t0) * 1000
+
+    # Save to disk (uncompressed for fast reload)
+    np.savez(HOT_INDEX_PATH,
+             bloom_matrix=bloom_matrix,
+             topic_heads=topic_heads,
+             turn_heads=turn_heads)
+
+    meta_out = {
+        'compiled_at': now_iso(),
+        'num_sessions': N,
+        'loaded': loaded,
+        'compile_ms': round(compile_ms, 1),
+        'D': D,
+        'session_ids': session_ids,
+        'roles': roles_list,
+    }
+    with open(HOT_META_PATH, 'w') as f:
+        json.dump(meta_out, f, ensure_ascii=False)
+
+    _logger.info("Hot index compiled: %d/%d sessions in %.0fms", loaded, N, compile_ms)
+
+    hot = _HotIndexData(
+        session_ids=session_ids,
+        bloom_matrix=bloom_matrix,
+        topic_heads=topic_heads,
+        turn_heads=turn_heads,
+        roles=roles_list,
+        compiled_at=meta_out['compiled_at'],
+        num_sessions=N,
+    )
+    _HOT_INDEX = hot
+    _hot_index_stale = False
+    return hot
+
+
+def _load_hot_index() -> Optional[_HotIndexData]:
+    """Load or compile hot index singleton."""
+    global _HOT_INDEX, _hot_index_stale
+
+    if _HOT_INDEX is not None and not _hot_index_stale:
+        return _HOT_INDEX
+
+    # Try loading from disk
+    if os.path.exists(HOT_INDEX_PATH) and os.path.exists(HOT_META_PATH):
+        try:
+            t0 = time.monotonic()
+
+            with open(HOT_META_PATH) as f:
+                meta = json.load(f)
+
+            # Check if index covers all sessions on disk
+            if os.path.exists(FHRR_SESSIONS_DIR):
+                num_on_disk = sum(1 for f in os.listdir(FHRR_SESSIONS_DIR)
+                                  if f.endswith('.json'))
+            else:
+                num_on_disk = 0
+
+            if meta.get('num_sessions', 0) >= num_on_disk:
+                data = np.load(HOT_INDEX_PATH)
+
+                _HOT_INDEX = _HotIndexData(
+                    session_ids=meta['session_ids'],
+                    bloom_matrix=data['bloom_matrix'],
+                    topic_heads=data['topic_heads'],
+                    turn_heads=data['turn_heads'],
+                    roles=meta['roles'],
+                    compiled_at=meta.get('compiled_at', ''),
+                    num_sessions=meta['num_sessions'],
+                )
+                _hot_index_stale = False
+
+                load_ms = (time.monotonic() - t0) * 1000
+                _logger.info("Hot index loaded: %d sessions in %.0fms",
+                              meta['num_sessions'], load_ms)
+                return _HOT_INDEX
+        except Exception as e:
+            _logger.warning("Failed to load hot index: %s", e)
+
+    # Compile fresh
+    return compile_hot_index()
+
+
+# ============================================================
 # BINARY RECALL — main query interface
 # ============================================================
 
@@ -937,30 +1148,181 @@ def binary_recall(
 ) -> List[Dict[str, Any]]:
     """Query FHRR binary memory with natural text.
 
-    Pipeline:
-      1. auto_extract(query) -> roles
-      2. encode_turn(query) -> FHRR query vector
-      3. For each session: cascade_query (Bloom -> FHRR -> score)
-      4. Aggregate per-session via weighted_sum (0.7^i decay)
-      5. Rank sessions by aggregated score, return top chunks
+    Uses pre-compiled hot index for vectorized querying (sub-50ms).
+    Falls back to sequential scan if hot index unavailable or sessions provided.
 
     Returns list of result dicts sorted by score descending.
     """
-    # Load sessions if not provided
-    if sessions is None:
-        sessions = load_all_sessions()
+    # Legacy path: explicit sessions provided
+    if sessions is not None:
+        return _binary_recall_scan(
+            query_text, sessions=sessions, max_results=max_results,
+            threshold=threshold, D=D,
+            max_chunks_per_session=max_chunks_per_session,
+        )
 
+    # Try hot index
+    hot = _load_hot_index()
+    if hot is None or hot.num_sessions == 0:
+        return _binary_recall_scan(
+            query_text, sessions=load_all_sessions(),
+            max_results=max_results, threshold=threshold, D=D,
+            max_chunks_per_session=max_chunks_per_session,
+        )
+
+    t0 = time.monotonic()
+
+    # Step 1: Extract & encode query
+    query_ext = auto_extract(query_text, speaker="user")
+    query_roles = {fn: query_ext.get(fn, []) for _, fn in ROLE_FIELDS}
+    query_vector, _ = encode_turn(query_text, speaker="user", D=D)
+
+    # Build bloom keys (canonical, matching build_session_record)
+    bloom_keys = []
+    for _, fn in ROLE_FIELDS:
+        for term in query_roles.get(fn, []):
+            key = _canonicalize(term)
+            if key:
+                bloom_keys.append(key)
+
+    if not bloom_keys:
+        return []
+
+    # Step 2: Vectorized Bloom filter (sub-ms)
+    survivors = _vectorized_bloom_check(hot.bloom_matrix, bloom_keys)
+    survivor_idx = np.where(survivors)[0]
+
+    if len(survivor_idx) == 0:
+        return []
+
+    # Step 3: Vectorized FHRR similarity on survivors
+    # Topic similarity: best match across query topic terms
+    topic_sims = np.zeros(len(survivor_idx), dtype=np.float64)
+    for term in query_roles.get('topics', []):
+        term_vec = concept_to_fhrr(_canonicalize(term), D)
+        sims = np.abs(np.conj(hot.topic_heads[survivor_idx]) @ term_vec) / D
+        topic_sims = np.maximum(topic_sims, sims)
+
+    # Turn similarity
+    turn_sims = np.abs(np.conj(hot.turn_heads[survivor_idx]) @ query_vector) / D
+
+    # Step 4: Symbolic overlap on survivors (uses pre-canonicalized roles)
+    all_query_terms = set()
+    for _, fn in ROLE_FIELDS:
+        all_query_terms.update(_canonicalize(t) for t in query_roles.get(fn, []))
+    all_query_terms.discard('')
+    nq = len(all_query_terms)
+
+    overlap_scores = np.zeros(len(survivor_idx), dtype=np.float64)
+    if nq > 0:
+        for i, idx in enumerate(survivor_idx):
+            if idx < len(hot.roles):
+                # _all is pre-canonicalized set of all session terms
+                session_terms = hot.roles[idx].get('_all', [])
+                overlap_scores[i] = len(all_query_terms & set(session_terms)) / nq
+
+    # Step 5: Combined score (same weights as cascade_query)
+    combined = (
+        W_ROLE_FHRR * topic_sims
+        + W_TURN_FHRR * turn_sims
+        + W_OVERLAP * overlap_scores
+        + W_MATCH_BONUS * (overlap_scores > 0).astype(np.float64)
+    )
+
+    # Filter & rank
+    valid_local = np.where(combined >= threshold)[0]
+    if len(valid_local) == 0:
+        return []
+
+    ranked_local = valid_local[np.argsort(combined[valid_local])[::-1]]
+    top_k = ranked_local[:max(max_results * 3, 30)]
+
+    # Step 6: Load JSON for top-K sessions (lightweight, ~3ms each)
+    results = []
+    for local_i in top_k:
+        orig_idx = int(survivor_idx[local_i])
+        sid = hot.session_ids[orig_idx]
+        session_score = float(combined[local_i])
+
+        json_path = os.path.join(FHRR_SESSIONS_DIR, f"{sid}.json")
+        try:
+            with open(json_path) as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+
+        # Find best chunk by overlap
+        best_chunk = None
+        best_overlap = -1.0
+        for chunk_meta in meta.get('chunks', []):
+            chunk_terms = set()
+            for _, fn in ROLE_FIELDS:
+                for t in chunk_meta.get('roles', {}).get(fn, []):
+                    chunk_terms.add(t.lower().strip())
+            co = len(all_query_terms & chunk_terms) / nq if nq else 0.0
+            if co > best_overlap:
+                best_overlap = co
+                best_chunk = chunk_meta
+
+        if best_chunk is None and meta.get('chunks'):
+            best_chunk = meta['chunks'][0]
+
+        if best_chunk is None:
+            continue
+
+        # Build matched_roles
+        matched = {}
+        for _, fn in ROLE_FIELDS:
+            q_terms = set(_canonicalize(t) for t in query_roles.get(fn, []))
+            c_terms = set(
+                _canonicalize(t) for t in best_chunk.get('roles', {}).get(fn, [])
+            )
+            common = q_terms & c_terms
+            if common:
+                matched[fn] = list(common)
+
+        results.append({
+            'session_id': sid,
+            'chunk_id': best_chunk['chunk_id'],
+            'turn_ids': best_chunk.get('turn_ids', []),
+            'score': round(session_score, 4),
+            'chunk_score': round(best_overlap, 4),
+            'fhrr_score': round(float(topic_sims[local_i]), 4),
+            'overlap_score': round(float(overlap_scores[local_i]), 4),
+            'matched_roles': matched,
+            'context': {
+                'texts': best_chunk.get('texts', []),
+                'metadata': best_chunk.get('metadata', {}),
+            },
+        })
+
+        if len(results) >= max_results:
+            break
+
+    elapsed_ms = (time.monotonic() - t0) * 1000
+    _logger.info("binary_recall hot: %d results in %.1fms (bloom: %d/%d survivors)",
+                  len(results), elapsed_ms, len(survivor_idx), hot.num_sessions)
+
+    return results
+
+
+def _binary_recall_scan(
+    query_text: str,
+    *,
+    sessions: List[Dict[str, Any]],
+    max_results: int = MAX_RESULTS_DEFAULT,
+    threshold: float = THRESHOLD_DEFAULT,
+    D: int = D_DEFAULT,
+    max_chunks_per_session: int = 20,
+) -> List[Dict[str, Any]]:
+    """Legacy binary_recall: sequential scan of all sessions."""
     if not sessions:
         return []
 
-    # Step 1: Extract query roles
     query_ext = auto_extract(query_text, speaker="user")
     query_roles = {fn: query_ext.get(fn, []) for _, fn in ROLE_FIELDS}
-
-    # Step 2: Encode query
     query_vector, _ = encode_turn(query_text, speaker="user", D=D)
 
-    # Step 3: Cascade query across sessions
     session_hits: Dict[str, List[CascadeHit]] = {}
 
     for session in sessions:
@@ -975,7 +1337,6 @@ def binary_recall(
         if hits:
             session_hits[session['session_id']] = hits
 
-    # Step 4: Weighted-sum session aggregation
     session_scores: list = []
     for sid, hits in session_hits.items():
         hits.sort(key=lambda h: h.score, reverse=True)
@@ -984,7 +1345,6 @@ def binary_recall(
 
     session_scores.sort(key=lambda x: x[0], reverse=True)
 
-    # Step 5: Format results
     results = []
     for session_score, sid, hits in session_scores:
         for hit in hits:
@@ -1371,6 +1731,28 @@ def register_tools(mcp):
             'elapsed_ms': round(elapsed_ms, 1),
             'results': formatted,
         }, ensure_ascii=False)
+
+    @mcp.tool()
+    def compile_fhrr_index() -> str:
+        """Compile FHRR hot index for fast binary_recall (<50ms vs 22s).
+
+        Reads session-level data from all NPZ/JSON files and builds
+        pre-stacked numpy arrays for vectorized querying.
+        Run after encoding new sessions or when binary_recall is slow.
+        """
+        t0 = time.monotonic()
+        hot = compile_hot_index()
+        elapsed = (time.monotonic() - t0) * 1000
+        if hot:
+            index_size = os.path.getsize(HOT_INDEX_PATH) / (1024 * 1024)
+            return json.dumps({
+                'status': 'compiled',
+                'sessions': hot.num_sessions,
+                'compile_ms': round(elapsed, 1),
+                'index_size_mb': round(index_size, 2),
+                'path': HOT_INDEX_PATH,
+            })
+        return json.dumps({'status': 'no_sessions'})
 
     @mcp.tool()
     def fhrr_index_stats() -> str:

@@ -2609,6 +2609,15 @@ def _tick_fhrr_encoding(budget_ms: int) -> dict:
         except Exception as e:
             _logger.debug("fhrr_encoding prototype update: %s", e)
 
+        # Sprint 6: Recompile hot index so binary_recall uses fresh data
+        try:
+            remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
+            if encoded > 0 and remaining_ms > 2000:
+                from modules.hippocampal_index import compile_hot_index
+                compile_hot_index()
+        except Exception as e:
+            _logger.debug("fhrr_encoding hot index compile: %s", e)
+
         # Sprint 5C: Discover synonym edges (every ~6th run)
         # Use tick counter from sleep_loop_state to throttle
         synonyms_found = 0
@@ -2631,7 +2640,7 @@ def _tick_fhrr_encoding(budget_ms: int) -> dict:
             _logger.debug("fhrr_encoding synonym discovery: %s", e)
 
         result["ok"] = True
-        result["detail"] = f"encoded={encoded} errors={errors} total_sessions={stats.get('total_sessions', 0)} prototypes={prototypes_saved} synonyms={synonyms_found}"
+        result["detail"] = f"encoded={encoded} errors={errors} total_sessions={stats.get('total_sessions', 0)} hot_recompiled={'yes' if encoded > 0 else 'no'} prototypes={prototypes_saved} synonyms={synonyms_found}"
         result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
         return result
     except Exception as e:

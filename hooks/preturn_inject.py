@@ -236,12 +236,23 @@ def get_working_memory(conn, limit=MAX_WM_RESULTS):
     Post-pgvector migration (#115): reads from PostgreSQL via module import.
     Falls back to SQLite if PG unavailable.
     """
+    # Sources that are internal system signals — they drive behavior via
+    # wiring.py loops but should NOT enter the LLM's verbal context.
+    # Neuroscience basis: prediction errors (cerebellum/basal ganglia) adjust
+    # motor/cognitive behavior without entering phenomenal consciousness.
+    # The LLM should see consequences ("curious about X"), not raw signals.
+    _INTERNAL_SOURCES = {"prediction_error", "system", "event_bus", "active_inference"}
+
     if _use_pg_wm and _pg_get_working_memory:
         try:
             import json as _json
             result = _pg_get_working_memory()
             items = _json.loads(result).get("items", [])[:limit]
-            return [(it["content"], it["topic"], it["relevance"]) for it in items]
+            return [
+                (it["content"], it["topic"], it["relevance"])
+                for it in items
+                if it.get("source", "interaction") not in _INTERNAL_SOURCES
+            ]
         except Exception:
             pass  # Fall through to SQLite
     # Fallback: SQLite (pre-migration data, frozen)
@@ -249,7 +260,7 @@ def get_working_memory(conn, limit=MAX_WM_RESULTS):
         cursor = conn.execute("""
             SELECT content, topic, relevance
             FROM working_memory
-            WHERE active = 1
+            WHERE active = 1 AND COALESCE(source, 'interaction') NOT IN ('prediction_error', 'system', 'event_bus', 'active_inference')
             ORDER BY relevance DESC, occurred_at DESC
             LIMIT ?
         """, (limit,))
