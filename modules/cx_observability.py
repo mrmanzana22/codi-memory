@@ -56,6 +56,84 @@ def _build_handler_map():
 
 
 # ---------------------------------------------------------------------------
+# Effective Fire Tracking — distinguishes guard-pass from guard-block
+# Handlers call report_effective_fire(cx_id) after passing their guard.
+# ---------------------------------------------------------------------------
+_effective_fire_counts: dict[str, int] = {}  # CX-ID -> count of fires that produced side-effects
+_total_invocation_counts: dict[str, int] = {}  # CX-ID -> total invocations (from cascade_log)
+_inhibition_events: dict[str, int] = {}  # CX-ID -> count of inhibitory actions (CX-23, CX-28, CX-15)
+_INHIBITORY_CX = {'CX-15', 'CX-23', 'CX-28'}
+
+
+def report_effective_fire(cx_id: str):
+    """Called by CX handlers AFTER passing their guard and producing a side-effect."""
+    _effective_fire_counts[cx_id] = _effective_fire_counts.get(cx_id, 0) + 1
+    if cx_id in _INHIBITORY_CX:
+        _inhibition_events[cx_id] = _inhibition_events.get(cx_id, 0) + 1
+
+
+def get_effective_fire_counts() -> dict:
+    """Return {CX-ID: effective_count} for all CX that reported fires."""
+    return dict(_effective_fire_counts)
+
+
+def get_guard_passthrough_rates() -> dict:
+    """Return {CX-ID: rate} where rate = effective / invocations. <0.1 = functionally dead."""
+    rates = {}
+    for cx_id, total in _total_invocation_counts.items():
+        effective = _effective_fire_counts.get(cx_id, 0)
+        rates[cx_id] = round(effective / max(total, 1), 3)
+    return rates
+
+
+def compute_eii(fire_counts: dict, diversity: float, total_cx: int) -> float:
+    """Effective Integration Index.
+
+    EII = (cross_event_chains / total_traces) * H_norm * (1 - isolation_ratio)
+
+    - cross_event_chains: traces with >1 distinct event type (real integration)
+    - H_norm: normalized Shannon entropy (0-1)
+    - isolation_ratio: fraction of active CX that fire alone (no co-fire)
+    """
+    if not fire_counts or total_cx == 0:
+        return 0.0
+
+    # H_norm: normalize Shannon by max possible entropy
+    max_entropy = math.log2(max(total_cx, 2))
+    h_norm = min(diversity / max_entropy, 1.0) if max_entropy > 0 else 0.0
+
+    # Cross-event chains from co-activation tracker
+    cross_chains = 0
+    total_traces = max(len(_coact_tracker._trace_cx), 1)
+    for cx_set in _coact_tracker._trace_cx.values():
+        if len(cx_set) > 1:
+            cross_chains += 1
+    chain_ratio = cross_chains / total_traces
+
+    # Isolation ratio: CX that never co-fire with others
+    active_cx = set(fire_counts.keys())
+    cofiring_cx = set()
+    for cx_set in _coact_tracker._trace_cx.values():
+        if len(cx_set) > 1:
+            cofiring_cx.update(cx_set)
+    isolated = active_cx - cofiring_cx
+    isolation_ratio = len(isolated) / max(len(active_cx), 1)
+
+    eii = chain_ratio * h_norm * (1.0 - isolation_ratio)
+    return round(eii, 4)
+
+
+def compute_inhibition_ratio(fire_counts: dict) -> float:
+    """Ratio of inhibitory fires to total effective fires.
+
+    If > 0.40, inhibitory CX (CX-23, CX-28) may be killing curiosity/metacognition.
+    """
+    total_effective = sum(_effective_fire_counts.values()) or 1
+    total_inhibitory = sum(_inhibition_events.values())
+    return round(total_inhibitory / total_effective, 3)
+
+
+# ---------------------------------------------------------------------------
 # Tracker 1: Co-Activation (Shannon entropy diversity)
 # ---------------------------------------------------------------------------
 class CoActivationTracker:
@@ -230,6 +308,14 @@ def compute_cx_snapshot() -> dict:
     fire_counts = _habit_tracker.fire_counts()
     cascade_class = classify_cascade(cascade)
 
+    # 3b. Update total invocation counts from cascade_log for guard passthrough calc
+    _total_invocation_counts.clear()
+    for entry in cascade:
+        handler = entry.get('handler', '')
+        cx_id = _handler_to_cx.get(handler)
+        if cx_id:
+            _total_invocation_counts[cx_id] = _total_invocation_counts.get(cx_id, 0) + 1
+
     # 4. Compute per-CX status
     cx_status = {}
     all_cx = set(CX_REGISTRY.keys())
@@ -269,11 +355,30 @@ def compute_cx_snapshot() -> dict:
         cx_id = _handler_to_cx.get(s.get('handler', ''), '?')
         anomalies.append(f"SLOW: {cx_id} P95={s.get('p95', 0):.1f}ms")
 
+    # 7. Compute new CX health metrics
+    effective_fires = get_effective_fire_counts()
+    passthrough = get_guard_passthrough_rates()
+    eii = compute_eii(fire_counts, diversity, total_cx)
+    inhib_ratio = compute_inhibition_ratio(fire_counts)
+
+    # 8. Additional anomaly: high inhibition ratio
+    if inhib_ratio > 0.40:
+        anomalies.append(f"HIGH_INHIBITION: ratio={inhib_ratio} (>0.40 threshold)")
+
+    # 9. Anomaly: CX invoked but guard always blocks (functionally dead)
+    for cx_id, rate in passthrough.items():
+        if rate < 0.1 and _total_invocation_counts.get(cx_id, 0) >= 3:
+            anomalies.append(f"GUARD_BLOCK: {cx_id} passthrough={rate}")
+
     return {
         'ts': datetime.now(TZ_COL).isoformat(),
         'cx_status': cx_status,
         'fire_counts': fire_counts,
+        'effective_fires': effective_fires,
+        'guard_passthrough': passthrough,
         'diversity_index': diversity,
+        'eii': eii,
+        'inhibition_ratio': inhib_ratio,
         'cascade': cascade_class,
         'ei_ratio': ei_ratio,
         'pull_cx': pull_count,
@@ -338,15 +443,21 @@ def _build_hud_html(snapshot: dict) -> str:
         except Exception:
             pass
 
+    # EII + effective fires from snapshot
+    eii_val = snapshot.get('eii', 0)
+    eff_fires = snapshot.get('effective_fires', {})
+    eff_total = sum(eff_fires.values()) if eff_fires else 0
+    inhib_ratio = snapshot.get('inhibition_ratio', 0)
+
     return f"""<div class="hud-bar">
   <div class="hud-cell" style="--accent:var(--c-pe)"><div class="hud-value" data-count="12">0</div><div class="hud-label">Contracts</div><div class="hud-sub">12 cognitive loops</div></div>
   <div class="hud-cell" style="--accent:var(--c-l2)"><div class="hud-value" data-count="{total}">0</div><div class="hud-label">Cross-Loops</div><div class="hud-sub">{active} active now</div></div>
   <div class="hud-cell" style="--accent:var(--c-l5)"><div class="hud-value" data-count="{total_metrics}">0</div><div class="hud-label">Metrics</div><div class="hud-sub">{healthy_count}/{total_metrics} healthy</div></div>
-  <div class="hud-cell" style="--accent:var(--c-l3)"><div class="hud-value" data-count="{test_count}">0</div><div class="hud-label">Tests</div><div class="hud-sub">42s parallel</div></div>
+  <div class="hud-cell" style="--accent:var(--c-l3)"><div class="hud-value" data-count="{eii_val:.4f}" data-dec="4">0</div><div class="hud-label">EII</div><div class="hud-sub">integration idx</div></div>
   <div class="hud-cell" style="--accent:var(--c-l1)"><div class="hud-value" data-count="{pci:.3f}" data-dec="3">0</div><div class="hud-label">PCI</div><div class="hud-sub">consciousness idx</div></div>
   <div class="hud-cell" style="--accent:var(--c-l6)"><div class="hud-value" data-count="{pred_acc}" data-suf="%">0</div><div class="hud-label">Prediction</div><div class="hud-sub">accuracy</div></div>
   <div class="hud-cell" style="--accent:var(--c-pe)"><div class="hud-value" data-count="{fhrr_count}">0</div><div class="hud-label">FHRR</div><div class="hud-sub">sessions indexed</div></div>
-  <div class="hud-cell" style="--accent:var(--c-l4)"><div class="hud-value" data-count="{l1_pct}" data-suf="%">0</div><div class="hud-label">L1 Score</div><div class="hud-sub">{healthy_count}/{total_metrics} HEALTHY</div></div>
+  <div class="hud-cell" style="--accent:var(--c-l4)"><div class="hud-value" data-count="{eff_total}">0</div><div class="hud-label">CX Fires</div><div class="hud-sub">effective ({inhib_ratio:.0%} inhib)</div></div>
 </div>"""
 
 
@@ -439,11 +550,18 @@ def _update_html_dashboard(snapshot: dict):
     except Exception:
         ts_short = ts[:16]
 
+    # Effective fires summary for CPO LIVE
+    eff_fires = snapshot.get('effective_fires', {})
+    eff_count = sum(eff_fires.values()) if eff_fires else 0
+    eii = snapshot.get('eii', 0)
+    inhib = snapshot.get('inhibition_ratio', 0)
+    inhib_class = 'warn' if inhib > 0.40 else 'ok'
+
     live_html = f"""
   <b>CPO LIVE</b> (updated {ts_short})
   CX fires: {cx_line}
-  E/I: <span>{snapshot.get('ei_ratio', '?')}</span> | Diversity: <span>{diversity}</span> | Recurrent: <span>{cascade.get('ratio', 0)}</span> ({cascade.get('type', '?')})
-  Active: <span class="ok">{snapshot.get('active_cx', 0)}</span> | Silent: <span class="err">{len(snapshot.get('dead_cx', []))}</span> | Pull: <span>{snapshot.get('pull_cx', '?')}</span>{anomaly_html}"""
+  E/I: <span>{snapshot.get('ei_ratio', '?')}</span> | Diversity: <span>{diversity}</span> | <span class="{inhib_class}">EII: {eii}</span> | Recurrent: <span>{cascade.get('ratio', 0)}</span> ({cascade.get('type', '?')})
+  Active: <span class="ok">{snapshot.get('active_cx', 0)}</span> | Silent: <span class="err">{len(snapshot.get('dead_cx', []))}</span> | Pull: <span>{snapshot.get('pull_cx', '?')}</span> | <span>Effective: {eff_count}</span> | <span class="{inhib_class}">Inhib: {inhib}</span>{anomaly_html}"""
 
     # Replace CPO section
     pattern = re.escape(_MARKER_START) + r'.*?' + re.escape(_MARKER_END)
@@ -682,10 +800,23 @@ def _get_cx_health_impl(hours: int = 24) -> str:
             f"Active CX: {snap.get('active_cx', '?')}/{snap.get('total_cx', '?')}",
             f"E/I ratio: {snap.get('ei_ratio', '?')}",
             f"Diversity (Shannon): {snap.get('diversity_index', '?')}",
+            f"EII (Effective Integration): {snap.get('eii', '?')}",
+            f"Inhibition ratio: {snap.get('inhibition_ratio', '?')}",
             f"Cascade type: {snap.get('cascade', {}).get('type', '?')} "
             f"(recurrent ratio: {snap.get('cascade', {}).get('ratio', '?')})",
             "",
         ]
+
+        # Effective fires summary
+        effective = snap.get('effective_fires', {})
+        passthrough = snap.get('guard_passthrough', {})
+        if effective or passthrough:
+            lines.append("## Effective Fires (guard pass-through)")
+            for cx_id in sorted(set(list(effective.keys()) + list(passthrough.keys()))):
+                eff = effective.get(cx_id, 0)
+                rate = passthrough.get(cx_id, '-')
+                lines.append(f"  {cx_id}: {eff} effective (passthrough={rate})")
+            lines.append("")
 
         # CX status table
         cx_status = snap.get('cx_status', {})

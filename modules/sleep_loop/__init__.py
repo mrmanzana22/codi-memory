@@ -784,6 +784,19 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     )
                     continue
 
+                # Sprint C: Emit MEMORY_RETRIEVED — reconsolidation reads memories
+                # (Oudiette & Paller 2013: sleep reactivation = implicit retrieval)
+                try:
+                    from modules.events import event_bus, Events
+                    event_bus.emit(Events.MEMORY_RETRIEVED, {
+                        "query": context[:100] if context else "",
+                        "retrieved_ids": [memory_id],
+                        "result_count": 1,
+                        "source": "sleep_reconsolidation",
+                    })
+                except Exception:
+                    pass
+
                 # Lower confidence proportional to PE magnitude
                 confidence_reduction = min(0.2, pe * 0.3)
                 new_confidence = max(0.1, old_confidence - confidence_reduction)
@@ -821,7 +834,22 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                     now,
                 ))
 
-                # Emit event (direct SQLite)
+                # Emit event via event_bus (Sprint B: CX-8, CX-18, CX-29 need this)
+                # PE dampened 0.6x for sleep context (Lewis & Durrant 2011)
+                try:
+                    from modules.events import event_bus, Events
+                    event_bus.emit(Events.RECONSOLIDATION_TRIGGERED, {
+                        "memory_id": memory_id,
+                        "action": "extinction",  # Bouton 2004
+                        "prediction_error": pe * 0.6,  # Sleep PE < interactive PE
+                        "old_confidence": old_confidence,
+                        "new_confidence": new_confidence,
+                        "source": "sleep_loop",
+                    })
+                except Exception:
+                    pass
+
+                # Also persist to event_counts for historical tracking
                 conn.execute("""
                     INSERT INTO event_counts (event, count, last_seen)
                     VALUES ('reconsolidation_triggered', 1, ?)
@@ -918,6 +946,20 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                 validated = flagged_count
                 if validated > 0:
                     conn.commit()
+
+                # Sprint C: Emit PREDICTION_ERROR for L2 domain failures
+                # PE dampened 0.6x — sleep PE is lower amplitude (Lewis & Durrant 2011)
+                try:
+                    from modules.events import event_bus, Events
+                    for domain, avg_pe, sample_count in flagged_domains[:MAX_FLAG_PER_CYCLE]:
+                        event_bus.emit(Events.PREDICTION_ERROR, {
+                            "topic": domain,
+                            "error_magnitude": avg_pe * 0.6,  # Dampened for sleep context
+                            "confidence": 1.0 - avg_pe,
+                            "source": "sleep_l2_validation",
+                        })
+                except Exception:
+                    pass
         except Exception:
             _logger.exception("Closed-loop L2 reconsolidation validation failed")
             l2_failed = True
@@ -1010,6 +1052,18 @@ def _replay_consolidation_event():
                               facts_extracted, facts_created, facts_updated,
                               contradictions_found, episodes_pruned, duration_ms,
                               consolidated_ids, created_at"""
+
+            # Add bridge_edges + batch_topic if columns exist (Sprint A: CX wakeup)
+            _extra_cols = ""
+            try:
+                pg_conn.execute(
+                    "SELECT bridge_edges, batch_topic FROM consolidation_log LIMIT 0"
+                )
+                _cols += ", bridge_edges, batch_topic"
+                _extra_cols = "bridge_batch"
+            except Exception:
+                pass  # Columns don't exist yet — pre-migration
+
             if last_emitted_ts:
                 rows = pg_conn.execute(
                     f"""SELECT {_cols}
@@ -1040,10 +1094,18 @@ def _replay_consolidation_event():
                 "episodes_pruned": row[8], "duration_ms": row[9],
                 "consolidated_ids": row[10] or [],  # Proposal #186: CX-4b needs IDs
             }
-            event_bus.emit(Events.CONSOLIDATION_COMPLETE, event_data)
             latest_ts = str(row[11])
-            _logger.info("Replayed CONSOLIDATION_COMPLETE for batch=%s scope=%s",
-                         row[0], row[1])
+
+            # Sprint A: enrich with bridge_edges + batch_topic for CX-14 and CX-32
+            if _extra_cols == "bridge_batch":
+                event_data["bridge_edges"] = row[12] or 0
+                event_data["batch_topic"] = row[13] or ""
+
+            event_bus.emit(Events.CONSOLIDATION_COMPLETE, event_data)
+            _logger.info("Replayed CONSOLIDATION_COMPLETE for batch=%s scope=%s bridge=%s topic=%s",
+                         row[0], row[1],
+                         event_data.get("bridge_edges", "?"),
+                         event_data.get("batch_topic", "?")[:30])
 
         # Update marker
         if latest_ts:
@@ -1381,6 +1443,19 @@ def _tick_curiosity_resolve(budget_ms: int) -> dict:
 
         question = candidate["pregunta"]
         category = candidate.get("categoria", "general")
+
+        # Sprint C: Emit ACTION_SELECTED — curiosity chose a candidate to resolve
+        # Valid analog: curiosity selecting = action selection (CX-30 causal learning)
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.ACTION_SELECTED, {
+                "action": "resolve_curiosity",
+                "state_topic": category,
+                "efe_spread": 0.5,  # Moderate spread — curiosity is directed
+                "source": "sleep_loop",
+            })
+        except Exception:
+            pass
 
         # Step 1: Web search for real-world context
         web_context = _web_search_context(question)

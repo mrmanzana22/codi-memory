@@ -36,6 +36,7 @@ from modules.events import event_bus, Events
 from modules.config import now_iso
 from modules.secret_redact import redact_secrets
 from modules.pg_store import pg as _pg
+from modules.cx_observability import report_effective_fire
 
 _logger = logging.getLogger(__name__)
 
@@ -279,6 +280,7 @@ def _on_consolidation_enrich_fhrr(event_name: str, data: dict):
                     relevance=0.4,
                     source="fhrr_consolidation_enrichment",
                 )
+                report_effective_fire('CX-32')
                 _logger.debug("CX-32: Enriched consolidation with session topics: %s", unique_topics)
     except Exception as e:
         _logger.error("CX-32 _on_consolidation_enrich_fhrr error: %s", redact_secrets(str(e)))
@@ -321,6 +323,7 @@ def _on_memory_retrieved_fhrr(event_name: str, data: dict):
             relevance=min(0.5, score),
             source="fhrr_gnw_candidate",
         )
+        report_effective_fire('CX-33')
         _logger.debug("CX-33: Pushed session %s (score=%.2f) to WM for GNW", session_id, score)
     except Exception as e:
         _logger.error("CX-33 _on_memory_retrieved_fhrr error: %s", redact_secrets(str(e)))
@@ -1412,6 +1415,7 @@ def _on_pe_drives_curiosity(event_name: str, data: dict):
         )
 
         _pe_curiosity_cooldowns[topic] = now
+        report_effective_fire('CX-1')
         _logger.info("CX-1 PE→curiosity: topic=%s, magnitude=%.2f, LP=%.3f",
                       topic, error_magnitude, lp or 0)
     except Exception as e:
@@ -1452,6 +1456,7 @@ def _on_curiosity_resolved_prediction(event_name: str, data: dict):
         """, (topic, topic, question[:100], now_iso()))
         conn.commit()
 
+        report_effective_fire('CX-2')
         _logger.info("CX-2 curiosity→PE: topic=%s resolved, precision boosted (synthetic hit injected)",
                       topic)
     except Exception as e:
@@ -1518,10 +1523,11 @@ def _on_vault_tracks_urgency(event_name: str, data: dict):
         _vault_tracker["count"] += 1
 
         # Importance-weighted: only count important vaults
-        importance = data.get("importance", "low")
+        importance = data.get("importance", "normal")
         if importance in ("high", "critical"):
             _vault_tracker["important_count"] += 1
 
+        report_effective_fire('CX-4a')
         _logger.debug("CX-4a vault tracker: total=%d, important=%d",
                        _vault_tracker["count"], _vault_tracker["important_count"])
     except Exception as e:
@@ -1592,6 +1598,7 @@ def _on_consolidation_protects_decay(event_name: str, data: dict):
                 continue
 
         if boosted:
+            report_effective_fire('CX-4b')
             _logger.info("CX-4b consolidation→SS: boosted %d/%d memories (SS +%.2f)",
                           boosted, len(consolidated_ids), SS_CONSOLIDATION_BOOST)
     except Exception as e:
@@ -1645,6 +1652,7 @@ def _on_reconsolidation_protects_decay(event_name: str, data: dict):
 
         if new_ss > current_ss:
             _pg.update_payload(memory_id, {"storage_strength": round(new_ss, 4)})
+            report_effective_fire('CX-8')
             _logger.info(
                 "CX-8 reconsolidation→SS: id=%s, SS %.4f→%.4f, confidence=%.2f",
                 memory_id[:12], current_ss, new_ss, new_confidence,
@@ -1947,6 +1955,7 @@ def _on_consolidation_gaps_drive_curiosity(event_name: str, data: dict):
                 questions_pushed += 1
 
         if questions_pushed:
+            report_effective_fire('CX-14')
             _logger.info(
                 "CX-14 consolidation→curiosity: %d questions (contradictions=%d, density=%.2f, bridges=%d)",
                 questions_pushed, contradictions, facts / max(clusters, 1), bridge_edges,
@@ -2052,6 +2061,7 @@ def _on_curiosity_feeds_causal(event_name: str, data: dict):
         if len(_cx11_buffer) >= _CX11_MAX_BUFFER:
             _flush_curiosity_to_causal()
 
+        report_effective_fire('CX-11')
         _logger.info("CX-11 curiosity→causal: buffered %s→%s (%d/%d)",
                       from_topic, topic, len(_cx11_buffer), _CX11_MAX_BUFFER)
     except Exception as e:
@@ -2344,6 +2354,7 @@ def _on_retrieval_boosts_ss(event_name: str, data: dict):
                     del _cx12_last_boost[k]
 
             if boosted:
+                report_effective_fire('CX-12')
                 _logger.info(
                     "CX-12 retrieval→SS: boosted %d/%d memories (dampening=%.2f, topic=%s)",
                     boosted, len(eligible_ids), dampening, topic_key[:20],
@@ -2417,16 +2428,24 @@ def _on_reconsolidation_to_metacognition(event_name: str, data: dict):
     Nelson & Narens 1990: memory correction must update monitoring.
     If a memory was wrong enough to trigger reconsolidation (PE >= 0.6),
     the metacognitive system should be LESS confident in that domain.
+
+    Sprint B: Also handles action="extinction" from sleep loop.
     """
     action = data.get("action", "")
-    if action != "correct_memory":
+    if action not in ("correct_memory", "extinction"):
         return
 
-    old_conf = data.get("old_confidence", 1.0)
-    new_conf = data.get("new_confidence", 1.0)
-    pe = abs(old_conf - new_conf)  # Proxy for prediction error magnitude
-    if pe < 0.1:
-        return
+    if action == "extinction":
+        # Sleep-sourced: use PE directly (already dampened 0.6x by sleep loop)
+        pe = data.get("prediction_error", 0)
+        if pe < 0.1:
+            return
+    else:
+        old_conf = data.get("old_confidence", 1.0)
+        new_conf = data.get("new_confidence", 1.0)
+        pe = abs(old_conf - new_conf)  # Proxy for prediction error magnitude
+        if pe < 0.1:
+            return
 
     memory_id = data.get("memory_id", "")
 
@@ -2451,9 +2470,10 @@ def _on_reconsolidation_to_metacognition(event_name: str, data: dict):
 
     if abs(new_mod - current) > 0.001:
         _cx10_precision_modifiers[domain] = new_mod
+        report_effective_fire('CX-18')
         _logger.info(
-            "CX-18 recon→meta: domain=%s, precision %.2f→%.2f (PE=%.2f)",
-            domain[:20], current, new_mod, pe,
+            "CX-18 recon→meta: domain=%s, precision %.2f→%.2f (PE=%.2f, action=%s)",
+            domain[:20], current, new_mod, pe, action,
         )
 
 
@@ -2667,6 +2687,7 @@ def _on_consolidation_feeds_self_model(event_name: str, data: dict):
                     aspect=aspect,
                 )
 
+            report_effective_fire('CX-19')
             _logger.info("CX-19 consol→self: fed %d self-relevant facts", len(self_relevant[:3]))
         except Exception as e:
             _logger.warning("CX-19 error: %s", redact_secrets(str(e)))
@@ -2739,6 +2760,7 @@ def _on_consolidation_updates_prediction_priors(event_name: str, data: dict):
                 updated += 1
 
             if updated:
+                report_effective_fire('CX-17')
                 _logger.info("CX-17 consol→pred: updated %d domain schema priors (weight=%.2f)", updated, _CX17_SCHEMA_WEIGHT)
         except Exception as e:
             _logger.warning("CX-17 error: %s", redact_secrets(str(e)))
@@ -2845,6 +2867,11 @@ def _on_action_selected_to_metacognition(event_name: str, data: dict):
 
     All 4 cognitive architectures require this feedback pathway.
     """
+    # Sprint C: Gate sleep-sourced actions — brain does NOT apply metacognitive
+    # monitoring to sleep actions (Louie & Wilson 2001)
+    if data.get("source") == "sleep_loop":
+        return
+
     action = data.get("action", "")
     efe_spread = data.get("efe_spread", 1.0)
     state_topic = data.get("state_topic", "general")
@@ -2862,6 +2889,7 @@ def _on_action_selected_to_metacognition(event_name: str, data: dict):
             new_mod = max(_CX10_PRECISION_FLOOR, current - 0.05)
             if abs(new_mod - current) > 0.001:
                 _cx10_precision_modifiers[state_topic] = new_mod
+                report_effective_fire('CX-22')
                 _logger.info(
                     "CX-22 action→meta: perseveration detected (%s x%d), precision %.2f→%.2f",
                     action, _CX22_PERSEVERATION_THRESHOLD, current, new_mod,
@@ -2874,6 +2902,7 @@ def _on_action_selected_to_metacognition(event_name: str, data: dict):
         new_mod = max(_CX10_PRECISION_FLOOR, current - 0.03)
         if abs(new_mod - current) > 0.001:
             _cx10_precision_modifiers[state_topic] = new_mod
+            report_effective_fire('CX-22')
             _logger.info(
                 "CX-22 action→meta: indecision (spread=%.4f), precision %.2f→%.2f",
                 efe_spread, current, new_mod,
@@ -2937,6 +2966,7 @@ def _on_forgetting_suppresses_curiosity(event_name: str, data: dict):
                 removed = before - len(cdata["pendientes"])
                 if removed > 0:
                     _guardar_curiosidades(cdata)
+                    report_effective_fire('CX-23')
                     _logger.info("CX-23 forget→curiosity: suppressed %d items for themes %s", removed, themes)
             except Exception:
                 pass  # Suppression is best-effort
@@ -2993,6 +3023,7 @@ def _on_forgetting_degrades_metacognition(event_name: str, data: dict):
                 new_mod = max(_CX28_FLOOR, current - _CX28_CONFIDENCE_REDUCTION)
                 if abs(new_mod - current) > 0.001:
                     _cx10_precision_modifiers[theme] = new_mod
+                    report_effective_fire('CX-28')
                     _logger.info(
                         "CX-28 forget→meta: domain '%s' confidence %.2f→%.2f (vault event)",
                         theme, current, new_mod,
@@ -3236,9 +3267,11 @@ def _on_reconsolidation_invalidates_causal_edges(event_name: str, data: dict):
 
     When reconsolidation corrects a memory, causal edges that were built
     from evidence involving that memory's domain should be re-evaluated.
+
+    Sprint B: Also handles action="extinction" from sleep loop.
     """
     action = data.get("action", "")
-    if action != "correct_memory":
+    if action not in ("correct_memory", "extinction"):
         return
 
     memory_id = data.get("memory_id", "")
@@ -3292,6 +3325,7 @@ def _on_reconsolidation_invalidates_causal_edges(event_name: str, data: dict):
 
             if invalidated > 0:
                 conn.commit()
+                report_effective_fire('CX-29')
                 _logger.info(
                     "CX-29 recon→causal: invalidated %d edges for themes %s (memory=%s)",
                     invalidated, themes[:3], memory_id[:8],
@@ -3338,6 +3372,7 @@ def _on_action_outcome_updates_causal_dag(event_name: str, data: dict):
         "weight": _CX30_INTERVENTION_WEIGHT,  # 2x observational (Pearl 2009 do-calculus)
     })
 
+    report_effective_fire('CX-30')
     _logger.debug(
         "CX-30 action→causal: interventional evidence action:%s→%s (weight=%.1f)",
         action, state_topic, _CX30_INTERVENTION_WEIGHT,

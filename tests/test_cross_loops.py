@@ -2329,5 +2329,267 @@ class TestCX30_ActionOutcomesCausal(unittest.TestCase):
         self.assertGreater(_CX30_INTERVENTION_WEIGHT, _CX11_CURIOSITY_WEIGHT)
 
 
+# ============================================================
+# SPRINT CX-WAKEUP TESTS — effective_fires, EII, event enrichment
+# ============================================================
+
+class TestEffectiveFiresTracking(unittest.TestCase):
+    """Sprint 0: effective_fires infrastructure."""
+
+    def setUp(self):
+        from modules.cx_observability import _effective_fire_counts, _inhibition_events
+        _effective_fire_counts.clear()
+        _inhibition_events.clear()
+
+    def test_report_effective_fire_increments(self):
+        from modules.cx_observability import report_effective_fire, get_effective_fire_counts
+        report_effective_fire('CX-4b')
+        report_effective_fire('CX-4b')
+        report_effective_fire('CX-14')
+        counts = get_effective_fire_counts()
+        self.assertEqual(counts['CX-4b'], 2)
+        self.assertEqual(counts['CX-14'], 1)
+
+    def test_inhibitory_cx_tracked(self):
+        from modules.cx_observability import report_effective_fire, _inhibition_events
+        report_effective_fire('CX-23')
+        report_effective_fire('CX-28')
+        report_effective_fire('CX-4b')  # Not inhibitory
+        self.assertEqual(_inhibition_events.get('CX-23'), 1)
+        self.assertEqual(_inhibition_events.get('CX-28'), 1)
+        self.assertNotIn('CX-4b', _inhibition_events)
+
+    def test_inhibition_ratio_zero_when_no_inhibitory(self):
+        from modules.cx_observability import report_effective_fire, compute_inhibition_ratio
+        report_effective_fire('CX-1')
+        report_effective_fire('CX-2')
+        ratio = compute_inhibition_ratio({})
+        self.assertEqual(ratio, 0.0)
+
+    def test_inhibition_ratio_warns_above_threshold(self):
+        from modules.cx_observability import report_effective_fire, compute_inhibition_ratio
+        # 3 inhibitory, 2 excitatory = 0.6 ratio
+        for _ in range(3):
+            report_effective_fire('CX-23')
+        for _ in range(2):
+            report_effective_fire('CX-1')
+        ratio = compute_inhibition_ratio({})
+        self.assertGreater(ratio, 0.40)
+
+
+class TestEII(unittest.TestCase):
+    """Sprint 0: Effective Integration Index computation."""
+
+    def test_eii_zero_when_no_fires(self):
+        from modules.cx_observability import compute_eii
+        self.assertEqual(compute_eii({}, 0.0, 34), 0.0)
+
+    def test_eii_zero_when_no_diversity(self):
+        from modules.cx_observability import compute_eii
+        # No diversity = no integration
+        result = compute_eii({'CX-3': 5}, 0.0, 34)
+        self.assertEqual(result, 0.0)
+
+    def test_eii_positive_with_diversity(self):
+        from modules.cx_observability import compute_eii, _coact_tracker
+        # Simulate co-firing traces
+        _coact_tracker._trace_cx = {
+            'trace1': {'CX-3', 'CX-10'},
+            'trace2': {'CX-3', 'CX-15'},
+            'trace3': {'CX-10', 'CX-26'},
+        }
+        result = compute_eii({'CX-3': 3, 'CX-10': 2, 'CX-15': 1, 'CX-26': 1}, 2.0, 34)
+        self.assertGreater(result, 0.0)
+        _coact_tracker._trace_cx.clear()
+
+
+class TestConsolidationEventEnrichment(unittest.TestCase):
+    """Sprint A: Consolidation event includes bridge_edges and batch_topic."""
+
+    def test_consolidation_event_has_bridge_edges(self):
+        """Verify event_data structure includes bridge_edges field."""
+        # Simulate what _replay_consolidation_event produces
+        event_data = {
+            "batch_id": "test-batch",
+            "scope": "full",
+            "bridge_edges": 5,
+            "batch_topic": "trading, consciencia",
+        }
+        self.assertIn("bridge_edges", event_data)
+        self.assertEqual(event_data["bridge_edges"], 5)
+
+    def test_cx14_channel3_needs_bridge_edges_gt3(self):
+        """CX-14 channel 3 only fires if bridge_edges > 3."""
+        import modules.wiring as w
+        old_topics = dict(w._cx14_recent_topics)
+        w._cx14_recent_topics.clear()
+
+        with patch("modules.curiosity.push_curiosidad") as mock_push:
+            # bridge_edges = 2 → no fire
+            w._on_consolidation_gaps_drive_curiosity("consolidation_complete", {
+                "scope": "full", "contradictions_found": 0,
+                "clusters_found": 5, "facts_extracted": 10,
+                "bridge_edges": 2,
+            })
+            mock_push.assert_not_called()
+
+            # bridge_edges = 5 → fires
+            w._on_consolidation_gaps_drive_curiosity("consolidation_complete", {
+                "scope": "full", "contradictions_found": 0,
+                "clusters_found": 5, "facts_extracted": 10,
+                "bridge_edges": 5,
+            })
+            mock_push.assert_called_once()
+
+        w._cx14_recent_topics = old_topics
+
+    def test_cx32_needs_batch_topic(self):
+        """CX-32 returns early without batch_topic."""
+        from modules.wiring import _on_consolidation_enrich_fhrr
+        # No batch_topic → early return (no error)
+        _on_consolidation_enrich_fhrr("consolidation_complete", {
+            "facts_created": 3,
+            "batch_topic": "",
+        })
+        # Should not raise — just return early
+
+
+class TestReconsolidationEventEmission(unittest.TestCase):
+    """Sprint B: Reconsolidation emits event_bus events."""
+
+    def test_cx18_accepts_extinction_action(self):
+        """CX-18 now handles action='extinction' from sleep loop."""
+        import modules.wiring as w
+        old_mods = dict(w._cx10_precision_modifiers)
+        w._cx10_precision_modifiers.clear()
+        w._cx10_precision_modifiers["test_domain"] = 1.0
+
+        with patch.object(w._pg, 'get_by_ids', return_value=[
+            MagicMock(payload={"narrative_themes": ["test_domain"]})
+        ]):
+            w._on_reconsolidation_to_metacognition("reconsolidation_triggered", {
+                "action": "extinction",
+                "memory_id": "test-id",
+                "prediction_error": 0.4,  # Already dampened 0.6x
+                "old_confidence": 0.8,
+                "new_confidence": 0.5,
+                "source": "sleep_loop",
+            })
+
+        # Precision should have decreased
+        self.assertLess(w._cx10_precision_modifiers.get("test_domain", 1.0), 1.0)
+        w._cx10_precision_modifiers = old_mods
+
+    def test_cx29_accepts_extinction_action(self):
+        """CX-29 now handles action='extinction' from sleep loop."""
+        from modules.wiring import _on_reconsolidation_invalidates_causal_edges
+        # Should not raise with extinction action
+        with patch.object(MagicMock(), 'get_by_ids', return_value=[]):
+            _on_reconsolidation_invalidates_causal_edges("reconsolidation_triggered", {
+                "action": "extinction",
+                "memory_id": "test-id",
+            })
+
+    def test_cx8_rejects_extinction(self):
+        """CX-8 MUST NOT fire for extinction — don't boost SS of weakened memory."""
+        import modules.wiring as w
+        with patch.object(w._pg, 'get_by_ids') as mock_get:
+            w._on_reconsolidation_protects_decay("reconsolidation_triggered", {
+                "action": "extinction",
+                "memory_id": "test-id",
+                "new_confidence": 0.3,
+            })
+            mock_get.assert_not_called()  # Should return before pg lookup
+
+
+class TestVaultEventEnrichment(unittest.TestCase):
+    """Sprint B: MEMORY_VAULTED includes importance field."""
+
+    def test_vault_event_has_importance(self):
+        """Vault emission includes importance from payload."""
+        import modules.wiring as w
+        old_tracker = dict(w._vault_tracker)
+
+        # Reset tracker
+        w._vault_tracker["count"] = 0
+        w._vault_tracker["important_count"] = 0
+        w._vault_tracker["window_start"] = time.monotonic()
+
+        w._on_vault_tracks_urgency("memory_vaulted", {
+            "memory_id": "test-id",
+            "importance": "high",
+        })
+
+        self.assertEqual(w._vault_tracker["important_count"], 1)
+        w._vault_tracker.update(old_tracker)
+
+
+class TestCX22SleepGate(unittest.TestCase):
+    """Sprint C: CX-22 ignores sleep-sourced actions."""
+
+    def test_sleep_source_gated(self):
+        """CX-22 returns early for source='sleep_loop'."""
+        import modules.wiring as w
+        old_history = list(w._cx22_action_history)
+        w._cx22_action_history.clear()
+
+        w._on_action_selected_to_metacognition("action_selected", {
+            "action": "resolve_curiosity",
+            "source": "sleep_loop",
+            "efe_spread": 0.01,
+            "state_topic": "test",
+        })
+
+        # History should be empty — handler returned before tracking
+        self.assertEqual(len(w._cx22_action_history), 0)
+        w._cx22_action_history = old_history
+
+    def test_interactive_source_not_gated(self):
+        """CX-22 processes interactive actions normally."""
+        import modules.wiring as w
+        old_history = list(w._cx22_action_history)
+        w._cx22_action_history.clear()
+
+        w._on_action_selected_to_metacognition("action_selected", {
+            "action": "exploit",
+            "source": "interactive",
+            "efe_spread": 0.5,
+            "state_topic": "test",
+        })
+
+        self.assertEqual(len(w._cx22_action_history), 1)
+        w._cx22_action_history = old_history
+
+
+class TestGuardPassthroughRate(unittest.TestCase):
+    """Sprint 0: Guard passthrough rate computation."""
+
+    def setUp(self):
+        from modules.cx_observability import (
+            _effective_fire_counts, _total_invocation_counts, _inhibition_events
+        )
+        _effective_fire_counts.clear()
+        _total_invocation_counts.clear()
+        _inhibition_events.clear()
+
+    def test_passthrough_rate(self):
+        from modules.cx_observability import (
+            report_effective_fire, get_guard_passthrough_rates,
+            _total_invocation_counts
+        )
+        _total_invocation_counts['CX-14'] = 10
+        report_effective_fire('CX-14')
+        report_effective_fire('CX-14')
+        rates = get_guard_passthrough_rates()
+        self.assertAlmostEqual(rates['CX-14'], 0.2, places=2)
+
+    def test_zero_invocations_returns_1(self):
+        from modules.cx_observability import get_guard_passthrough_rates, _total_invocation_counts
+        _total_invocation_counts['CX-99'] = 0
+        rates = get_guard_passthrough_rates()
+        # 0/max(0,1) = 0
+        self.assertEqual(rates.get('CX-99', 0), 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

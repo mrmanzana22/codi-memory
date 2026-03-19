@@ -1934,12 +1934,21 @@ def _log_consolidation_run(result: dict):
     """Log a consolidation run to PostgreSQL."""
     try:
         with get_pg_conn() as conn:
+            # Ensure bridge_edges and batch_topic columns exist (idempotent)
+            conn.execute("ALTER TABLE consolidation_log ADD COLUMN IF NOT EXISTS bridge_edges INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE consolidation_log ADD COLUMN IF NOT EXISTS batch_topic TEXT DEFAULT ''")
+
+            # Derive batch_topic from topics touched during consolidation
+            topics = result.get("topics", [])
+            batch_topic = ", ".join(t for t in topics[:5] if t) if topics else result.get("scope", "")
+
             conn.execute("""
                 INSERT INTO consolidation_log
                 (batch_id, scope, lookback_hours, episodes_scanned, clusters_found,
                  facts_extracted, facts_created, facts_updated, contradictions_found,
-                 episodes_pruned, duration_ms, consolidated_ids, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                 episodes_pruned, duration_ms, consolidated_ids, bridge_edges, batch_topic,
+                 created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
             """, (
                 result["batch_id"], result["scope"], result.get("lookback_hours", 24),
                 result["episodes_scanned"], result["clusters_found"],
@@ -1947,6 +1956,8 @@ def _log_consolidation_run(result: dict):
                 result["facts_updated"], result["contradictions_found"],
                 result["episodes_pruned"], result["duration_ms"],
                 json.dumps(result.get("consolidated_ids", [])[:100]),
+                result.get("bridge_edges", 0),
+                batch_topic,
                 now_iso()
             ))
     except Exception as e:

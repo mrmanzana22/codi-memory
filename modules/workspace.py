@@ -467,7 +467,7 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
                     vault_payload["attention_salience"] = new_salience
                     vault_payload["_chain_member"] = str(point.id) in _chain_members
                     if should_enter_vault(vault_payload):
-                        vault_candidates.append(str(point.id))
+                        vault_candidates.append((str(point.id), vault_payload.get("narrative_importance", "normal")))
 
             total_scanned += len(batch)
             if not next_offset:
@@ -491,12 +491,22 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
 
         vaulted_count = 0
         if vault_candidates:
-            unique_candidates = list(dict.fromkeys(vault_candidates))
-            vaulted_count = pg.batch_update_dormant(unique_candidates)
+            # vault_candidates is list of (id, importance) tuples
+            seen = set()
+            unique_candidates = []
+            for mid, imp in vault_candidates:
+                if mid not in seen:
+                    seen.add(mid)
+                    unique_candidates.append((mid, imp))
+            candidate_ids = [mid for mid, _ in unique_candidates]
+            vaulted_count = pg.batch_update_dormant(candidate_ids)
             if vaulted_count:
                 try:
-                    for mid in unique_candidates[:vaulted_count]:
-                        event_bus.emit(Events.MEMORY_VAULTED, {"memory_id": mid})
+                    for mid, imp in unique_candidates[:vaulted_count]:
+                        event_bus.emit(Events.MEMORY_VAULTED, {
+                            "memory_id": mid,
+                            "importance": imp,  # Sprint B: CX-4a needs this for weighted counting
+                        })
                 except Exception:
                     pass
 
