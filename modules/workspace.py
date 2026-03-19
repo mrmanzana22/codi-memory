@@ -481,13 +481,14 @@ def apply_salience_decay(decay_rate: float = 0.05) -> str:
             _now = _dt.now()
             with _pg_conn() as conn:
                 with conn.transaction():
-                    conn.executemany(
-                        "UPDATE memories SET activation_score = %s, "
-                        "storage_strength = %s, retrieval_strength = %s, "
-                        "updated_at = %s WHERE id = %s",
-                        [(sal, ss_val, rs_val, _now, mid)
-                         for mid, sal, ss_val, rs_val in pending_updates],
-                    )
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            "UPDATE memories SET activation_score = %s, "
+                            "storage_strength = %s, retrieval_strength = %s, "
+                            "updated_at = %s WHERE id = %s",
+                            [(sal, ss_val, rs_val, _now, mid)
+                             for mid, sal, ss_val, rs_val in pending_updates],
+                        )
 
         vaulted_count = 0
         if vault_candidates:
