@@ -3266,7 +3266,7 @@ def _on_workspace_retrieval_modulates_forgetting(event_name: str, data: dict):
                             current_ss = payload.get("storage_strength", 0.5)
                             new_ss = max(0.1, current_ss * (1.0 - _CX25_RIF_FACTOR))
                             if abs(new_ss - current_ss) > 0.001:
-                                pg.update_payload(lid, {"storage_strength": new_ss})
+                                _pg_rif.update_payload(lid, {"storage_strength": new_ss})
                                 suppressed += 1
                         except Exception:
                             continue
