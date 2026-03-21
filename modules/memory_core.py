@@ -1695,7 +1695,7 @@ def update_memory_importance(memory_id: str, new_importance: str) -> str:
             return f"No encontre memoria con ID que empiece con '{memory_id}'"
 
         pg.update_payload(full_id, {
-            'narrative_importance': new_importance,
+            'importance': new_importance,
         })
 
         return f"Memoria {memory_id} actualizada a importancia: {new_importance}"
