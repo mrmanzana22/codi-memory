@@ -243,7 +243,7 @@ def get_prediction_accuracy() -> str:
             lines.append(f"**Sorpresas de alta intensidad:** {high_surprises}")
 
         try:
-            all_error_points, _ = pg.scroll(filters={"metadata_key": {"key": "prediction_error", "value": "true"}}, limit=500, is_semantic=False)
+            all_error_points, _ = pg.scroll(filters={"metadata_key": {"key": "prediction_error", "value": True}}, limit=500, is_semantic=False)
             if all_error_points:
                 lines.append(f"\n## Errores de Prediccion Almacenados ({len(all_error_points)})")
                 for p in all_error_points[:10]:

@@ -153,17 +153,9 @@ def focus_attention(context: str, depth: str = "normal") -> str:
                             'salience': salience, 'source': source,
                             'importance': importance,
                             'topic': ' '.join(payload.get('narrative_themes', [])),
+                            '_payload': payload,  # carry payload for winner-only update
                         },
                     ))
-
-                    # Update attention metadata (batched)
-                    new_salience = min(salience + 0.1, 1.0)
-                    access_count = payload.get('attention_access_count', 0)
-                    pg.update_payload(mem_id, {
-                        'attention_salience': new_salience,
-                        'attention_access_count': access_count + 1,
-                        'attention_last_accessed': now_iso(),
-                    })
             except Exception:
                 competition_candidates.append(CompetitionCandidate(
                     content=r.get('memory', ''),
@@ -177,6 +169,19 @@ def focus_attention(context: str, depth: str = "normal") -> str:
         comp_result = run_workspace_competition(
             competition_candidates, slots=limit, current_focus=context,
         )
+
+        # Update attention metadata ONLY for spotlight winners (Desimone & Duncan 1995)
+        for winner in comp_result.winners:
+            try:
+                win_pl = winner.metadata.get('_payload', {})
+                pg.update_payload(winner.memory_id, {
+                    'attention_salience': min(win_pl.get('attention_salience', 0.5) + 0.1, 1.0),
+                    'attention_access_count': win_pl.get('attention_access_count', 0) + 1,
+                    'attention_last_accessed': now_iso(),
+                })
+            except Exception:
+                pass
+
         spotlight_candidates = [
             {
                 'id': w.memory_id, 'content': w.content,
@@ -626,13 +631,8 @@ def emotional_focus_attention(context: str) -> str:
                     spotlight_candidates.append({
                         'id': mem_id, 'content': r.get('memory', ''), 'attention_score': attention_score,
                         'emotional_boost': emotional_boost, 'salience': salience, 'source': source,
-                        'importance': importance, 'emotion': payload.get('pad_emotion', 'unknown')
-                    })
-                    new_salience = min(salience + 0.1, 1.0)
-                    pg.update_payload(mem_id, {
-                        'attention_salience': new_salience,
-                        'attention_access_count': payload.get('attention_access_count', 0) + 1,
-                        'attention_last_accessed': now_iso(),
+                        'importance': importance, 'emotion': payload.get('pad_emotion', 'unknown'),
+                        '_payload': payload,  # carry for winner-only update
                     })
             except Exception:
                 spotlight_candidates.append({
@@ -643,6 +643,19 @@ def emotional_focus_attention(context: str) -> str:
 
         spotlight_candidates.sort(key=lambda x: x['attention_score'], reverse=True)
         spotlight = spotlight_candidates[:7]
+
+        # Update attention metadata ONLY for spotlight winners (Desimone & Duncan 1995)
+        for m in spotlight:
+            try:
+                pl = m.get('_payload', {})
+                if pl:
+                    pg.update_payload(m['id'], {
+                        'attention_salience': min(pl.get('attention_salience', 0.5) + 0.1, 1.0),
+                        'attention_access_count': pl.get('attention_access_count', 0) + 1,
+                        'attention_last_accessed': now_iso(),
+                    })
+            except Exception:
+                pass
         update_workspace_spotlight(spotlight, theme=context)
 
         emotional_influence = 'neutral'

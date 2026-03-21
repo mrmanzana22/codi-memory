@@ -327,10 +327,16 @@ def push_curiosidad(tema: str, prioridad: str = "media", categoria: str = "gener
                     x.get("agregada", ""),
                 ),
             )
-            removed = sorted_items[0]
-            data["pendientes"].remove(removed)
+            worst = sorted_items[0]
+            worst_prio = prioridad_orden.get(worst.get("prioridad", "media"), 1)
+            new_prio = prioridad_orden.get(prioridad, 1)
+            if new_prio < worst_prio:
+                return (f"Cola llena ({MAX_PENDING_CURIOSITIES} items). "
+                        f"'{tema}' [{prioridad}] rechazado — prioridad minima: "
+                        f"{worst.get('prioridad', 'media')}.")
+            data["pendientes"].remove(worst)
             data.setdefault("exploradas", []).append(
-                {**removed, "resuelto": now_short(), "razon": "pruned_by_cap"}
+                {**worst, "resuelto": now_short(), "razon": "pruned_by_cap"}
             )
 
         nueva = {

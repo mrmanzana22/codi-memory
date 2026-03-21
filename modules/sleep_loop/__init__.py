@@ -2317,62 +2317,55 @@ def _tick_health(budget_ms: int) -> dict:
             except Exception:
                 pass
 
-        # Count shortcut: if FTS has >= pg_count, skip the expensive full scan.
-        # Write-worker inserts to FTS atomically with Qdrant, so count parity
-        # is a reliable sync signal in steady state.  Full ID-membership scan
-        # only runs when counts diverge (new memories not yet in FTS).
-        if fts_count >= pg_count:
-            fts_conn.close()
-            parts.append(f"fts_sync: in sync ({fts_count})")
+        # Bug #29 fix: count shortcut removed (FTS5 all-types vs PG episodic-only
+        # comparison was unreliable — see proposal #354). Always do ID membership scan.
+        fts_ids = set(
+            row[0] for row in
+            fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
+        )
+
+        synced = 0
+        scroll_offset = None
+        while True:
+            scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
+            if scroll_offset is not None:
+                scroll_kwargs["offset"] = scroll_offset
+            points, scroll_offset = _pg.scroll(**scroll_kwargs)
+
+            for p in points:
+                mid = str(p.id)
+                if mid not in fts_ids:
+                    content = p.payload.get('data', '')
+                    if not content:
+                        continue
+                    category = p.payload.get('category', 'general')
+                    source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
+                    importance = p.payload.get('narrative_importance', 'medium')
+                    # Preserve source created_at; fall back to now if missing
+                    src_created = p.payload.get('created_at', '')
+                    if src_created:
+                        # Normalize to SQLite-compatible UTC format (#002)
+                        fts_created = to_sqlite_utc(src_created)
+                    else:
+                        fts_created = None  # will use datetime('now')
+                    fts_conn.execute("""
+                        INSERT OR REPLACE INTO memories_text
+                        (memory_id, content, category, source, importance, created_at)
+                        VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+                    """, (mid, content, category, source, importance, fts_created))
+                    synced += 1
+
+            if scroll_offset is None:
+                break
+
+        if synced > 0:
+            fts_conn.commit()
+        fts_conn.close()
+
+        if synced > 0:
+            parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
         else:
-            # Counts diverge — do the full ID membership check
-            fts_ids = set(
-                row[0] for row in
-                fts_conn.execute("SELECT memory_id FROM memories_text").fetchall()
-            )
-
-            synced = 0
-            scroll_offset = None
-            while True:
-                scroll_kwargs = dict(filters={}, limit=5000, is_semantic=False)
-                if scroll_offset is not None:
-                    scroll_kwargs["offset"] = scroll_offset
-                points, scroll_offset = _pg.scroll(**scroll_kwargs)
-
-                for p in points:
-                    mid = str(p.id)
-                    if mid not in fts_ids:
-                        content = p.payload.get('data', '')
-                        if not content:
-                            continue
-                        category = p.payload.get('category', 'general')
-                        source = p.payload.get('source', p.payload.get('ownership_source', 'experienced'))
-                        importance = p.payload.get('narrative_importance', 'medium')
-                        # Preserve source created_at; fall back to now if missing
-                        src_created = p.payload.get('created_at', '')
-                        if src_created:
-                            # Normalize to SQLite-compatible UTC format (#002)
-                            fts_created = to_sqlite_utc(src_created)
-                        else:
-                            fts_created = None  # will use datetime('now')
-                        fts_conn.execute("""
-                            INSERT OR REPLACE INTO memories_text
-                            (memory_id, content, category, source, importance, created_at)
-                            VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
-                        """, (mid, content, category, source, importance, fts_created))
-                        synced += 1
-
-                if scroll_offset is None:
-                    break
-
-            if synced > 0:
-                fts_conn.commit()
-            fts_conn.close()
-
-            if synced > 0:
-                parts.append(f"fts_sync: {synced} new (total: {fts_count + synced})")
-            else:
-                parts.append(f"fts_sync: in sync ({fts_count})")
+            parts.append(f"fts_sync: in sync ({fts_count})")
     except Exception as e:
         parts.append(f"fts_sync: error {str(e)[:50]}")
         has_failure = True

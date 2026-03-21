@@ -1514,6 +1514,7 @@ def _on_self_model_to_competition(event_name: str, data: dict):
             source="self_model_gwt",
         )
 
+        report_effective_fire('CX-3')
         _logger.info("CX-3 self→GNW: source=%s, confidence=%.2f, relevance=%.2f, discrepancies=%d",
                       source, confidence, relevance, disc_count)
     except Exception as e:
@@ -1885,6 +1886,7 @@ _CX9_BLOCK_THRESHOLD = 5      # Consecutive blocks before relaxation
 _CX9_SALIENCE_THRESHOLD = 0.3  # Base threshold for PE*precision gate
 _cx9_last_fire = 0.0
 _cx9_fire_count_window = []
+_cx9_dmn_call_count = 0        # Counter for DMN periodic refresh (separate from FIFO window)
 _cx9_consecutive_blocks = 0    # Homeostatic plasticity counter (proposal 188)
 _SELF_REF_KEYWORDS = {
     "self_model", "identity", "identidad", "capability", "performance",
@@ -2007,6 +2009,7 @@ def _on_self_model_to_metacognition(event_name: str, data: dict):
 
         _logger.info("CX-10A self→meta: %d discrepancies in %s, modifiers updated",
                       disc_count, domains[:3])
+        report_effective_fire('CX-10')
 
         # Direction B: Check for systematic L2 bias
         _check_metacognitive_bias()
@@ -2125,13 +2128,15 @@ def _compute_self_relevance(winner_domains: list, data: dict = None) -> float:
             score += 0.2
     # Sprint 1 FIX CX-9: check competition_id/topic for self-relevance
     if data and score < 0.1:
+        global _cx9_dmn_call_count
         topic = str(data.get("broadcast_topic", data.get("competition_id", ""))).lower()
         if any(kw in topic for kw in _SELF_REF_KEYWORDS):
             score += 0.2
-        # Baseline: every Nth broadcast gets minimal self-relevance (DMN periodic refresh)
-        _cx9_fire_count_window.append(time.monotonic())  # reuse as counter
-        if len(_cx9_fire_count_window) % 10 == 0:  # every 10th competition
-            score = max(score, 0.12)  # just above 0.1 threshold
+        # Baseline: every 10th low-score broadcast -> DMN periodic self-refresh
+        # (Northoff 2004: default-mode periodic self-monitoring)
+        _cx9_dmn_call_count += 1
+        if _cx9_dmn_call_count % 10 == 0:
+            score = max(score, 1.0)  # max relevance: bypass CB4, let kill-switch gate it
     return min(1.0, score)
 
 
@@ -2597,6 +2602,7 @@ def _on_self_model_modulates_forgetting(event_name: str, data: dict):
                             pruned += 1
 
             if protected or pruned:
+                report_effective_fire('CX-15')
                 _logger.info(
                     "CX-15 self→forget: protected=%d, pruned=%d (INHIBITORY)",
                     protected, pruned,
@@ -3126,14 +3132,18 @@ def _on_self_model_constrains_action(event_name: str, data: dict):
     Fires on SELF_MODEL_REFRESHED. Extracts core values and creates
     soft penalty constraints for policies inconsistent with identity.
     """
-    summary = data.get("summary", "")
+    # Prefer structured aspects if available (future path)
     aspects = data.get("aspects", {})
     values = aspects.get("valor", []) if isinstance(aspects, dict) else []
     preferences = aspects.get("preferencia", []) if isinstance(aspects, dict) else []
-
     beliefs = values + preferences
+
+    # Fallback: use domains as identity constraint proxies
     if len(beliefs) < _CX26_MIN_BELIEFS:
-        return
+        domains = data.get("domains", [])
+        if len(domains) < _CX26_MIN_BELIEFS:
+            return
+        beliefs = domains
 
     _cx26_core_values.clear()
     _cx26_core_values.extend(beliefs[:10])
@@ -3141,10 +3151,11 @@ def _on_self_model_constrains_action(event_name: str, data: dict):
     # Store constraints as keyword-based patterns
     _cx26_identity_constraints.clear()
     for belief in beliefs[:10]:
-        if isinstance(belief, str) and len(belief) > 5:
+        if isinstance(belief, str) and len(belief) > 2:
             _cx26_identity_constraints[belief.lower()] = _CX26_CONSTRAINT_WEIGHT
 
     if _cx26_identity_constraints:
+        report_effective_fire('CX-26')
         _logger.info("CX-26 self→action: %d identity constraints active", len(_cx26_identity_constraints))
 
 

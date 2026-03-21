@@ -1046,10 +1046,14 @@ def detect_self_discrepancies() -> dict:
         if discrepancies:
             try:
                 from modules.events import event_bus, Events
+                disc_summary = ", ".join(
+                    f"{d['domain']}({d.get('discrepancy_type', 'unknown')})" for d in discrepancies[:3]
+                )
                 event_bus.emit(Events.SELF_MODEL_REFRESHED, {
                     "source": "discrepancy_detection",
                     "discrepancy_count": len(discrepancies),
                     "domains": [d["domain"] for d in discrepancies],
+                    "summary_len": len(disc_summary),
                 })
             except Exception:
                 pass

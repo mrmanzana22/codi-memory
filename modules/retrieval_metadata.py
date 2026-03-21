@@ -634,7 +634,7 @@ def _get_fok_dual_alpha(fts_db_path: str = None) -> float:
         from modules.db_pool import get_conn as _get_conn
         conn = _get_conn(fts_db_path)
         row = conn.execute(
-            "SELECT value FROM metamemory_params WHERE key = 'fok_dual_alpha'"
+            "SELECT value FROM metamemory_params WHERE param = 'fok_dual_alpha'"
         ).fetchone()
         if row:
             return max(0.2, min(0.8, float(row[0])))
@@ -996,7 +996,7 @@ def update_fok_dual_alpha(fts_db_path: str = None) -> float:
 
         # Persist to metamemory_params
         conn.execute("""
-            INSERT OR REPLACE INTO metamemory_params (key, value, updated_at)
+            INSERT OR REPLACE INTO metamemory_params (param, value, updated_at)
             VALUES ('fok_dual_alpha', ?, ?)
         """, (str(new_alpha), now_iso()))
         conn.commit()
