@@ -52,9 +52,13 @@ class MetacognitionStore:
                 metrics["confidence_range"] = max(confidences) - min(confidences)
 
         # Monitoring → control loop check
+        from datetime import timedelta
+        from modules.config import now_col
+        _mc_cutoff = (now_col() - timedelta(days=30)).isoformat()
         mc_row = conn.execute(
             """SELECT COUNT(DISTINCT strategy_chosen) FROM metacognition_traces
-               WHERE created_at > datetime('now', '-30 days')"""
+               WHERE created_at > ?""",
+            (_mc_cutoff,)
         ).fetchone()
         if mc_row and mc_row[0] > 1:
             metrics["monitoring_control_loop"] = 1.0

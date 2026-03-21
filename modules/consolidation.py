@@ -203,8 +203,8 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     try:
         expired = expire_stale_corrections()
         result["corrections_expired"] = expired
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.warning("[consolidation] expire_stale_corrections failed: %s", e)
 
     # Log the run
     duration_ms = int((datetime.now() - start).total_seconds() * 1000)
@@ -215,8 +215,8 @@ def run_consolidation(scope: str = "full", lookback_hours: int = 24) -> str:
     try:
         from modules.events import event_bus, Events
         event_bus.emit(Events.CONSOLIDATION_COMPLETE, result)
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.warning("[consolidation] CONSOLIDATION_COMPLETE emit failed: %s", e)
 
     report = (
         f"[consolidation:{batch_id}] {scope} complete\n"
@@ -367,7 +367,7 @@ def _phase_selection(lookback_hours: int) -> list:
             # Payne & Kensinger 2010: arousal x valence interaction
             imp = payload.get("narrative_importance", "medium")
             imp_w = importance_weights.get(imp, 0.5)
-            hours_ago = max(0.1, (datetime.now() - created).total_seconds() / 3600)
+            hours_ago = max(0.1, (datetime.now(timezone.utc).replace(tzinfo=None) - created).total_seconds() / 3600)
             recency = 1.0 / (1.0 + hours_ago / lookback_hours)  # 0-1, higher = more recent
 
             # Emotional consolidation priority (McGaugh 2004, Payne & Kensinger 2010)
@@ -1129,7 +1129,7 @@ def _phase_extraction(clusters: list) -> list:
 
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
-                if raw.startswith("json"):
+                if raw.lower().startswith("json"):
                     raw = raw[4:]
             extracted = json.loads(raw)
 
@@ -1225,7 +1225,7 @@ Episodes:
 
         if raw.startswith("```"):
             raw = raw.split("```")[1]
-            if raw.startswith("json"):
+            if raw.lower().startswith("json"):
                 raw = raw[4:]
         extracted = json.loads(raw)
         if not isinstance(extracted, list):
@@ -1500,7 +1500,7 @@ def _phase_compression(scope: str = "full") -> dict:
     if scope != "full":
         return {"compressed_groups": 0, "episodes_archived": 0, "summaries_created": 0}
 
-    cutoff = datetime.now() - timedelta(days=COMPRESSION_MIN_AGE_DAYS)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=COMPRESSION_MIN_AGE_DAYS)
     now = now_iso()
 
     # Canon v2, S1-5: Load causal chain members to protect from compression
@@ -1907,16 +1907,18 @@ def _phase_checkpoint_compression(scope: str = "full") -> dict:
         summaries_created += 1
 
         # Mark originals as compressed
+        _marked_this_group = 0
         for oid in original_ids:
             try:
                 pg.update_payload(oid, {
                     "consolidated_compressed": True,
                     "compressed_into": actual_id,
                 })
-            except Exception:
-                pass
+                _marked_this_group += 1
+            except Exception as e:
+                _logger.warning("[consolidation] checkpoint mark failed for %s: %s", oid, e)
 
-        progress_compressed += len(original_ids)
+        progress_compressed += _marked_this_group
 
     _logger.info(
         "Checkpoint compression: %d trivial deleted, %d progress compressed into %d summaries, %d insights preserved",

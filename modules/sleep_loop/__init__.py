@@ -2084,12 +2084,14 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
         try:
             conn = _get_conn()
             try:
+                _cutoff_3h = (now_col() - timedelta(hours=3)).isoformat()
                 row = conn.execute(
                     """SELECT COUNT(*) FROM tool_calls
                        WHERE tool_name LIKE 'sleep_tick_%'
                        AND success = 0
                        AND error_type IS NOT NULL
-                       AND datetime(started_at) > datetime('now', '-3 hours')"""
+                       AND started_at > ?""",
+                    (_cutoff_3h,)
                 ).fetchone()
             finally:
                 conn.close()
@@ -2458,12 +2460,13 @@ def _tick_health_snapshot(budget_ms: int) -> dict:
         # --- predictions_json ---
         pred_json = {"count_24h": 0, "accuracy_pct": 0.0, "avg_pe": 0.0}
         try:
-            # prediction_results.created_at written by datetime.now().isoformat() = naive local (F2)
+            # prediction_results.created_at written by datetime.now().isoformat() = naive T-sep local
+            _pred_cutoff = (now - timedelta(hours=24)).replace(tzinfo=None).isoformat()[:19]
             pred_row = conn.execute(
                 """SELECT COUNT(*), AVG(CASE WHEN hit = 1 THEN 1.0 ELSE 0.0 END)*100,
                           AVG(COALESCE(weighted_surprise, surprise_score))
                    FROM prediction_results WHERE created_at > ?""",
-                (since_24h_local,),
+                (_pred_cutoff,),
             ).fetchone()
             if pred_row and pred_row[0]:
                 pred_json = {

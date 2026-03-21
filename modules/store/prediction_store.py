@@ -62,12 +62,15 @@ class PredictionStore:
         Replaces the prediction_results part of collect_pe_metrics().
         Returns list of floats (surprise_score values).
         """
+        from datetime import timedelta
+        from modules.config import now_col
+        _cutoff = (now_col() - timedelta(days=days)).isoformat()
         conn = self._get_conn()
         rows = conn.execute(
             """SELECT surprise_score FROM prediction_results
-               WHERE created_at > datetime('now', ? || ' days')
+               WHERE created_at > ?
                ORDER BY created_at DESC LIMIT ?""",
-            (str(-days), limit),
+            (_cutoff, limit),
         ).fetchall()
         return [r[0] for r in rows if r[0] is not None]
 

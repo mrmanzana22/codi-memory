@@ -269,7 +269,8 @@ def instrument_mcp(mcp: Any) -> None:
 
 
 def _cutoff_iso(days: int) -> str:
-    dt = datetime.now().astimezone() - timedelta(days=int(days))
+    from modules.config import now_col
+    dt = now_col() - timedelta(days=int(days))
     return dt.isoformat()
 
 

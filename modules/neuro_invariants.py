@@ -163,9 +163,9 @@ def check_static_invariants() -> list:
                 "actual": "no appraisal field",
                 "theory": "Scherer 2001 CPM: SECs required",
             })
-    except ImportError:
+    except Exception as _e:
         violations.append({"type": "import", "module": "emotion", "name": "import_failed",
-                           "expected": "importable", "actual": "error", "theory": "—"})
+                           "expected": "importable", "actual": str(_e)[:80], "theory": "—"})
 
     # --- Spreading Activation (Collins & Loftus 1975, Desimone & Duncan 1995) ---
     try:
@@ -289,10 +289,13 @@ def check_runtime_invariants() -> list:
 
             # 4. Labile memories should not exceed window (Nader 2000)
             try:
-                expired = conn.execute("""
-                    SELECT COUNT(*) FROM labile_memories
-                    WHERE datetime(window_expires) < datetime('now', '-1 hour')
-                """).fetchone()
+                from datetime import timedelta
+                from modules.config import now_col
+                _threshold = (now_col() - timedelta(hours=1)).isoformat()
+                expired = conn.execute(
+                    "SELECT COUNT(*) FROM labile_memories WHERE window_expires < ?",
+                    (_threshold,)
+                ).fetchone()
                 if expired and expired[0] > 5:
                     violations.append({
                         "type": "runtime", "module": "reconsolidation",

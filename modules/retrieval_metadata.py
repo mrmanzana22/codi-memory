@@ -143,9 +143,12 @@ def compute_memory_confidence(payload: dict, activation: float = 0.0,
     if last_accessed:
         try:
             last_dt = datetime.fromisoformat(
-                str(last_accessed).replace("Z", "+00:00").replace("+00:00", "")
+                str(last_accessed).replace("Z", "+00:00")
             )
-            hours_since = max(0, (datetime.now() - last_dt).total_seconds() / 3600)
+            # Use now_col() (Colombia-aware) for consistent tz comparison.
+            # attention_last_accessed is written with now_iso() (Colombia-aware).
+            from modules.config import now_col as _now_col
+            hours_since = max(0, (_now_col() - last_dt).total_seconds() / 3600)
             staleness_score = math.exp(-0.01 * hours_since)  # ~0.79 at 24h, ~0.51 at 7d
         except (ValueError, TypeError):
             pass
@@ -445,14 +448,11 @@ def _get_beta_prior(topic: str, fts_db_path: str) -> tuple:
     try:
         from modules.db_pool import get_conn
         conn = get_conn(fts_db_path)
-        try:
-            row = conn.execute(
-                "SELECT alpha, beta FROM fok_priors WHERE topic = ?", (topic,)
-            ).fetchone()
-            if row:
-                return (float(row[0]), float(row[1]))
-        finally:
-            conn.close()
+        row = conn.execute(
+            "SELECT alpha, beta FROM fok_priors WHERE topic = ?", (topic,)
+        ).fetchone()
+        if row:
+            return (float(row[0]), float(row[1]))
     except Exception:
         pass
     return (1.0, 1.0)
@@ -481,38 +481,34 @@ def update_fok_prior(topic: str, success: bool, fts_db_path: str = None):
     try:
         from modules.db_pool import get_conn
         conn = get_conn(fts_db_path)
-        try:
-            row = conn.execute(
-                "SELECT alpha, beta, n_observations FROM fok_priors WHERE topic = ?",
-                (topic,)
-            ).fetchone()
+        row = conn.execute(
+            "SELECT alpha, beta, n_observations FROM fok_priors WHERE topic = ?",
+            (topic,)
+        ).fetchone()
 
-            if row:
-                a, b, n = float(row[0]), float(row[1]), int(row[2])
-                # Discount (forget old observations slowly)
-                a *= DISCOUNT_GAMMA
-                b *= DISCOUNT_GAMMA
-            else:
-                a, b, n = 1.0, 1.0, 0
+        if row:
+            a, b, n = float(row[0]), float(row[1]), int(row[2])
+            # Discount (forget old observations slowly)
+            a *= DISCOUNT_GAMMA
+            b *= DISCOUNT_GAMMA
+        else:
+            a, b, n = 1.0, 1.0, 0
 
-            # Conjugate update
-            if success:
-                a += 1.0
-            else:
-                b += 1.0
+        # Conjugate update
+        if success:
+            a += 1.0
+        else:
+            b += 1.0
 
-            conn.execute("""
-                INSERT INTO fok_priors (topic, alpha, beta, n_observations, last_updated)
-                VALUES (?, ?, ?, ?, datetime('now'))
-                ON CONFLICT(topic) DO UPDATE SET
-                    alpha = excluded.alpha,
-                    beta = excluded.beta,
-                    n_observations = excluded.n_observations,
-                    last_updated = excluded.last_updated
-            """, (topic, round(a, 4), round(b, 4), n + 1))
-            conn.commit()
-        finally:
-            conn.close()
+        conn.execute("""
+            INSERT INTO fok_priors (topic, alpha, beta, n_observations, last_updated)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(topic) DO UPDATE SET
+                alpha = excluded.alpha,
+                beta = excluded.beta,
+                n_observations = excluded.n_observations,
+                last_updated = excluded.last_updated
+        """, (topic, round(a, 4), round(b, 4), n + 1))
     except Exception:
         pass
 
@@ -552,18 +548,15 @@ def estimate_familiarity(query: str, fts_db_path: str = None, wm_conn=None) -> f
         try:
             from modules.db_pool import get_conn as _get_conn
             conn = _get_conn(fts_db_path)
-            try:
-                words = [w for w in query.split() if len(w) > 2 and w.isalnum()]
-                if words:
-                    fts_q = " OR ".join(words[:5])
-                    cnt = conn.execute(
-                        "SELECT COUNT(*) FROM memories_fts WHERE content MATCH ?",
-                        (fts_q,)
-                    ).fetchone()[0]
-                    score += min(1.0, math.log(cnt + 1) / math.log(100))
-                    n_signals += 1
-            finally:
-                conn.close()
+            words = [w for w in query.split() if len(w) > 2 and w.isalnum()]
+            if words:
+                fts_q = " OR ".join(words[:5])
+                cnt = conn.execute(
+                    "SELECT COUNT(*) FROM memories_fts WHERE content MATCH ?",
+                    (fts_q,)
+                ).fetchone()[0]
+                score += min(1.0, math.log(cnt + 1) / math.log(100))
+                n_signals += 1
         except Exception:
             pass
 

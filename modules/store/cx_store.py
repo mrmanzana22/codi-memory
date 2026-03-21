@@ -22,20 +22,23 @@ class CXStore:
 
     def _fetch_snapshots(self, hours: int = 24, limit: int = 0) -> List[dict]:
         """Internal: fetch and parse snapshots (no tracing — avoids double-trace)."""
+        from datetime import timedelta
+        from modules.config import now_col
+        _cutoff = (now_col() - timedelta(hours=hours)).isoformat()
         conn = self._get_conn()
         if limit > 0:
             rows = conn.execute(
                 """SELECT ts, payload, anomalies FROM cx_snapshots
-                   WHERE ts > datetime('now', ? || ' hours')
+                   WHERE ts > ?
                    ORDER BY ts DESC LIMIT ?""",
-                (str(-hours), limit),
+                (_cutoff, limit),
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT ts, payload, anomalies FROM cx_snapshots
-                   WHERE ts > datetime('now', ? || ' hours')
+                   WHERE ts > ?
                    ORDER BY ts DESC""",
-                (str(-hours),),
+                (_cutoff,),
             ).fetchall()
 
         if not rows:
@@ -161,12 +164,15 @@ class CXStore:
 
         Replaces the CX part of collect_pe_metrics() in cognitive_contracts.py.
         """
+        from datetime import timedelta
+        from modules.config import now_col
+        _cutoff = (now_col() - timedelta(hours=hours)).isoformat()
         conn = self._get_conn()
         rows = conn.execute(
             """SELECT payload FROM cx_snapshots
-               WHERE ts > datetime('now', ? || ' hours')
+               WHERE ts > ?
                ORDER BY ts DESC LIMIT 5""",
-            (str(-hours),),
+            (_cutoff,),
         ).fetchall()
 
         all_cx_ids: set = set()

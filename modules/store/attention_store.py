@@ -25,11 +25,14 @@ class AttentionStore:
         Replaces collect_active_inference_metrics() in cognitive_contracts.py.
         Returns count of distinct drivers (capped at 4 per Options Framework).
         """
+        from datetime import timedelta
+        from modules.config import now_col
+        _cutoff = (now_col() - timedelta(days=days)).isoformat()
         conn = self._get_conn()
         rows = conn.execute(
             """SELECT DISTINCT driver FROM attention_transitions
-               WHERE created_at > datetime('now', ? || ' days')""",
-            (str(-days),),
+               WHERE created_at > ?""",
+            (_cutoff,),
         ).fetchall()
         return min(4, len(rows)) if rows else 0
 

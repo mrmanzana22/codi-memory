@@ -505,10 +505,14 @@ def collect_cx_metrics() -> Dict[str, Optional[float]]:
         db = connect_fts(FTS_DB_PATH)
         try:
             # Aggregate across last 24h of snapshots (not just latest)
+            from datetime import timedelta
+            from modules.config import now_col
+            _cx_cutoff = (now_col() - timedelta(hours=24)).isoformat()
             rows = db.execute(
                 """SELECT payload FROM cx_snapshots
-                   WHERE ts > datetime('now', '-24 hours')
-                   ORDER BY ts DESC"""
+                   WHERE ts > ?
+                   ORDER BY ts DESC""",
+                (_cx_cutoff,)
             ).fetchall()
             if not rows:
                 # Fallback: last 10 snapshots regardless of time
@@ -769,10 +773,14 @@ def collect_self_model_metrics() -> Dict[str, Optional[float]]:
             from modules.config import connect_fts, FTS_DB_PATH
             db = connect_fts(FTS_DB_PATH)
             try:
+                from datetime import timedelta as _td
+                from modules.config import now_col as _nc
+                _sm_cutoff = (_nc() - _td(days=7)).isoformat()
                 row = db.execute(
                     """SELECT COUNT(*) FROM tool_calls
                        WHERE tool_name LIKE '%self_model%'
-                       AND started_at > datetime('now', '-7 days')"""
+                       AND started_at > ?""",
+                    (_sm_cutoff,)
                 ).fetchone()
             finally:
                 db.close()
@@ -875,9 +883,13 @@ def collect_metacognition_metrics() -> Dict[str, Optional[float]]:
             if confidences:
                 metrics["confidence_range"] = max(confidences) - min(confidences)
         # Monitoring → control check: do metacognition traces show strategy changes?
+        from datetime import timedelta as _td2
+        from modules.config import now_col as _nc2
+        _mc_cutoff = (_nc2() - _td2(days=30)).isoformat()
         mc_rows = db.execute(
             """SELECT COUNT(DISTINCT strategy_chosen) FROM metacognition_traces
-               WHERE created_at > datetime('now', '-30 days')"""
+               WHERE created_at > ?""",
+            (_mc_cutoff,)
         ).fetchone()
         if mc_rows and mc_rows[0] > 1:
             metrics["monitoring_control_loop"] = 1.0  # Multiple strategies = control loop active
@@ -899,10 +911,14 @@ def collect_pe_metrics() -> Dict[str, Optional[float]]:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
         # PE magnitude mean (recent)
+        from datetime import timedelta as _td3
+        from modules.config import now_col as _nc3
+        _pe_cutoff = (_nc3() - _td3(days=7)).isoformat()
         rows = db.execute(
             """SELECT surprise_score FROM prediction_results
-               WHERE created_at > datetime('now', '-7 days')
-               ORDER BY created_at DESC LIMIT 100"""
+               WHERE created_at > ?
+               ORDER BY created_at DESC LIMIT 100""",
+            (_pe_cutoff,)
         ).fetchall()
         if rows:
             scores = [r[0] for r in rows if r[0] is not None]
@@ -910,10 +926,12 @@ def collect_pe_metrics() -> Dict[str, Optional[float]]:
                 metrics["pe_magnitude_mean"] = sum(scores) / len(scores)
         # PE flow diversity: count distinct CX that fired from PE events
         # Use cx_snapshots payload
+        _cx_pe_cutoff = (_nc3() - _td3(hours=24)).isoformat()
         cx_rows = db.execute(
             """SELECT payload FROM cx_snapshots
-               WHERE ts > datetime('now', '-24 hours')
-               ORDER BY ts DESC LIMIT 5"""
+               WHERE ts > ?
+               ORDER BY ts DESC LIMIT 5""",
+            (_cx_pe_cutoff,)
         ).fetchall()
         if cx_rows:
             import json
@@ -944,9 +962,13 @@ def collect_active_inference_metrics() -> Dict[str, Optional[float]]:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
         # Policy diversity: distinct actions selected recently
+        from datetime import timedelta as _td4
+        from modules.config import now_col as _nc4
+        _ai_cutoff = (_nc4() - _td4(days=7)).isoformat()
         rows = db.execute(
             """SELECT DISTINCT driver FROM attention_transitions
-               WHERE created_at > datetime('now', '-7 days')"""
+               WHERE created_at > ?""",
+            (_ai_cutoff,)
         ).fetchall()
         if rows:
             metrics["efe_policy_diversity"] = min(4, len(rows))

@@ -1020,9 +1020,13 @@ def detect_self_discrepancies() -> dict:
         # Record discrepancies to SQLite for trend analysis
         # Dedup: skip if same domain+type recorded in last 8h (persistent gaps fire every tick)
         try:
+            from datetime import timedelta
+            from modules.config import now_col
+            _cutoff = (now_col() - timedelta(hours=8)).isoformat()
             recent_rows = conn.execute(
                 "SELECT domain || '|' || discrepancy_type FROM self_discrepancies "
-                "WHERE datetime(created_at) > datetime('now', '-8 hours')"
+                "WHERE created_at > ?",
+                (_cutoff,)
             ).fetchall()
             _recent_keys = {r[0] for r in recent_rows}
         except Exception:
