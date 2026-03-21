@@ -68,24 +68,22 @@ def predict_context(current_context: str) -> str:
         # Stage 1: GENERATIVE — predict next topic from transition model
         predicted_topics = {}  # topic -> probability
         try:
-            from modules.db_pool import get_conn
-            from modules.config import FTS_DB_PATH
-            import os
-            db_path = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
-            conn = get_conn(db_path)
-            rows = conn.execute(
-                "SELECT to_topic, SUM(count) as total FROM transition_stats "
-                "WHERE from_topic = ? GROUP BY to_topic ORDER BY total DESC",
-                (current_topic,)
-            ).fetchall()
-
-            if rows:
-                # Dirichlet-Multinomial posterior (alpha=1.0 uniform prior)
-                alpha = 1.0
-                total = sum(r[1] for r in rows) + alpha * len(rows)
-                for r in rows:
-                    predicted_topics[r[0]] = (r[1] + alpha) / total
-            conn.close()
+            from modules.config import connect_fts
+            conn = connect_fts()
+            try:
+                rows = conn.execute(
+                    "SELECT to_topic, SUM(count) as total FROM transition_stats "
+                    "WHERE from_topic = ? GROUP BY to_topic ORDER BY total DESC",
+                    (current_topic,)
+                ).fetchall()
+                if rows:
+                    # Dirichlet-Multinomial posterior (alpha=1.0 uniform prior)
+                    alpha = 1.0
+                    total_count = sum(r[1] for r in rows) + alpha * len(rows)
+                    for r in rows:
+                        predicted_topics[r[0]] = (r[1] + alpha) / total_count
+            finally:
+                conn.close()
         except Exception:
             pass
 

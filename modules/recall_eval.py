@@ -125,7 +125,8 @@ def _search_for_eval(query, limit=10):
             points = pg.query_vector(embedding, limit=limit, is_semantic=False)
             for p in points:
                 text = (p.payload or {}).get("data", "")
-                items.append({"id": str(p.id), "text": str(text).lower()})
+                if text and str(text).strip():
+                    items.append({"id": str(p.id), "text": str(text).lower()})
 
         # BM25 search
         bm25_results = pg.search_fts(query, limit=limit)
@@ -133,8 +134,10 @@ def _search_for_eval(query, limit=10):
         for r in bm25_results:
             mid = str(r.get("memory_id", ""))
             if mid not in seen_ids:
-                items.append({"id": mid, "text": str(r.get("content", "")).lower()})
-                seen_ids.add(mid)
+                text = r.get("content", "")
+                if text and str(text).strip():
+                    items.append({"id": mid, "text": str(text).lower()})
+                    seen_ids.add(mid)
 
         # Semantic search
         try:
@@ -143,8 +146,10 @@ def _search_for_eval(query, limit=10):
             for f in sem_results:
                 fid = str(f.get("id", ""))
                 if fid not in seen_ids:
-                    items.append({"id": fid, "text": str(f.get("fact", "")).lower()})
-                    seen_ids.add(fid)
+                    text = f.get("fact", "")
+                    if text and str(text).strip():
+                        items.append({"id": fid, "text": str(text).lower()})
+                        seen_ids.add(fid)
         except Exception:
             pass
 

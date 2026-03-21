@@ -595,7 +595,7 @@ def _log_reap_action(
     """Log a reap action to write_queue_log for observability."""
     now = now_iso()
     status = "dead" if action.startswith("dead") else "requeued"
-    reason = "timeout_dead" if action == "dead" else "timeout_requeued"
+    reason = "timeout_dead" if status == "dead" else "timeout_requeued"
     try:
         conn.execute(
             "INSERT INTO write_queue_log "

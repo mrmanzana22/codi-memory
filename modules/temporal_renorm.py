@@ -331,7 +331,7 @@ def extract_themes(narratives: list, conn: sqlite3.Connection = None) -> list:
                 if existing:
                     conn.execute("""
                         UPDATE renorm_themes SET
-                            frequency = frequency + ?,
+                            frequency = ?,
                             narrative_ids = ?,
                             last_seen = ?
                         WHERE theme_id = ?

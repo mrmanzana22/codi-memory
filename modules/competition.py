@@ -217,15 +217,18 @@ def _apply_coalition_bonus(candidates: list) -> None:
 
     # Apply bonus when a domain has candidates covering 2+ different topics
     for domain, members in domain_map.items():
-        topics = set()
+        # Count members per topic (unique topics = actual diversity)
+        topic_counts: dict[str, int] = defaultdict(int)
         for m in members:
             topic = m.metadata.get("topic", "")
             if topic:
-                topics.add(topic.lower())
-        if len(topics) >= 2:
-            # Diversity bonus: each member in a diverse domain gets rewarded
+                topic_counts[topic.lower()] += 1
+        if len(topic_counts) >= 2:
+            # Diversity bonus: only reward members with a unique topic
             for m in members:
-                m.activation = min(1.0, m.activation + COALITION_TOPIC_BONUS)
+                topic = m.metadata.get("topic", "").lower()
+                if topic and topic_counts[topic] == 1:
+                    m.activation = min(1.0, m.activation + COALITION_TOPIC_BONUS)
 
 
 def apply_recurrent_amplification(winners: list, losers: list) -> None:

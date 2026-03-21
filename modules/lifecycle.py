@@ -67,7 +67,9 @@ def consolidate_recent(hours: int = 24) -> str:
         hours: Cuantas horas hacia atras revisar (default 24)
     """
     try:
+        from datetime import timedelta
         session_id = get_session_id()
+        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
         offset = 0
         recent_points = []
         while True:
@@ -81,6 +83,11 @@ def consolidate_recent(hours: int = 24) -> str:
             if next_offset is None:
                 break
             offset = next_offset
+        # Apply time filter (hours parameter)
+        recent_points = [
+            p for p in recent_points
+            if p.payload.get('created_at', '9999-12-31') >= cutoff
+        ]
         if not recent_points:
             return "No hay memorias recientes para consolidar en esta sesion."
 
@@ -103,7 +110,9 @@ def consolidate_recent(hours: int = 24) -> str:
                     if s_id != mem_id and score >= 0.7:
                         related_ids.append(s_id)
                         try:
-                            existing_links = s.get('payload', {}).get('consolidated_with', [])
+                            s_points = pg.get_by_ids([s_id])
+                            s_payload = s_points[0].payload if s_points else {}
+                            existing_links = s_payload.get('consolidated_with', [])
                             if not isinstance(existing_links, list):
                                 existing_links = []
                             merged_links = existing_links if mem_id in existing_links else existing_links + [mem_id]

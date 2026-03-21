@@ -324,11 +324,13 @@ class PGMemoryStore:
         emotion_p: float = 0.0,
         emotion_a: float = 0.0,
         emotion_d: float = 0.0,
+        auto_fts: bool = True,
     ) -> dict:
         """Add a memory to PostgreSQL.
 
         If embedding is None, generates it via OpenAI.
-        FTS index is automatic (GENERATED ALWAYS column).
+        FTS index is added automatically via auto_fts=True (default).
+        Pass auto_fts=False for callers that handle FTS indexing themselves.
 
         Returns:
             {"results": [{"id": uuid_str, "created_at": iso_str}]}
@@ -375,6 +377,19 @@ class PGMemoryStore:
 
         new_id = str(row[0])
         created = row[1].isoformat() if row[1] else now.isoformat()
+
+        # Auto-index FTS (SQLite FTS5, separate DB from PostgreSQL)
+        if auto_fts and content:
+            try:
+                from modules.memory_smart import index_memory_fts as _fts
+                _fts(new_id, content, category, source, importance)
+            except Exception as _fts_err:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "pg_store.add() FTS auto-index failed for %s: %s",
+                    new_id, _fts_err,
+                )
+
         return {"results": [{"id": new_id, "created_at": created}]}
 
     # -----------------------------------------------------------------------

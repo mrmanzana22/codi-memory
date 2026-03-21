@@ -175,7 +175,7 @@ def expire_pending(max_rows: int = EXPIRE_BATCH_SIZE) -> int:
             WHERE rewarded IS NOT NULL AND retrieved_at < ? AND id NOT IN (
                 SELECT id FROM reward_signals
                 WHERE rewarded IS NOT NULL AND retrieved_at < ?
-                ORDER BY created_at DESC LIMIT 5000
+                ORDER BY id DESC LIMIT 5000
             )
         """, (cutoff, cutoff))
         conn.commit()

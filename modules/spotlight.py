@@ -135,12 +135,14 @@ def select_risk(health_signals: dict) -> Optional[dict]:
     return None
 
 
-def select_next_action(intentions: list, checkpoint_text: str = "") -> Optional[dict]:
+def select_next_action(intentions: list, checkpoint_text: str = "", exclude_action: str = "") -> Optional[dict]:
     """Select next concrete action.
 
     Args:
         intentions: list of intention dicts
         checkpoint_text: combined text from last checkpoint
+        exclude_action: action text already claimed by another slot (e.g. goal).
+            Intentions matching this text are skipped to avoid duplicate content.
     """
     # 1. Check checkpoint for explicit next steps
     if checkpoint_text:
@@ -153,13 +155,19 @@ def select_next_action(intentions: list, checkpoint_text: str = "") -> Optional[
             if pattern in text_low:
                 return make_item("next_action", checkpoint_text[:200], "checkpoint")
 
-    # 2. Top intention that has a concrete next step
+    # 2. Top intention that has a concrete next step (skip already-used actions)
     if intentions:
         for intent in intentions:
+            action_text = intent.get("action", "")
+            if action_text == exclude_action:
+                continue
             if intent.get("action_type") in ("execute", "remind", "check"):
-                return make_item("next_action", intent["action"][:200], "intention")
-        # Fallback: use top intention regardless of type
-        return make_item("next_action", intentions[0]["action"][:200], "intention")
+                return make_item("next_action", action_text[:200], "intention")
+        # Fallback: use first intention not already used as goal
+        for intent in intentions:
+            action_text = intent.get("action", "")
+            if action_text != exclude_action:
+                return make_item("next_action", action_text[:200], "intention")
 
     return None
 
@@ -191,7 +199,9 @@ def build_spotlight(
     if risk:
         items.append(risk)
 
-    next_action = select_next_action(intentions, checkpoint_text)
+    # Pass goal text to exclude it from next_action candidates
+    goal_action = goal["text"] if goal and goal.get("source") == "intention" else ""
+    next_action = select_next_action(intentions, checkpoint_text, exclude_action=goal_action)
     if next_action:
         items.append(next_action)
 

@@ -500,9 +500,6 @@ def _spread_activation(seed_ids: list, depth: int = SPREAD_DEFAULT_DEPTH,
     seed_set = set(valid_seeds)
 
     for mid, total_delta in delta_map.items():
-        if seed_boost == 0 and mid in seed_set:
-            continue
-
         old_sal = payload_cache.get(mid, {}).get('attention_salience', 0.5)
         new_sal = _clamp_salience(old_sal + total_delta)
 

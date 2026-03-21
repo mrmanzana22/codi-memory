@@ -249,9 +249,19 @@ def observe_and_record(action_name: str) -> Optional[SystemState]:
         )
 
     # --- Sprint 4, item 4.1: Compute Affective Charge ---
+    # CX-13: Use PAD-modulated weights for EFE, matching recommend_action() selection
+    _obs_pad_weights = None
+    try:
+        from modules.wiring import compute_pad_efe_weights
+        _obs_pad_weights = compute_pad_efe_weights(
+            model_observations=model._total_observations if model else 0
+        )
+    except Exception:
+        pass  # Graceful degradation
+
     # Posterior policy: P(a) given NEW state
     posterior_policy = get_policy_distribution(current, model)
-    efes = {a.name: compute_efe(current, a, model) for a in ALL_ACTIONS}
+    efes = {a.name: compute_efe(current, a, model, weights=_obs_pad_weights) for a in ALL_ACTIONS}
 
     if _prior_policy is not None:
         ac = compute_affective_charge(_prior_policy, posterior_policy, efes)

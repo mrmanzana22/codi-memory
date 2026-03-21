@@ -241,7 +241,7 @@ def get_working_memory(conn, limit=MAX_WM_RESULTS):
     # Neuroscience basis: prediction errors (cerebellum/basal ganglia) adjust
     # motor/cognitive behavior without entering phenomenal consciousness.
     # The LLM should see consequences ("curious about X"), not raw signals.
-    _INTERNAL_SOURCES = {"prediction_error", "system", "event_bus", "active_inference"}
+    _INTERNAL_SOURCES = {"prediction_error", "event_bus", "active_inference"}
 
     if _use_pg_wm and _pg_get_working_memory:
         try:
@@ -260,7 +260,7 @@ def get_working_memory(conn, limit=MAX_WM_RESULTS):
         cursor = conn.execute("""
             SELECT content, topic, relevance
             FROM working_memory
-            WHERE active = 1 AND COALESCE(source, 'interaction') NOT IN ('prediction_error', 'system', 'event_bus', 'active_inference')
+            WHERE active = 1 AND COALESCE(source, 'interaction') NOT IN ('prediction_error', 'event_bus', 'active_inference')
             ORDER BY relevance DESC, occurred_at DESC
             LIMIT ?
         """, (limit,))

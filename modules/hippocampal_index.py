@@ -855,6 +855,7 @@ def save_session_record(record: Dict[str, Any], directory: str = None) -> str:
                 sid, now_iso(), record['num_turns'], len(record['chunks']),
                 file_size, round(elapsed_ms, 1), json.dumps(topics)
             ))
+            db.commit()
         finally:
             db.close()
     except Exception as e:
@@ -1560,24 +1561,50 @@ def compute_schema_prototype(topic: str, sessions: Optional[List[Dict[str, Any]]
     }
 
 
+def load_prototype(topic: str) -> Optional[Dict[str, Any]]:
+    """Load pre-saved schema prototype from FHRR_PROTOTYPES_DIR.
+
+    Returns None if no prototype exists for the topic.
+    Use compute_schema_prototype() only when sessions are available and prototype not yet saved.
+    """
+    topic_canon = _canonicalize(topic)
+    if not topic_canon:
+        return None
+    npz_path = os.path.join(FHRR_PROTOTYPES_DIR, f"{topic_canon}.npz")
+    if not os.path.exists(npz_path):
+        return None
+    try:
+        data = np.load(npz_path)
+        prototype_heads: Dict[str, Optional[np.ndarray]] = {}
+        for role_name, _ in ROLE_FIELDS:
+            key = f'proto_{role_name}'
+            prototype_heads[role_name] = data[key] if key in data else None
+        data.close()
+        return {'topic': topic_canon, 'prototype_heads': prototype_heads}
+    except Exception:
+        return None
+
+
 def compute_novelty_score(session_record: Dict[str, Any], sessions: Optional[List[Dict[str, Any]]] = None) -> float:
     """Compare session against schema prototypes. Returns 0.0-1.0.
 
+    Loads pre-saved prototypes from FHRR_PROTOTYPES_DIR (no load_all_sessions needed).
+    Fallback to compute_schema_prototype() only if sessions explicitly provided.
     Paper: Kumaran & Maguire 2007 (hippocampal match-mismatch).
-    High novelty = session doesn't match existing schemas.
     """
     s_topics = session_record.get('roles', {}).get('topics', [])
     if not s_topics:
         return 1.0  # No topics -> everything is novel
 
-    if sessions is None:
-        sessions = load_all_sessions()
-
     similarities = []
     for topic in s_topics:
-        proto = compute_schema_prototype(topic, sessions=sessions)
+        # Load pre-saved prototype (fast — no session reload)
+        proto = load_prototype(topic)
+        # Fallback: compute on-the-fly only when sessions explicitly provided
+        if proto is None and sessions is not None:
+            proto = compute_schema_prototype(topic, sessions=sessions)
         if proto is None:
-            continue  # No prototype for this topic yet
+            continue
         # Compare session's TOPIC role head against prototype's TOPIC head
         s_head = session_record.get('role_heads', {}).get('TOPIC')
         p_head = proto['prototype_heads'].get('TOPIC')
@@ -1657,6 +1684,7 @@ def save_prototypes(prototypes: List[Dict[str, Any]]) -> int:
                         (topic, num_sessions, updated_at, prototype_path)
                         VALUES (?, ?, ?, ?)
                     """, (topic, proto['num_sessions'], now_iso(), npz_path))
+                    db.commit()
                 finally:
                     db.close()
             except Exception as e:

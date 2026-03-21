@@ -210,7 +210,7 @@ def _construct_scenes(daily_data: dict) -> list:
                 if isinstance(pad_enc, dict):
                     p_val = pad_enc.get("P", None)
                 else:
-                    p_val = 0
+                    p_val = None  # triggers fallback to experiential_emotional_valence below
                 if p_val is not None and isinstance(p_val, (int, float)):
                     pleasures.append(p_val)
                 elif p_val is None:

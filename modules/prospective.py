@@ -615,9 +615,11 @@ def _check_time(spec: dict, now: datetime) -> dict:
         return {"matched": False}
 
     tolerance = timedelta(minutes=spec.get("tolerance_minutes", 30))
+    grace = timedelta(hours=24)  # fire up to 24h after window closes
 
-    if trigger_time - tolerance <= now_cmp <= trigger_time + tolerance:
-        return {"matched": True, "detail": f"Time: {trigger_time_str}"}
+    if trigger_time - tolerance <= now_cmp <= trigger_time + tolerance + grace:
+        overdue = now_cmp > trigger_time + tolerance
+        return {"matched": True, "detail": f"Time: {trigger_time_str}", "overdue": overdue}
     return {"matched": False}
 
 
@@ -640,7 +642,7 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             "SELECT action, trigger_type, trigger_spec, cue_focality, priority, recurrence, "
-            "recurrence_spec, context_at_creation, creator FROM intentions WHERE id = %s",
+            "recurrence_spec, context_at_creation, creator, expiry FROM intentions WHERE id = %s",
             (int_id,),
         )
         row = cur.fetchone()
@@ -657,6 +659,7 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
     rec_spec = _as_spec(row["recurrence_spec"])
     ctx = row["context_at_creation"]
     creator = row["creator"]
+    expiry = row["expiry"]  # datetime or None — inherited from original
 
     now_naive = now.replace(tzinfo=None) if now.tzinfo else now
 
@@ -681,12 +684,12 @@ def _handle_recurrence(conn, int_id: str, now: datetime):
     conn.execute("""
         INSERT INTO intentions
         (id, action, trigger_type, trigger_spec, cue_focality, priority, activation,
-         context_at_creation, creator, recurrence, recurrence_spec)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+         context_at_creation, creator, recurrence, recurrence_spec, expiry)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         new_id, action, trigger_type, json.dumps(spec), cue_focality, priority,
         activation, ctx, creator, recurrence,
-        json.dumps(rec_spec) if rec_spec else None,
+        json.dumps(rec_spec) if rec_spec else None, expiry,
     ))
     _log_event(conn, new_id, "created_from_recurrence",
                json.dumps({"parent": str(int_id)[:8], "next_time": next_time.isoformat()}))
@@ -729,7 +732,10 @@ def _mark_triggered(conn, int_id: str, detail: str, now: datetime):
     except Exception:
         pass
 
-    _handle_recurrence(conn, int_id, now)
+    try:
+        _handle_recurrence(conn, int_id, now)
+    except Exception as e:
+        _logger.warning("_handle_recurrence failed for %s: %s", str(int_id)[:8], e)
 
 
 def _boost_activation(conn, int_id: str, amount: float):
@@ -750,6 +756,22 @@ def _expire_stale(conn, now: datetime):
         "WHERE status = 'pending' AND expiry IS NOT NULL AND expiry < %s",
         (now,),
     )
+
+    # Expire time-based intentions whose window + 24h grace has passed
+    try:
+        conn.execute("""
+            UPDATE intentions SET status = 'expired'
+            WHERE status = 'pending'
+            AND trigger_type = 'time'
+            AND (trigger_spec->>'trigger_time')::timestamptz
+                + make_interval(mins := COALESCE(
+                    (trigger_spec->>'tolerance_minutes')::int, 30
+                ))
+                + interval '24 hours'
+                < NOW()
+        """)
+    except Exception:
+        pass  # PG-specific SQL; safe to skip on parse errors
 
     # Stale cleanup: very old (>30d) + very weak (<lowest threshold)
     cutoff = now - timedelta(days=30)

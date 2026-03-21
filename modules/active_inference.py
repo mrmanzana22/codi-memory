@@ -238,7 +238,7 @@ def compute_option_efe(
     state: "SystemState",
     option: Option,
     model: "GenerativeModel",
-    temperature: float = None,
+    weights: dict = None,
 ) -> float:
     """Compute Expected Free Energy for a temporally extended option.
 
@@ -246,13 +246,12 @@ def compute_option_efe(
     where P(step_i) = P(not terminated at step i-1) (geometric discounting).
 
     Sutton et al. 1999: options evaluated by aggregated value over duration.
+    CX-13: PAD-modulated weights propagated to each step's compute_efe call,
+    matching the modulation applied to primitive actions in select_action().
 
     Returns:
         Option EFE (lower = better), same scale as primitive action EFE.
     """
-    if temperature is None:
-        temperature = EFE_SOFTMAX_TEMPERATURE
-
     n = option.expected_duration
     total_efe = 0.0
     survival_prob = 1.0  # P(still running at step i)
@@ -261,7 +260,7 @@ def compute_option_efe(
     sim_state = state
     for step in range(n):
         action = option.policy_fn(sim_state, step)
-        step_efe = compute_efe(sim_state, action, model)
+        step_efe = compute_efe(sim_state, action, model, weights=weights)
         total_efe += survival_prob * step_efe
 
         # P(terminate at this step) — elapsed count = step + 1 (1-based)
@@ -586,7 +585,7 @@ def select_action(
     if include_options:
         available_options = get_available_options(state)
         for opt in available_options:
-            option_efes[opt.name] = compute_option_efe(state, opt, model, temperature)
+            option_efes[opt.name] = compute_option_efe(state, opt, model, weights=pad_weights)
 
     # Build combined candidate pool
     all_efes = {**efes, **option_efes}
