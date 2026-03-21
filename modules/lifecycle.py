@@ -68,18 +68,19 @@ def consolidate_recent(hours: int = 24) -> str:
     """
     try:
         session_id = get_session_id()
-        cursor = None
+        offset = 0
         recent_points = []
         while True:
-            page_points, cursor = pg.scroll(
+            page_points, next_offset = pg.scroll(
                 filters={"metadata_key": {"key": "temporal_session_id", "value": session_id}},
-                limit=50, cursor=cursor, is_semantic=False
+                limit=50, offset=offset, is_semantic=False
             )
             if not page_points:
                 break
             recent_points.extend(page_points)
-            if cursor is None:
+            if next_offset is None:
                 break
+            offset = next_offset
         if not recent_points:
             return "No hay memorias recientes para consolidar en esta sesion."
 

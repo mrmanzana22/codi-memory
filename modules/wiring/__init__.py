@@ -227,7 +227,7 @@ def _on_consolidation_complete(event_name: str, data: dict):
     """When consolidation finishes, update system state."""
     try:
         facts_created = data.get("facts_created", 0)
-        contradictions = data.get("contradictions", 0)
+        contradictions = data.get("contradictions_found", 0)
 
         if facts_created > 0 or contradictions > 0:
             from modules.working_memory import push_to_working_memory
@@ -1298,13 +1298,15 @@ def _on_perf_budget_violation(event_name: str, data: dict):
 def _on_emotion_gating_applied(event_name: str, data: dict):
     """S3-04: Emotion gating applied — update attention schema (Bower 1981)."""
     try:
-        emotion = data.get("emotion", "neutral")
-        effect = data.get("effect", "")
+        p = data.get("current_pleasure", 0.0)
+        a = data.get("current_arousal", 0.0)
+        from modules.core.pad import classify_emotion
+        emotion = classify_emotion(p, a, 0.0)
         _update_attention_schema(
             focus=f"emotion_gating:{emotion}",
             driver="emotion_gating",
             strength=0.6,
-            value=0.5,  # V: gating modulation has moderate informational value
+            value=0.5,
         )
     except Exception as e:
         _logger.error("_on_emotion_gating_applied error: %s", redact_secrets(str(e)))
@@ -1827,8 +1829,7 @@ def shy_downscale_ss(batch_size: int = 100) -> int:
     Returns number of memories downscaled.
     """
     try:
-        from modules.qdrant_utils import scroll_all
-        points = scroll_all(max_results=batch_size)
+        points, _ = _pg.scroll(limit=batch_size, is_semantic=False)
         downscaled = 0
         for point in points:
             payload = point.payload or {}
@@ -2560,8 +2561,7 @@ def _on_self_model_modulates_forgetting(event_name: str, data: dict):
                 return
 
             # Scan recent memories for self-relevance
-            from modules.qdrant_utils import scroll_all
-            recent = scroll_all(max_results=50)
+            recent, _ = _pg.scroll(limit=50, is_semantic=False)
             protected = 0
             pruned = 0
 
@@ -3425,7 +3425,7 @@ def _register_proactive_handlers():
     def _on_consolidation_notify(event_name: str, data: dict):
         """Notify Hare when consolidation discovers significant patterns."""
         try:
-            new_facts = data.get("semantic_facts_created", 0)
+            new_facts = data.get("facts_created", 0)
             if new_facts >= 3:
                 from modules.notifier import notify_hare
                 notify_hare(

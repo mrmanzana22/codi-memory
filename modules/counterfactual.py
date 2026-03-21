@@ -221,7 +221,7 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
                         # Check if any node's memory content mentions the target
                         for node_id in nodes:
                             row = conn.execute(
-                                "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
+                                "SELECT content, category FROM memories_text WHERE memory_id = ? LIMIT 1",
                                 (node_id,)
                             ).fetchone()
                             if row and target in (row[0] or "").lower():
@@ -237,7 +237,7 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
 
             # 2. Direct text search for target concept in memories_text
             search_rows = conn.execute(
-                "SELECT memory_id, content, topic, created_at FROM memories_text "
+                "SELECT memory_id, content, category, created_at FROM memories_text "
                 "WHERE LOWER(content) LIKE ? ORDER BY created_at ASC LIMIT 15",
                 (f"%{target}%",)
             ).fetchall()
@@ -259,7 +259,7 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
                 if node_id in seen_ids:
                     continue
                 row = conn.execute(
-                    "SELECT memory_id, content, topic, created_at FROM memories_text "
+                    "SELECT memory_id, content, category, created_at FROM memories_text "
                     "WHERE memory_id = ? LIMIT 1",
                     (node_id,)
                 ).fetchone()
@@ -317,7 +317,7 @@ def intervention_step(factual_chain: List[Dict], parsed: Dict,
 
     # Positive do(X): search for memories mentioning target and build intervention chain
     if not negated:
-        target_memories = [m for m in factual_chain if target.lower() in str(m.get("memory", "")).lower()]
+        target_memories = [m for m in factual_chain if target.lower() in str(m.get("content", "")).lower()]
         if target_memories:
             # Amplify target evidence in chain
             intervention_chain = list(factual_chain)
@@ -386,8 +386,8 @@ def _find_alternatives(removed_mems: List[Dict], target: str,
         try:
             # Find similar-topic memories that don't mention the target
             rows = conn.execute(
-                "SELECT memory_id, content, topic, created_at FROM memories_text "
-                "WHERE topic = ? AND LOWER(content) NOT LIKE ? "
+                "SELECT memory_id, content, category, created_at FROM memories_text "
+                "WHERE category = ? AND LOWER(content) NOT LIKE ? "
                 "AND memory_id NOT IN ({}) "
                 "ORDER BY created_at DESC LIMIT 3".format(
                     ",".join("?" * len(removed_ids))
@@ -514,7 +514,7 @@ def _find_downstream_effects(alt_chain: List[Dict], fts_db_path: str) -> str:
             downstream = []
             for d_id in downstream_ids[:3]:
                 row = conn.execute(
-                    "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
+                    "SELECT content, category FROM memories_text WHERE memory_id = ? LIMIT 1",
                     (d_id,)
                 ).fetchone()
                 if row:
@@ -697,20 +697,20 @@ def counterfactual_query(query: str) -> str:
     lines.append(f"**Target:** {parsed.get('intervention_target', '?')}")
     lines.append(f"**Negated:** {parsed.get('negated', False)}\n")
 
-    if factual.get("chain"):
+    if factual:
         lines.append("## Factual Chain (what actually happened)")
-        for step in factual["chain"][:5]:
-            lines.append(f"  - {step.get('content', step)[:80]}")
+        for step in factual[:5]:
+            lines.append(f"  - {step.get('content', str(step))[:80]}")
 
-    if alt.get("chain"):
+    if alt:
         lines.append("\n## Alternative Chain (counterfactual)")
-        for step in alt["chain"][:5]:
-            lines.append(f"  - {step.get('content', step)[:80]}")
+        for step in alt[:5]:
+            lines.append(f"  - {step.get('content', str(step))[:80]}")
 
     if pred:
         lines.append(f"\n## Prediction")
         lines.append(f"**Confidence:** {pred.get('confidence', 0):.2f}")
-        lines.append(f"**Outcome:** {pred.get('summary', 'unknown')}")
+        lines.append(f"**Outcome:** {pred.get('narrative', pred.get('counterfactual_outcome', 'unknown'))}")
 
     return "\n".join(lines)
 

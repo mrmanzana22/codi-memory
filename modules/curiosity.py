@@ -110,7 +110,7 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
         from datetime import timedelta
         fecha_limite = now_col() - timedelta(days=dias)
 
-        all_mems = scroll_all(max_results=5000)
+        all_mems, _ = pg.scroll(limit=5000, is_semantic=False)
 
         ts = now_iso()
         analyzed_count = 0
@@ -122,9 +122,9 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
 
         for point in all_mems:
             payload = point.payload or {}
-            meta = payload.get("metadata", {})
-            texto = payload.get("memory", payload.get("data", ""))
-            timestamp = meta.get("timestamp", "")
+            texto = payload.get("content", "")
+            timestamp = payload.get("created_at", "")
+            category = payload.get("category", "")
             category = meta.get("category", "")
 
             if timestamp:
@@ -185,7 +185,7 @@ def generar_curiosidad() -> str:
     try:
         proyectos_conocidos = KNOWN_PROJECTS
 
-        all_mems = scroll_all(max_results=5000)
+        all_mems, _ = pg.scroll(limit=5000, is_semantic=False)
 
         ts = now_iso()
         tracked_count = 0
@@ -195,9 +195,8 @@ def generar_curiosidad() -> str:
 
         for point in all_mems:
             payload = point.payload or {}
-            texto = payload.get("memory", payload.get("data", "")).lower()
-            meta = payload.get("metadata", {})
-            timestamp = meta.get("timestamp", "")
+            texto = payload.get("content", "").lower()
+            timestamp = payload.get("created_at", "")
             try:
                 if timestamp:
                     fecha = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))

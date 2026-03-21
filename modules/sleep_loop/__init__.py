@@ -37,7 +37,7 @@ from typing import Optional
 _logger = logging.getLogger(__name__)
 
 # Allow imports when run as CLI (-m modules.sleep_loop)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 

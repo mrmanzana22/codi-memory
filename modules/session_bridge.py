@@ -307,6 +307,7 @@ def checkpoint_session_close(
         # --- EMIT EVENT ---
         event_bus.emit(Events.SESSION_CLOSE, {
             "checkpoint_id": checkpoint_id,
+            "session_id": session_id,
             "source": source,
             "reason": source,
             "active_project": active_project,

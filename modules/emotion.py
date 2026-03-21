@@ -720,8 +720,10 @@ def evolve_pad_from_text(text: str) -> dict:
         from modules.events import event_bus, Events
         event_bus.emit(Events.EMOTION_CHANGED, {
             "source": "text_inference",
-            "deltas": deltas,
-            "new_state": {"P": new_p, "A": new_a, "D": new_d},
+            "pleasure": new_p, "arousal": new_a, "dominance": new_d,
+            "emotion": _classify_emotion(new_p, new_a, new_d),
+            "intensity": round(_calculate_emotional_intensity(new_p, new_a, new_d), 2),
+            "trigger": "text_inference",
         })
     except Exception:
         logger.warning("Failed to emit EMOTION_CHANGED event from evolve_pad_from_text", exc_info=True)
@@ -900,7 +902,10 @@ def _on_memory_stored(data: dict):
                     from modules.events import event_bus, Events
                     event_bus.emit(Events.EMOTION_CHANGED, {
                         "source": "ac_primary",
-                        "new_state": {"P": new_p, "A": new_a, "D": new_d},
+                        "pleasure": new_p, "arousal": new_a, "dominance": new_d,
+                        "emotion": _classify_emotion(new_p, new_a, new_d),
+                        "intensity": round(_calculate_emotional_intensity(new_p, new_a, new_d), 2),
+                        "trigger": "ac_primary",
                     })
                 except Exception:
                     pass
