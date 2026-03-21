@@ -23,7 +23,7 @@ from modules.pg_store import pg
 import random
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 _logger = logging.getLogger(__name__)
 
@@ -621,7 +621,7 @@ def compute_base_level_activation(
 
     # Parse creation time
     # Default: assume 30 days old if no timestamp (not "now" which inflates activation)
-    default_created = now - __import__('datetime').timedelta(days=30)
+    default_created = now - timedelta(days=30)
     try:
         if created_at_str and 'T' in str(created_at_str):
             created_at = datetime.fromisoformat(str(created_at_str).replace('Z', '+00:00'))
