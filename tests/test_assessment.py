@@ -117,9 +117,12 @@ class TestEvidenceCorrectness:
 
         # All should be FULL except:
         # - HOT-4 caps at 0.7 NASCENT (needs runtime emotion gating/change evidence in event_counts)
+        # - RPT-2 is 0.5 PARTIAL when Phi_E=0 (Sprint 4 FIX-09: differentiation without integration)
         for ind in result["indicators"]:
             if ind["name"] == "HOT-4":
                 assert ind["score"] == 0.7, f"HOT-4 should be NASCENT, got {ind['score']}"
+            elif ind["name"] == "RPT-2":
+                assert ind["score"] == 0.5, f"RPT-2 should be PARTIAL (no Phi_E), got {ind['score']}"
             else:
                 assert ind["score"] == 1.0, f"{ind['name']} should be FULL, got {ind['score']}"
 
@@ -163,7 +166,8 @@ class TestEvidenceCorrectness:
         result = get_assessment(evidence=_make_fixture_evidence(total_events=50))
         text = format_assessment(result)
         assert "# Butlin Consciousness Assessment" in text
-        assert "Total Score:" in text
+        assert "Structural Score:" in text
+        assert "Functional Score:" in text
         assert "## Summary" in text
 
 

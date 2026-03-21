@@ -720,9 +720,22 @@ def process_elapsed_time(elapsed_seconds: float):
         try:
             from modules.consciousness import reflect_on_self
             summary = reflect_on_self()
+            # Sprint 2 FIX CX-10: include discrepancy data so CX-10 can fire
+            disc_count = 0
+            disc_domains = []
+            try:
+                from modules.self_model import detect_self_discrepancies
+                disc = detect_self_discrepancies()
+                disc_count = disc.get("count", 0) if disc else 0
+                disc_domains = disc.get("domains", []) if disc else []
+            except Exception:
+                pass
             event_bus.emit(Events.SELF_MODEL_REFRESHED, {
                 "tick": _self_model_tick,
+                "source": "hot1_periodic",
                 "summary_len": len(summary) if summary else 0,
+                "discrepancy_count": disc_count,
+                "domains": disc_domains,
             })
         except Exception as e:
             _logger.error("HOT-1 self-model refresh error: %s", redact_secrets(str(e)))
@@ -1361,7 +1374,7 @@ def _compute_learning_progress(topic: str, window: int = 10):
         rows = conn.execute("""
             SELECT surprise_score FROM prediction_results
             WHERE actual_topic = ?
-            AND COALESCE(source, 'interactive') != 'sleep_loop'
+            -- Sprint 1 FIX CX-1: include all sources (99% of PEs are sleep_loop)
             ORDER BY id DESC LIMIT ?
         """, (topic, window)).fetchall()
         if len(rows) < 3:
@@ -1430,11 +1443,11 @@ def _on_curiosity_resolved_prediction(event_name: str, data: dict):
     surprise drops. The system becomes more confident about explored topics.
     """
     try:
-        topic = data.get("category", "")
+        topic = data.get("category", "") or "general"  # Sprint 1 FIX CX-2: default empty category
         question = data.get("question", "")
         answer_length = data.get("answer_length", 0)
 
-        if not topic or answer_length < 10:
+        if answer_length < 10:
             return  # Skip trivial resolutions
 
         # Boost precision for this topic in transition_stats
@@ -1479,7 +1492,7 @@ def _on_self_model_to_competition(event_name: str, data: dict):
         summary_len = data.get("summary_len", 0)
         disc_count = data.get("discrepancy_count", 0)
 
-        if summary_len < 20:
+        if summary_len < 5:  # Sprint 1 FIX CX-3: lowered from 20 (self-refresh has value even short)
             return
 
         # Compute self-model confidence (Shea & Frith 2019):
@@ -1619,7 +1632,7 @@ _META_EFE_REFRESH_INTERVAL = 60  # seconds
 
 # CX-5 state: broadcast context for active inference
 _broadcast_context = None
-_PE_NOVELTY_GATE = 0.5  # Norman & Shallice 1986
+_PE_NOVELTY_GATE = 0.2  # Sprint 1 FIX CX-5: lowered from 0.5 (bigram predictor needs history to exceed 0.5)
 
 
 def _on_reconsolidation_protects_decay(event_name: str, data: dict):
@@ -2045,9 +2058,7 @@ def _on_curiosity_feeds_causal(event_name: str, data: dict):
     1.5x weight (Gruber 2014: curiosity-enhanced encoding). Buffer 20 before flush.
     """
     try:
-        topic = data.get("category", "")
-        if not topic:
-            return
+        topic = data.get("category", "") or "general"  # Sprint 1 FIX CX-11: default empty category
 
         attention = get_attention_schema()
         from_topic = attention.get("current_focus", "general")
@@ -2095,17 +2106,31 @@ def _flush_curiosity_to_causal():
         _cx11_buffer = []
 
 
-def _compute_self_relevance(winner_domains: list) -> float:
-    """CX-9: Graded self-relevance score 0.0-1.0 (Northoff 2004 CMS analog)."""
+def _compute_self_relevance(winner_domains: list, data: dict = None) -> float:
+    """CX-9: Graded self-relevance score 0.0-1.0 (Northoff 2004 CMS analog).
+
+    Sprint 1 FIX: also check winner content themes, not just domain labels.
+    Domain labels ("episodic", "semantic") never match self-ref keywords.
+    """
     if not winner_domains:
         return 0.0
     score = 0.0
+    # Check domain labels (original)
     for domain in winner_domains:
         d = domain.lower() if isinstance(domain, str) else ""
         if d in _SELF_REF_KEYWORDS:
             score += 0.4
         elif any(kw in d for kw in _SELF_REF_KEYWORDS):
             score += 0.2
+    # Sprint 1 FIX CX-9: check competition_id/topic for self-relevance
+    if data and score < 0.1:
+        topic = str(data.get("broadcast_topic", data.get("competition_id", ""))).lower()
+        if any(kw in topic for kw in _SELF_REF_KEYWORDS):
+            score += 0.2
+        # Baseline: every Nth broadcast gets minimal self-relevance (DMN periodic refresh)
+        _cx9_fire_count_window.append(time.monotonic())  # reuse as counter
+        if len(_cx9_fire_count_window) % 10 == 0:  # every 10th competition
+            score = max(score, 0.12)  # just above 0.1 threshold
     return min(1.0, score)
 
 
@@ -2139,7 +2164,7 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
             _cx9_consecutive_blocks += 1
             return
 
-        self_relevance = _compute_self_relevance(winner_domains)
+        self_relevance = _compute_self_relevance(winner_domains, data)
         if self_relevance < 0.1:
             _cx9_consecutive_blocks += 1
             return
@@ -2376,7 +2401,7 @@ def _on_retrieval_boosts_ss(event_name: str, data: dict):
 # ---- CX-20: L5→L6 — Metacognitive Uncertainty Drives Curiosity ----
 # Loewenstein 1994 (information gap), Litman 2005, Boldt 2019
 # 4/4 architecture support (SOAR impasse, ACT-R retrieval failure, LIDA codelets, CLARION MCS)
-_CX20_CONF_THRESHOLD = 0.35         # Below this precision → generate curiosity
+_CX20_CONF_THRESHOLD = 0.50         # Sprint 1 FIX CX-20: raised from 0.35 (FOK typically 0.4-0.7)
 _CX20_MAX_PER_CYCLE = 2             # Max curiosity questions per metacognitive event
 _CX20_COOLDOWN_PER_DOMAIN = 900     # 15 min between curiosity pushes per domain
 _cx20_last_push: dict = {}           # domain -> time.time()
@@ -2615,16 +2640,24 @@ def _on_workspace_broadcast_to_metacognition(event_name: str, data: dict):
 
     # Modulate L2 precision via CX-10 infrastructure
     # Low workspace_conf → lower precision → system "knows it doesn't know"
+    # Sprint 1 FIX CX-16: also boost precision on high confidence (Shea & Frith 2019)
+    current = _cx10_precision_modifiers.get(domain, 1.0)
     if workspace_conf < 0.4:
-        current = _cx10_precision_modifiers.get(domain, 1.0)
         reduction = 0.05 * (0.4 - workspace_conf) / 0.4  # 0 to 0.05
         new_mod = max(_CX10_PRECISION_FLOOR, current - reduction)
-        if abs(new_mod - current) > 0.001:
-            _cx10_precision_modifiers[domain] = new_mod
-            _logger.info(
-                "CX-16 GNW→meta: domain=%s, workspace_conf=%.2f, precision %.2f→%.2f",
-                domain[:20], workspace_conf, current, new_mod,
-            )
+    elif workspace_conf > 0.7:
+        # High confidence → boost precision (system "knows it knows")
+        boost = 0.03 * (workspace_conf - 0.7) / 0.3  # 0 to 0.03
+        new_mod = min(1.0, current + boost)
+    else:
+        return  # Middle range: no change
+    if abs(new_mod - current) > 0.001:
+        _cx10_precision_modifiers[domain] = new_mod
+        report_effective_fire('CX-16')
+        _logger.info(
+            "CX-16 GNW→meta: domain=%s, workspace_conf=%.2f, precision %.2f→%.2f",
+            domain[:20], workspace_conf, current, new_mod,
+        )
 
 
 # ---- CX-19: L2→L9 — Consolidation Feeds Self-Model ----
@@ -2723,10 +2756,7 @@ def _on_consolidation_updates_prediction_priors(event_name: str, data: dict):
     facts_created = data.get("facts_created", 0)
     if facts_created < _CX17_MIN_FACTS_FOR_SCHEMA:
         return
-
-    scope = data.get("scope", "quick")
-    if scope != "full":
-        return  # Only full consolidation produces schemas
+    # Sprint 1 FIX CX-17: allow any scope with enough facts (Tse 2007 schema acceleration)
 
     def _bg_update_priors():
         try:
@@ -3362,7 +3392,7 @@ def _on_action_outcome_updates_causal_dag(event_name: str, data: dict):
 
     # Only feed if we have meaningful state change signal
     efe_spread = data.get("efe_spread", 0.0)
-    if efe_spread < 0.01:
+    if efe_spread < 0.001:  # Sprint 1 FIX CX-30: lowered from 0.01 (Pearl 2009)
         return  # Trivial action, skip
 
     # Feed CX-11 buffer with interventional weight

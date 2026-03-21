@@ -198,6 +198,25 @@ def _effective_score(relevance, last_accessed_at, access_count, created_at):
 # AUTO-CHAIN LOGIC
 # ============================================================
 
+_wm_dedup_index_checked = None  # cached result: True/False/None
+
+
+def _wm_has_dedup_index(conn) -> bool:
+    """Check if migration 032 dedup index exists. Cached per process."""
+    global _wm_dedup_index_checked
+    if _wm_dedup_index_checked is not None:
+        return _wm_dedup_index_checked
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_indexes WHERE indexname = 'idx_wm_active_content_hash'"
+            )
+            _wm_dedup_index_checked = cur.fetchone() is not None
+    except Exception:
+        _wm_dedup_index_checked = False
+    return _wm_dedup_index_checked
+
+
 _general_counter = 0
 _MAX_GENERAL_COUNTER = 1_000_000
 
@@ -300,6 +319,27 @@ def wm_get_active_topics(limit: int = 10) -> list:
         return [r["topic"] for r in rows if r["topic"]]
     except Exception:
         return []
+
+
+def wm_search_content(pattern: str, active_only: bool = True) -> int:
+    """Count WM items matching content pattern (for retrieval_metadata)."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                q = f"%{pattern}%"
+                if active_only:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM working_memory "
+                        "WHERE content LIKE %s AND active = TRUE", (q,)
+                    )
+                else:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM working_memory "
+                        "WHERE content LIKE %s", (q,)
+                    )
+                return cur.fetchone()[0]
+    except Exception:
+        return 0
 
 
 def wm_get_active_items(limit: int = 15) -> list:
@@ -491,16 +531,45 @@ def _push_to_working_memory_impl(
             chain_id = _resolve_chain_id(conn, topic, occurred_at)
 
             with conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO working_memory
-                       (content, topic, relevance, created_at, occurred_at,
-                        source, chain_id, active, access_count, machine_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
-                       RETURNING id""",
-                    (content, topic, relevance, created_at, occurred_at,
-                     source, chain_id, _MACHINE_ID)
-                )
-                new_id = cur.fetchone()[0]
+                # Try ON CONFLICT dedup if migration 032 index exists,
+                # fall back to plain INSERT otherwise
+                if _wm_has_dedup_index(conn):
+                    cur.execute(
+                        """INSERT INTO working_memory
+                           (content, topic, relevance, created_at, occurred_at,
+                            source, chain_id, active, access_count, machine_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
+                           ON CONFLICT (md5(left(content, 300)), topic)
+                           WHERE active = TRUE
+                           DO NOTHING
+                           RETURNING id""",
+                        (content, topic, relevance, created_at, occurred_at,
+                         source, chain_id, _MACHINE_ID)
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        # DB-level dedup: same content+topic already active
+                        _push_dedup[content_hash] = _now
+                        return {
+                            "id": None, "deduped": True, "chain_id": None,
+                            "topic": topic, "relevance": relevance,
+                            "effective_relevance": relevance,
+                            "created_at": created_at,
+                            "occurred_at": occurred_at,
+                            "pretty": f"# WORKING MEMORY\nDeduped (DB constraint): {content[:60]}...",
+                        }
+                    new_id = row[0]
+                else:
+                    cur.execute(
+                        """INSERT INTO working_memory
+                           (content, topic, relevance, created_at, occurred_at,
+                            source, chain_id, active, access_count, machine_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, 0, %s)
+                           RETURNING id""",
+                        (content, topic, relevance, created_at, occurred_at,
+                         source, chain_id, _MACHINE_ID)
+                    )
+                    new_id = cur.fetchone()[0]
 
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(

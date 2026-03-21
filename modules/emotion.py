@@ -864,15 +864,55 @@ def _on_affective_charge(data: dict):
 def _on_memory_stored(data: dict):
     """Event handler: auto-evolve PAD when a memory is stored.
 
-    Wired to Events.MEMORY_STORED so PAD evolves organically
-    from conversation content, not just manual set_emotional_state().
+    Sprint 2 FIX-04 (Hesp 2021): AC-primary, keywords as fallback.
+    Try precision dynamics first (AC → PAD). Only fall back to
+    keyword inference if AC data is unavailable.
+
+    NS-9: "Emotion computed from precision dynamics, not keywords"
     """
     content = data.get("content", "")
-    if content and len(content) > 10:
-        try:
-            evolve_pad_from_text(content)
-        except Exception:
-            pass
+    if not content or len(content) <= 10:
+        return
+
+    # PRIMARY: try AC-derived PAD (Hesp 2021 precision dynamics)
+    try:
+        ac_pad = compute_pad_from_ac()
+        if ac_pad is not None:
+            # AC available — use it as primary source
+            global _emotional_state
+            current = _emotional_state["current"]
+            blend = _AC_PAD_BLEND  # 0.6 = 60% AC, 40% current
+
+            new_p = _clamp_pad_value(current["pleasure"] * (1 - blend) + ac_pad["pleasure"] * blend)
+            new_a = _clamp_pad_value(current["arousal"] * (1 - blend) + ac_pad["arousal"] * blend)
+            new_d = _clamp_pad_value(current["dominance"] * (1 - blend) + ac_pad["dominance"] * blend)
+
+            delta = abs(new_p - current["pleasure"]) + abs(new_a - current["arousal"]) + abs(new_d - current["dominance"])
+            if delta >= 0.01:
+                _emotional_state["history"].append(current.copy())
+                _emotional_state["history"] = _emotional_state["history"][-20:]
+                _emotional_state["current"] = {
+                    "pleasure": new_p, "arousal": new_a, "dominance": new_d,
+                    "timestamp": now_iso(),
+                    "trigger": "ac_primary",  # Track that AC was used
+                }
+                try:
+                    from modules.events import event_bus, Events
+                    event_bus.emit(Events.EMOTION_CHANGED, {
+                        "source": "ac_primary",
+                        "new_state": {"P": new_p, "A": new_a, "D": new_d},
+                    })
+                except Exception:
+                    pass
+            return  # AC succeeded — don't fall through to keywords
+    except Exception:
+        pass  # AC unavailable — fall through to keywords
+
+    # FALLBACK: keyword inference (Scherer 2001 CPM)
+    try:
+        evolve_pad_from_text(content)
+    except Exception:
+        pass
 
 
 def register_tools(mcp):

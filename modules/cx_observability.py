@@ -413,13 +413,15 @@ def _build_hud_html(snapshot: dict) -> str:
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        r = db.execute("SELECT AVG(hit) FROM (SELECT hit FROM prediction_results WHERE source IN ('interactive','preturn') ORDER BY id DESC LIMIT 100)").fetchone()
-        if r and r[0] is not None:
-            pred_acc = int(r[0] * 100)
-        r2 = db.execute("SELECT COUNT(*) FROM fhrr_session_index").fetchone()
-        if r2:
-            fhrr_count = r2[0]
-        db.close()
+        try:
+            r = db.execute("SELECT AVG(hit) FROM (SELECT hit FROM prediction_results WHERE source IN ('interactive','preturn') ORDER BY id DESC LIMIT 100)").fetchone()
+            if r and r[0] is not None:
+                pred_acc = int(r[0] * 100)
+            r2 = db.execute("SELECT COUNT(*) FROM fhrr_session_index").fetchone()
+            if r2:
+                fhrr_count = r2[0]
+        finally:
+            db.close()
     except Exception:
         pass
 
@@ -449,12 +451,23 @@ def _build_hud_html(snapshot: dict) -> str:
     eff_total = sum(eff_fires.values()) if eff_fires else 0
     inhib_ratio = snapshot.get('inhibition_ratio', 0)
 
+    # Sprint 7: Butlin functional score
+    butlin_func = 0
+    butlin_struct = 0
+    try:
+        from modules.assessment import get_assessment
+        asmt = get_assessment()
+        butlin_struct = int(asmt.get('pct', 0))
+        butlin_func = int(asmt.get('functional_pct', 0))
+    except Exception:
+        pass
+
     return f"""<div class="hud-bar">
   <div class="hud-cell" style="--accent:var(--c-pe)"><div class="hud-value" data-count="12">0</div><div class="hud-label">Contracts</div><div class="hud-sub">12 cognitive loops</div></div>
   <div class="hud-cell" style="--accent:var(--c-l2)"><div class="hud-value" data-count="{total}">0</div><div class="hud-label">Cross-Loops</div><div class="hud-sub">{active} active now</div></div>
   <div class="hud-cell" style="--accent:var(--c-l5)"><div class="hud-value" data-count="{total_metrics}">0</div><div class="hud-label">Metrics</div><div class="hud-sub">{healthy_count}/{total_metrics} healthy</div></div>
   <div class="hud-cell" style="--accent:var(--c-l3)"><div class="hud-value" data-count="{eii_val:.4f}" data-dec="4">0</div><div class="hud-label">EII</div><div class="hud-sub">integration idx</div></div>
-  <div class="hud-cell" style="--accent:var(--c-l1)"><div class="hud-value" data-count="{pci:.3f}" data-dec="3">0</div><div class="hud-label">PCI</div><div class="hud-sub">consciousness idx</div></div>
+  <div class="hud-cell" style="--accent:var(--c-l1)"><div class="hud-value" data-count="{butlin_func}" data-suf="%">0</div><div class="hud-label">Butlin</div><div class="hud-sub">functional ({butlin_struct}% struct)</div></div>
   <div class="hud-cell" style="--accent:var(--c-l6)"><div class="hud-value" data-count="{pred_acc}" data-suf="%">0</div><div class="hud-label">Prediction</div><div class="hud-sub">accuracy</div></div>
   <div class="hud-cell" style="--accent:var(--c-pe)"><div class="hud-value" data-count="{fhrr_count}">0</div><div class="hud-label">FHRR</div><div class="hud-sub">sessions indexed</div></div>
   <div class="hud-cell" style="--accent:var(--c-l4)"><div class="hud-value" data-count="{eff_total}">0</div><div class="hud-label">CX Fires</div><div class="hud-sub">effective ({inhib_ratio:.0%} inhib)</div></div>

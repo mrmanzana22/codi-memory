@@ -106,15 +106,20 @@ def extract_events(clusters: list, conn: sqlite3.Connection = None) -> list:
         if len(episode_ids) < EVENT_MIN_EPISODES:
             continue
 
+        # Sprint 6 FIX-14: use actual episode timestamps, not now()
+        timestamps = cluster.get("timestamps", [])
+        time_start = min(timestamps) if timestamps else now
+        time_end = max(timestamps) if timestamps else now
+
         event_id = f"evt_{uuid.uuid4().hex[:8]}"
         event = {
             "event_id": event_id,
             "topic": topic,
             "episode_ids": episode_ids,
             "episode_count": len(episode_ids),
-            "time_start": now,
-            "time_end": now,
-            "summary": f"Event: {len(episode_ids)} episodes about {topic}",
+            "time_start": time_start,
+            "time_end": time_end,
+            "summary": f"Event: {len(episode_ids)} episodes about {topic} ({time_start[:10]}—{time_end[:10]})",
         }
         events.append(event)
 
@@ -127,7 +132,7 @@ def extract_events(clusters: list, conn: sqlite3.Connection = None) -> list:
                      summary, episode_count, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    event_id, topic, now, now,
+                    event_id, topic, time_start, time_end,
                     json.dumps(episode_ids),
                     event["summary"],
                     len(episode_ids),
@@ -187,9 +192,10 @@ def extract_narratives(events: list, conn: sqlite3.Connection = None) -> list:
                     # Check if any episodes have causal edges
                     for ep_a in evt["episode_ids"][:3]:
                         for ep_b in next_evt["episode_ids"][:3]:
+                            # Sprint 6 FIX-14: spreading_edges uses from_id/to_id, not source_id/target_id
                             edge = conn.execute("""
                                 SELECT edge_type FROM spreading_edges
-                                WHERE source_id = ? AND target_id = ?
+                                WHERE from_id = ? AND to_id = ?
                             """, (str(ep_a), str(ep_b))).fetchone()
                             if edge:
                                 causal_chain.append({
@@ -273,10 +279,26 @@ def extract_themes(narratives: list, conn: sqlite3.Connection = None) -> list:
     if len(all_narratives) < THEME_MIN_NARRATIVES:
         return []
 
-    # Group narratives by theme/topic
+    # Sprint 6 FIX-14: merge similar topics into abstract themes
+    # Instead of using raw topic names, cluster related topics together.
+    # E.g., "consciencia" + "identidad" → theme "self_and_consciousness"
+    _TOPIC_CLUSTERS = {
+        "self_and_consciousness": {"consciencia", "identidad", "self", "consciousness"},
+        "technical_work": {"codigo", "desarrollo", "trading", "kraken", "n8n"},
+        "learning_and_growth": {"aprendizaje", "memoria", "learning"},
+        "relationships": {"relaciones", "fullempaques", "personal"},
+    }
+    def _theme_for_topic(topic):
+        t = topic.lower() if topic else "general"
+        for theme, topics in _TOPIC_CLUSTERS.items():
+            if t in topics or any(kw in t for kw in topics):
+                return theme
+        return t  # fallback to raw topic
+
     by_theme = defaultdict(list)
     for narrative in all_narratives:
-        by_theme[narrative["theme"]].append(narrative)
+        abstract_theme = _theme_for_topic(narrative["theme"])
+        by_theme[abstract_theme].append(narrative)
 
     themes = []
     now = now_iso()
@@ -356,18 +378,19 @@ def run_temporal_renormalization(clusters: list) -> dict:
 
     try:
         conn = connect_fts(fts_path)
-        ensure_renorm_tables(conn)
+        try:
+            ensure_renorm_tables(conn)
 
-        # E1: Episodes → Events
-        events = extract_events(clusters, conn)
+            # E1: Episodes → Events
+            events = extract_events(clusters, conn)
 
-        # E2: Events → Narratives
-        narratives = extract_narratives(events, conn)
+            # E2: Events → Narratives
+            narratives = extract_narratives(events, conn)
 
-        # E3: Narratives → Themes
-        themes = extract_themes(narratives, conn)
-
-        conn.close()
+            # E3: Narratives → Themes
+            themes = extract_themes(narratives, conn)
+        finally:
+            conn.close()
 
         return {
             "events": len(events),

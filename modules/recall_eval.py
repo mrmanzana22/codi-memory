@@ -358,15 +358,16 @@ def reconcile_failed_searches(max_per_run: int = 5) -> dict:
             return {"reconciled": 0, "bridged": 0}
 
         conn = connect_fts(FTS_DB_PATH)
-
-        # Get recent failed searches not yet reconciled
-        rows = conn.execute(
-            "SELECT id, query, topic FROM failed_searches "
-            "WHERE result_count < 2 "
-            "ORDER BY created_at DESC LIMIT ?",
-            (max_per_run,),
-        ).fetchall()
-        conn.close()
+        try:
+            # Get recent failed searches not yet reconciled
+            rows = conn.execute(
+                "SELECT id, query, topic FROM failed_searches "
+                "WHERE result_count < 2 "
+                "ORDER BY created_at DESC LIMIT ?",
+                (max_per_run,),
+            ).fetchall()
+        finally:
+            conn.close()
 
         if not rows:
             return {"reconciled": 0, "bridged": 0}

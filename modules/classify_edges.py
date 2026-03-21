@@ -146,20 +146,20 @@ def classify_edges(fts_db_path: str = None, dry_run: bool = False) -> dict:
 
         if causal_links_a:
             # Strong: explicit causal_links AND temporal precedence
-            updates.append(("causes", 1, from_id, to_id))
+            updates.append(("causes", 1, orig_from, orig_to))
             result["classified_causes"] += 1
         elif has_causal_language and gap <= timedelta(hours=6):
             # Strong: causal language in content + tight temporal window
-            updates.append(("causes", 1, from_id, to_id))
+            updates.append(("causes", 1, orig_from, orig_to))
             result["classified_causes"] += 1
         elif (cat_a and cat_a == cat_b and gap <= timedelta(hours=4)
               and cat_a not in ("general", "aprendizaje", "episodio")):
             # Moderate: specific domain match + temporal proximity -> enables
-            updates.append(("enables", 1, from_id, to_id))
+            updates.append(("enables", 1, orig_from, orig_to))
             result["classified_enables"] += 1
         elif gap <= timedelta(hours=1) and _content_overlap(data_a, data_b):
             # Content-supported temporal proximity -> enables
-            updates.append(("enables", 1, from_id, to_id))
+            updates.append(("enables", 1, orig_from, orig_to))
             result["classified_enables"] += 1
         else:
             result["unchanged"] += 1

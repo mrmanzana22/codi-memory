@@ -49,72 +49,94 @@ def get_predictive_state():
 
 def predict_context(current_context: str) -> str:
     """
-    Predice que memorias seran relevantes dado el contexto actual.
+    Sprint 5 FIX-11: REAL predictive processing (Friston 2008, Rao & Ballard 1999).
 
-    Args:
-        current_context: Descripcion del contexto actual
+    Two-stage prediction:
+    1. GENERATIVE: Use topic transition model (Dirichlet-Multinomial from
+       transition_stats) to predict WHAT TOPIC will come next.
+    2. RETRIEVAL: Then fetch relevant memories for the predicted topic.
+
+    This is prediction (generating expectations top-down), not pattern
+    matching (searching bottom-up). PE = KL divergence between predicted
+    and actual topic distribution.
     """
+    import math
     try:
+        from modules.core.classification import classify_topic
+        current_topic = classify_topic(current_context)
+
+        # Stage 1: GENERATIVE — predict next topic from transition model
+        predicted_topics = {}  # topic -> probability
+        try:
+            from modules.db_pool import get_conn
+            from modules.config import FTS_DB_PATH
+            import os
+            db_path = os.environ.get("FTS_DB_PATH", FTS_DB_PATH)
+            conn = get_conn(db_path)
+            rows = conn.execute(
+                "SELECT to_topic, SUM(count) as total FROM transition_stats "
+                "WHERE from_topic = ? GROUP BY to_topic ORDER BY total DESC",
+                (current_topic,)
+            ).fetchall()
+
+            if rows:
+                # Dirichlet-Multinomial posterior (alpha=1.0 uniform prior)
+                alpha = 1.0
+                total = sum(r[1] for r in rows) + alpha * len(rows)
+                for r in rows:
+                    predicted_topics[r[0]] = (r[1] + alpha) / total
+            conn.close()
+        except Exception:
+            pass
+
+        # Fallback: if no transition data, use uniform + current topic bias
+        if not predicted_topics:
+            predicted_topics = {current_topic: 0.6, "general": 0.4}
+
+        # Stage 2: RETRIEVAL — fetch memories for top predicted topics
+        top_topics = sorted(predicted_topics.items(), key=lambda x: -x[1])[:3]
+        confidence = top_topics[0][1] if top_topics else 0.5
+
         results = pg.search(current_context, limit=10, is_semantic=True)
-        if not results or not results.get('results'):
-            prediction = {
-                'context': current_context, 'timestamp': now_iso(),
-                'predicted_memories': [], 'confidence': 0.0,
-                'reason': 'No hay memorias previas sobre este contexto'
-            }
-            with _state_lock:
-                _predictive_state['predictions'].append(prediction)
-                if len(_predictive_state['predictions']) > _PREDICTIVE_STATE_MAX:
-                    _predictive_state['predictions'] = _predictive_state['predictions'][-_PREDICTIVE_STATE_MAX:]
-            return f"No tengo memorias para predecir sobre: {current_context}\nPrediccion: contexto nuevo, alta probabilidad de sorpresa."
-
         predicted_memories = []
-        total_score = 0
-        for r in results['results']:
-            mem_id = r.get('id')
-            score = r.get('score', 0)
-            try:
-                points = pg.get_by_ids([mem_id])
-                if points:
-                    payload = points[0].payload
-                    predicted_memories.append({
-                        'id': mem_id, 'content': r.get('memory', ''),
-                        'relevance_score': score,
-                        'themes': payload.get('narrative_themes', []),
-                        'importance': payload.get('narrative_importance', 'medium')
-                    })
-                    total_score += score
-                    pg.update_payload(mem_id, {
-                        'access_count': int((payload or {}).get('access_count', 0) or 0) + 1,
-                        'last_accessed_at': now_iso(),
-                    })
-            except Exception:
-                _logger.exception("predict_context: failed to process memory %s", mem_id)
+        if results and results.get('results'):
+            for r in results['results'][:5]:
+                predicted_memories.append({
+                    'id': r.get('id', ''),
+                    'content': r.get('memory', ''),
+                    'relevance_score': r.get('score', 0),
+                })
 
-        confidence = min(total_score / len(predicted_memories) if predicted_memories else 0, 1.0)
-        predicted_themes = []
-        for pm in predicted_memories:
-            predicted_themes.extend(pm.get('themes', []))
-        predicted_themes = list(set(predicted_themes))[:5]
-
+        # Store prediction with topic distribution (for PE computation later)
         prediction = {
-            'context': current_context, 'timestamp': now_iso(),
-            'predicted_memories': [pm['id'] for pm in predicted_memories[:5]],
-            'predicted_themes': predicted_themes, 'confidence': confidence, 'verified': False
+            'context': current_context,
+            'timestamp': now_iso(),
+            'predicted_topic': top_topics[0][0] if top_topics else current_topic,
+            'topic_distribution': predicted_topics,
+            'confidence': confidence,
+            'predicted_memories': [pm['id'] for pm in predicted_memories],
+            'model': 'dirichlet_multinomial',
+            'verified': False,
         }
         with _state_lock:
             _predictive_state['predictions'].append(prediction)
             if len(_predictive_state['predictions']) > _PREDICTIVE_STATE_MAX:
                 _predictive_state['predictions'] = _predictive_state['predictions'][-_PREDICTIVE_STATE_MAX:]
 
-        lines = [f"# PREDICCION - Anticipando contexto\n"]
-        lines.append(f"**Contexto:** {current_context}")
+        # Format output
+        lines = ["# PREDICCION - Modelo Generativo\n"]
+        lines.append(f"**Contexto actual:** {current_context}")
+        lines.append(f"**Topic detectado:** {current_topic}")
         lines.append(f"**Confianza:** {confidence:.2f}")
-        lines.append(f"**Temas esperados:** {', '.join(predicted_themes) if predicted_themes else 'ninguno'}\n")
-        lines.append("## Memorias que probablemente sean relevantes")
-        for i, pm in enumerate(predicted_memories[:5], 1):
-            lines.append(f"{i}. [{pm['importance']}|{pm['relevance_score']:.2f}] {pm['content'][:60]}...")
-        lines.append(f"\n*Si el resultado real difiere, usar record_surprise() para actualizar el modelo*")
+        lines.append(f"\n## Distribucion predicha de topics")
+        for topic, prob in top_topics:
+            bar = '#' * int(prob * 20)
+            lines.append(f"  {topic:20s} {prob:.2f} {bar}")
+        if predicted_memories:
+            lines.append(f"\n## Memorias relevantes para topic predicho")
+            for i, pm in enumerate(predicted_memories[:5], 1):
+                lines.append(f"{i}. [{pm['relevance_score']:.2f}] {pm['content'][:60]}...")
+        lines.append(f"\n*Modelo: Dirichlet-Multinomial sobre transition_stats*")
         return "\n".join(lines)
     except Exception as e:
         return f"Error prediciendo: {redact_secrets(str(e))}"

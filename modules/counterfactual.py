@@ -207,73 +207,73 @@ def abduction_step(parsed: Dict, fts_db_path: str) -> List[Dict]:
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
-
-        # 1. Find causal chains that include the target concept
         try:
-            chains = conn.execute(
-                "SELECT chain_id, nodes, strength FROM causal_chains ORDER BY strength DESC LIMIT 20"
+            # 1. Find causal chains that include the target concept
+            try:
+                chains = conn.execute(
+                    "SELECT chain_id, nodes, strength FROM causal_chains ORDER BY strength DESC LIMIT 20"
+                ).fetchall()
+
+                relevant_nodes = set()
+                for chain_id, nodes_json, strength in chains:
+                    try:
+                        nodes = json.loads(nodes_json or "[]")
+                        # Check if any node's memory content mentions the target
+                        for node_id in nodes:
+                            row = conn.execute(
+                                "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
+                                (node_id,)
+                            ).fetchone()
+                            if row and target in (row[0] or "").lower():
+                                # Found a relevant chain — collect all its nodes
+                                relevant_nodes.update(nodes)
+                    except (json.JSONDecodeError, sqlite3.Error) as exc:
+                        _logger.warning("Causal chain %s parse/query error: %s", chain_id, exc)
+                    except (KeyError, IndexError, TypeError) as exc:
+                        _logger.warning("Causal chain %s row shape error: %s", chain_id, exc)
+            except sqlite3.OperationalError as exc:
+                _logger.warning("Causal chain table query failed: %s", exc)
+                relevant_nodes = set()
+
+            # 2. Direct text search for target concept in memories_text
+            search_rows = conn.execute(
+                "SELECT memory_id, content, topic, created_at FROM memories_text "
+                "WHERE LOWER(content) LIKE ? ORDER BY created_at ASC LIMIT 15",
+                (f"%{target}%",)
             ).fetchall()
 
-            relevant_nodes = set()
-            for chain_id, nodes_json, strength in chains:
-                try:
-                    nodes = json.loads(nodes_json or "[]")
-                    # Check if any node's memory content mentions the target
-                    for node_id in nodes:
-                        row = conn.execute(
-                            "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
-                            (node_id,)
-                        ).fetchone()
-                        if row and target in (row[0] or "").lower():
-                            # Found a relevant chain — collect all its nodes
-                            relevant_nodes.update(nodes)
-                except (json.JSONDecodeError, sqlite3.Error) as exc:
-                    _logger.warning("Causal chain %s parse/query error: %s", chain_id, exc)
-                except (KeyError, IndexError, TypeError) as exc:
-                    _logger.warning("Causal chain %s row shape error: %s", chain_id, exc)
-        except sqlite3.OperationalError as exc:
-            _logger.warning("Causal chain table query failed: %s", exc)
-            relevant_nodes = set()
+            seen_ids = set()
+            for mem_id, content, topic, created_at in search_rows:
+                if mem_id not in seen_ids:
+                    factual_chain.append({
+                        "memory_id": mem_id,
+                        "content": content,
+                        "topic": topic or "general",
+                        "created_at": created_at or "",
+                        "source": "text_match",
+                    })
+                    seen_ids.add(mem_id)
 
-        # 2. Direct text search for target concept in memories_text
-        search_rows = conn.execute(
-            "SELECT memory_id, content, topic, created_at FROM memories_text "
-            "WHERE LOWER(content) LIKE ? ORDER BY created_at ASC LIMIT 15",
-            (f"%{target}%",)
-        ).fetchall()
-
-        seen_ids = set()
-        for mem_id, content, topic, created_at in search_rows:
-            if mem_id not in seen_ids:
-                factual_chain.append({
-                    "memory_id": mem_id,
-                    "content": content,
-                    "topic": topic or "general",
-                    "created_at": created_at or "",
-                    "source": "text_match",
-                })
-                seen_ids.add(mem_id)
-
-        # 3. Fetch relevant chain nodes not already included
-        for node_id in list(relevant_nodes):
-            if node_id in seen_ids:
-                continue
-            row = conn.execute(
-                "SELECT memory_id, content, topic, created_at FROM memories_text "
-                "WHERE memory_id = ? LIMIT 1",
-                (node_id,)
-            ).fetchone()
-            if row:
-                factual_chain.append({
-                    "memory_id": row[0],
-                    "content": row[1],
-                    "topic": row[2] or "general",
-                    "created_at": row[3] or "",
-                    "source": "causal_chain",
-                })
-                seen_ids.add(node_id)
-
-        conn.close()
+            # 3. Fetch relevant chain nodes not already included
+            for node_id in list(relevant_nodes):
+                if node_id in seen_ids:
+                    continue
+                row = conn.execute(
+                    "SELECT memory_id, content, topic, created_at FROM memories_text "
+                    "WHERE memory_id = ? LIMIT 1",
+                    (node_id,)
+                ).fetchone()
+                if row:
+                    factual_chain.append({
+                        "memory_id": row[0],
+                        "content": row[1],
+                        "topic": row[2] or "general",
+                        "created_at": row[3] or "",
+                        "source": "causal_chain",
+                    })
+                    seen_ids.add(node_id)
+        finally:
+            conn.close()
 
         # Sort by creation time
         from modules.config import parse_timestamp
@@ -383,17 +383,19 @@ def _find_alternatives(removed_mems: List[Dict], target: str,
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
-        # Find similar-topic memories that don't mention the target
-        rows = conn.execute(
-            "SELECT memory_id, content, topic, created_at FROM memories_text "
-            "WHERE topic = ? AND LOWER(content) NOT LIKE ? "
-            "AND memory_id NOT IN ({}) "
-            "ORDER BY created_at DESC LIMIT 3".format(
-                ",".join("?" * len(removed_ids))
-            ),
-            (target_topic, f"%{target}%") + tuple(removed_ids)
-        ).fetchall()
-        conn.close()
+        try:
+            # Find similar-topic memories that don't mention the target
+            rows = conn.execute(
+                "SELECT memory_id, content, topic, created_at FROM memories_text "
+                "WHERE topic = ? AND LOWER(content) NOT LIKE ? "
+                "AND memory_id NOT IN ({}) "
+                "ORDER BY created_at DESC LIMIT 3".format(
+                    ",".join("?" * len(removed_ids))
+                ),
+                (target_topic, f"%{target}%") + tuple(removed_ids)
+            ).fetchall()
+        finally:
+            conn.close()
 
         return [
             {"memory_id": r[0], "content": r[1], "topic": r[2] or "general",
@@ -488,38 +490,39 @@ def _find_downstream_effects(alt_chain: List[Dict], fts_db_path: str) -> str:
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
-        # For each alt memory, find what it causes (outgoing causal edges)
-        downstream_ids = []
-        for mem in alt_chain[:3]:  # Look at top 3
-            mem_id = mem.get("memory_id")
-            if not mem_id:
-                continue
-            rows = conn.execute(
-                "SELECT to_id, edge_type, strength FROM spreading_edges "
-                "WHERE from_id = ? AND edge_type IN ('causes', 'enables') "
-                "ORDER BY strength DESC LIMIT 3",
-                (mem_id,)
-            ).fetchall()
-            for to_id, etype, strength in rows:
-                if strength and strength > 0.3:
-                    downstream_ids.append(to_id)
+        try:
+            # For each alt memory, find what it causes (outgoing causal edges)
+            downstream_ids = []
+            for mem in alt_chain[:3]:  # Look at top 3
+                mem_id = mem.get("memory_id")
+                if not mem_id:
+                    continue
+                rows = conn.execute(
+                    "SELECT to_id, edge_type, strength FROM spreading_edges "
+                    "WHERE from_id = ? AND edge_type IN ('causes', 'enables') "
+                    "ORDER BY strength DESC LIMIT 3",
+                    (mem_id,)
+                ).fetchall()
+                for to_id, etype, strength in rows:
+                    if strength and strength > 0.3:
+                        downstream_ids.append(to_id)
 
-        if not downstream_ids:
+            if not downstream_ids:
+                return ""
+
+            # Fetch content of downstream memories
+            downstream = []
+            for d_id in downstream_ids[:3]:
+                row = conn.execute(
+                    "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
+                    (d_id,)
+                ).fetchone()
+                if row:
+                    downstream.append(f"[{row[1]}] {row[0][:80]}")
+
+            return "; ".join(downstream) if downstream else ""
+        finally:
             conn.close()
-            return ""
-
-        # Fetch content of downstream memories
-        downstream = []
-        for d_id in downstream_ids[:3]:
-            row = conn.execute(
-                "SELECT content, topic FROM memories_text WHERE memory_id = ? LIMIT 1",
-                (d_id,)
-            ).fetchone()
-            if row:
-                downstream.append(f"[{row[1]}] {row[0][:80]}")
-
-        conn.close()
-        return "; ".join(downstream) if downstream else ""
 
     except Exception as e:
         _logger.debug("Downstream effects error: %s", e)
@@ -666,3 +669,52 @@ def run_counterfactual(query: str, fts_db_path: str = None) -> Dict:
         "alternative_chain": alternative_chain,
         "prediction": prediction,
     }
+
+
+def counterfactual_query(query: str) -> str:
+    """Sprint 7 FIX-18: MCP-exposed counterfactual reasoning (Pearl 2009 Level 3).
+
+    Ask "what if?" questions about past events. Bilingual ES/EN.
+    Examples:
+      - "what if we hadn't used PostgreSQL?"
+      - "que hubiera pasado si no hubieramos implementado el sleep loop?"
+
+    Args:
+        query: Natural language counterfactual question
+    """
+    import json
+    result = run_counterfactual(query)
+    if result.get("error"):
+        return result["message"]
+
+    parsed = result["parsed"]
+    factual = result["factual_chain"]
+    alt = result["alternative_chain"]
+    pred = result["prediction"]
+
+    lines = ["# Counterfactual Analysis (Pearl Level 3)\n"]
+    lines.append(f"**Query:** {query}")
+    lines.append(f"**Target:** {parsed.get('intervention_target', '?')}")
+    lines.append(f"**Negated:** {parsed.get('negated', False)}\n")
+
+    if factual.get("chain"):
+        lines.append("## Factual Chain (what actually happened)")
+        for step in factual["chain"][:5]:
+            lines.append(f"  - {step.get('content', step)[:80]}")
+
+    if alt.get("chain"):
+        lines.append("\n## Alternative Chain (counterfactual)")
+        for step in alt["chain"][:5]:
+            lines.append(f"  - {step.get('content', step)[:80]}")
+
+    if pred:
+        lines.append(f"\n## Prediction")
+        lines.append(f"**Confidence:** {pred.get('confidence', 0):.2f}")
+        lines.append(f"**Outcome:** {pred.get('summary', 'unknown')}")
+
+    return "\n".join(lines)
+
+
+def register_counterfactual_tools(mcp):
+    """Register counterfactual MCP tools."""
+    mcp.tool()(counterfactual_query)

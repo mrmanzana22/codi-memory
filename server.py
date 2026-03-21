@@ -101,6 +101,7 @@ from modules import pet
 from modules import source_tracking
 from modules import hippocampal_index
 from modules import cognitive_contracts
+from modules import counterfactual
 
 # ============================================================
 # INSTRUMENTATION (A1) - must run BEFORE register_tools()
@@ -140,6 +141,7 @@ pet.register_tools(mcp)
 source_tracking.register_tools(mcp)
 hippocampal_index.register_tools(mcp)
 cognitive_contracts.register_tools(mcp)
+counterfactual.register_counterfactual_tools(mcp)  # Sprint 7 FIX-18
 
 # ============================================================
 # TOOL GOVERNANCE - Apply bundle-based visibility filter

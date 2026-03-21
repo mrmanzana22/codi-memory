@@ -68,8 +68,9 @@ class TestBasicCompetition:
         assert len(result.winners) == 3
         # S3-01: Top winner ignites to near 1.0 via iterative amplification
         assert result.winners[0].activation >= 0.99
-        assert result.winners[1].activation == pytest.approx(0.7)
-        assert result.winners[2].activation == pytest.approx(0.5)
+        # Sprint 5 FIX-13: secondary winners also amplified (proportionally)
+        assert result.winners[1].activation > 0.7
+        assert result.winners[2].activation > 0.5
 
     def test_losers_are_remaining(self):
         """Everyone below top N is a loser."""
@@ -332,13 +333,14 @@ class TestRecurrentAmplification:
         apply_recurrent_amplification([_make_candidate(activation=0.8)], [loser])
         assert loser.activation >= 0.0
 
-    def test_only_top_winner_amplified(self):
-        """Only winners[0] gets amplified, not other winners."""
+    def test_all_winners_amplified_proportionally(self):
+        """Sprint 5: All winners amplified, top most, secondary less."""
         w1 = _make_candidate(activation=0.8)
         w2 = _make_candidate(activation=0.7)
         apply_recurrent_amplification([w1, w2], [])
-        assert w1.activation >= 0.95  # Ignited
-        assert w2.activation == pytest.approx(0.7)  # Unchanged
+        assert w1.activation >= 0.95  # Top winner ignites strongly
+        assert w2.activation > 0.7    # Secondary also boosted (rank decay 0.5)
+        assert w1.activation > w2.activation  # Top still dominates
 
     def test_empty_winners_no_crash(self):
         """No crash with empty winners."""

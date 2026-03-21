@@ -178,23 +178,27 @@ def _evolve_stage(pet_row: dict, now: datetime) -> tuple[str, bool]:
                 # Persist hatch
                 try:
                     conn = _get_conn()
-                    conn.execute(
-                        "UPDATE pets SET stage = ?, hatched_at = ? WHERE id = ?",
-                        (next_stage, now_iso(), pet_row["id"])
-                    )
-                    conn.commit()
-                    conn.close()
+                    try:
+                        conn.execute(
+                            "UPDATE pets SET stage = ?, hatched_at = ? WHERE id = ?",
+                            (next_stage, now_iso(), pet_row["id"])
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
                 except Exception:
                     pass
             else:
                 try:
                     conn = _get_conn()
-                    conn.execute(
-                        "UPDATE pets SET stage = ? WHERE id = ?",
-                        (next_stage, pet_row["id"])
-                    )
-                    conn.commit()
-                    conn.close()
+                    try:
+                        conn.execute(
+                            "UPDATE pets SET stage = ? WHERE id = ?",
+                            (next_stage, pet_row["id"])
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
                 except Exception:
                     pass
             break  # one stage transition per call; next tick advances further
@@ -232,10 +236,12 @@ def _get_active_pet() -> dict | None:
     """Get the current alive pet, if any."""
     try:
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT * FROM pets WHERE alive = 1 ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT * FROM pets WHERE alive = 1 ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             cols = ["id", "name", "stage", "born_at", "hatched_at", "died_at", "alive",
                     "hunger", "happiness", "energy", "health",
@@ -422,12 +428,14 @@ def _persist_death(pet_id: int):
     """Mark pet as dead. Irreversible."""
     try:
         conn = _get_conn()
-        conn.execute(
-            "UPDATE pets SET alive = 0, died_at = ?, health = 0.0 WHERE id = ?",
-            (now_iso(), pet_id)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "UPDATE pets SET alive = 0, died_at = ?, health = 0.0 WHERE id = ?",
+                (now_iso(), pet_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         _logger.error("_persist_death error: %s", e)
 
@@ -454,14 +462,16 @@ def get_pet_awareness() -> dict | None:
     if state.get("id"):
         try:
             conn = _get_conn()
-            conn.execute(
-                """UPDATE pets SET hunger = ?, happiness = ?, energy = ?,
-                   health = ?, stage = ?, last_interaction_at = ? WHERE id = ?""",
-                (state["hunger"], state["happiness"], state["energy"],
-                 state["health"], state["stage"], now_iso(), state["id"])
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    """UPDATE pets SET hunger = ?, happiness = ?, energy = ?,
+                       health = ?, stage = ?, last_interaction_at = ? WHERE id = ?""",
+                    (state["hunger"], state["happiness"], state["energy"],
+                     state["health"], state["stage"], now_iso(), state["id"])
+                )
+                conn.commit()
+            finally:
+                conn.close()
         except Exception:
             pass
 

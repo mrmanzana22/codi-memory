@@ -37,10 +37,10 @@ from modules.config import now_iso
 _logger = logging.getLogger(__name__)
 
 # NOTEARS hyperparameters
-_LAMBDA = 0.1          # L1 regularization (sparsity penalty)
+_LAMBDA = 0.05         # Sprint 6 FIX-15: reduced from 0.1 (less aggressive sparsity)
 _MAX_ITER = 100        # Max L-BFGS-B iterations
 _H_TOL = 1e-8          # Acyclicity tolerance
-_EDGE_THRESHOLD = 0.1  # Minimum |w_ij| to extract as edge
+_EDGE_THRESHOLD = 0.05 # Sprint 6 FIX-15: reduced from 0.1 (allow weaker causal edges)
 _MIN_TRANSITIONS = 50  # Minimum new transitions before re-learning
 
 
@@ -101,6 +101,19 @@ def build_cooccurrence_matrix(conn: sqlite3.Connection) -> Tuple[np.ndarray, Lis
             if from_t in topic_idx and to_t in topic_idx and from_t != to_t:
                 i, j = topic_idx[from_t], topic_idx[to_t]
                 X[i][j] += float(count or 1)
+    except Exception:
+        pass
+
+    # Sprint 6 FIX-15: Also use transition_stats (richer data source, 2000+ transitions)
+    try:
+        rows = conn.execute(
+            "SELECT from_topic, to_topic, count FROM transition_stats "
+            "WHERE from_topic IS NOT NULL AND to_topic IS NOT NULL"
+        ).fetchall()
+        for from_t, to_t, count in rows:
+            if from_t in topic_idx and to_t in topic_idx and from_t != to_t:
+                i, j = topic_idx[from_t], topic_idx[to_t]
+                X[i][j] += float(count or 1) * 0.5  # 0.5 weight (less reliable than attention)
     except Exception:
         pass
 
@@ -320,58 +333,60 @@ def integrate_discovered_edges(edges: List[Dict], fts_db_path: str) -> int:
 
     try:
         conn = connect_fts(db)
-        _init_edge_table(conn)
-        ts = now_iso()
-        created = 0
-
-        for edge in edges:
-            from_topic = edge["from_topic"]
-            to_topic = edge["to_topic"]
-            etype = edge["edge_type"]
-            weight = abs(edge["weight"])
-
-            # Find memory IDs for these topics from memories_text
-            from_ids = [r[0] for r in conn.execute(
-                "SELECT DISTINCT memory_id FROM memories_text WHERE topic = ? LIMIT 10",
-                (from_topic,)
-            ).fetchall()]
-            to_ids = [r[0] for r in conn.execute(
-                "SELECT DISTINCT memory_id FROM memories_text WHERE topic = ? LIMIT 10",
-                (to_topic,)
-            ).fetchall()]
-
-            if not from_ids or not to_ids:
-                continue
-
-            # For each pair: only create if no existing causal edge
-            for from_id in from_ids[:3]:
-                for to_id in to_ids[:3]:
-                    existing = conn.execute(
-                        "SELECT edge_type FROM spreading_edges WHERE from_id = ? AND to_id = ?",
-                        (from_id, to_id)
-                    ).fetchone()
-
-                    if existing and existing[0] in ('causes', 'enables', 'prevents'):
-                        continue  # Don't overwrite LLM-classified edges
-
-                    _record_edges(conn, from_id, [to_id], ts,
-                                  edge_type=etype, strength=weight)
-                    created += 1
-
-        # Record discovery source (mark with notears tag via new column if exists)
         try:
-            for edge in edges:
-                conn.execute(
-                    "UPDATE spreading_edges SET discovery_source = 'notears' "
-                    "WHERE edge_type = ? AND last_seen = ?",
-                    (edge["edge_type"], ts)
-                )
-        except Exception:
-            pass
+            _init_edge_table(conn)
+            ts = now_iso()
+            created = 0
 
-        conn.close()
-        _logger.info("NOTEARS integration: %d edges created", created)
-        return created
+            for edge in edges:
+                from_topic = edge["from_topic"]
+                to_topic = edge["to_topic"]
+                etype = edge["edge_type"]
+                weight = abs(edge["weight"])
+
+                # Find memory IDs for these topics from memories_text
+                from_ids = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT memory_id FROM memories_text WHERE topic = ? LIMIT 10",
+                    (from_topic,)
+                ).fetchall()]
+                to_ids = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT memory_id FROM memories_text WHERE topic = ? LIMIT 10",
+                    (to_topic,)
+                ).fetchall()]
+
+                if not from_ids or not to_ids:
+                    continue
+
+                # For each pair: only create if no existing causal edge
+                for from_id in from_ids[:3]:
+                    for to_id in to_ids[:3]:
+                        existing = conn.execute(
+                            "SELECT edge_type FROM spreading_edges WHERE from_id = ? AND to_id = ?",
+                            (from_id, to_id)
+                        ).fetchone()
+
+                        if existing and existing[0] in ('causes', 'enables', 'prevents'):
+                            continue  # Don't overwrite LLM-classified edges
+
+                        _record_edges(conn, from_id, [to_id], ts,
+                                      edge_type=etype, strength=weight)
+                        created += 1
+
+            # Record discovery source (mark with notears tag via new column if exists)
+            try:
+                for edge in edges:
+                    conn.execute(
+                        "UPDATE spreading_edges SET discovery_source = 'notears' "
+                        "WHERE edge_type = ? AND last_seen = ?",
+                        (edge["edge_type"], ts)
+                    )
+            except Exception:
+                pass
+
+            _logger.info("NOTEARS integration: %d edges created", created)
+            return created
+        finally:
+            conn.close()
 
     except Exception as e:
         _logger.error("NOTEARS integration error: %s", e)
@@ -391,25 +406,27 @@ def _save_discovery_state(W: np.ndarray, topics: List[str], h_value: float,
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
-        conn.execute("""
-            INSERT INTO causal_discovery_state (w_matrix, topics, h_value, lambda_val, n_edges, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            json.dumps(W.tolist()),
-            json.dumps(topics),
-            float(h_value),
-            _LAMBDA,
-            n_edges,
-            now_iso(),
-        ))
-        # Keep only last 5 states
-        conn.execute("""
-            DELETE FROM causal_discovery_state WHERE id NOT IN (
-                SELECT id FROM causal_discovery_state ORDER BY created_at DESC LIMIT 5
-            )
-        """)
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("""
+                INSERT INTO causal_discovery_state (w_matrix, topics, h_value, lambda_val, n_edges, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                json.dumps(W.tolist()),
+                json.dumps(topics),
+                float(h_value),
+                _LAMBDA,
+                n_edges,
+                now_iso(),
+            ))
+            # Keep only last 5 states
+            conn.execute("""
+                DELETE FROM causal_discovery_state WHERE id NOT IN (
+                    SELECT id FROM causal_discovery_state ORDER BY created_at DESC LIMIT 5
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         _logger.debug("Failed to save discovery state: %s", e)
 
@@ -419,12 +436,14 @@ def _count_new_transitions(fts_db_path: str, since_ts: str) -> int:
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db_path)
-        count = conn.execute(
-            "SELECT COUNT(*) FROM attention_transitions WHERE created_at > ?",
-            (since_ts,)
-        ).fetchone()[0]
-        conn.close()
-        return count
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM attention_transitions WHERE created_at > ?",
+                (since_ts,)
+            ).fetchone()[0]
+            return count
+        finally:
+            conn.close()
     except Exception:
         return 0
 
@@ -461,10 +480,11 @@ def run_causal_discovery(fts_db_path: str = None) -> Dict:
     try:
         from modules.config import connect_fts
         conn = connect_fts(db)
-
-        # 7.1: Co-occurrence matrix
-        X, topics = build_cooccurrence_matrix(conn)
-        conn.close()
+        try:
+            # 7.1: Co-occurrence matrix
+            X, topics = build_cooccurrence_matrix(conn)
+        finally:
+            conn.close()
 
         if X.shape[0] < 2:
             _logger.info("NOTEARS: not enough topics (%d), skipping", X.shape[0])

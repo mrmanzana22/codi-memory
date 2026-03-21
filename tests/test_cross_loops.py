@@ -222,9 +222,9 @@ class TestCX3_SelfModelInGNW(unittest.TestCase):
 
     @patch("modules.working_memory.push_to_working_memory")
     def test_short_summary_skipped(self, mock_push):
-        """summary_len < 20 → skip."""
+        """summary_len < 5 → skip (Sprint 1: threshold lowered from 20 to 5)."""
         from modules.wiring import _on_self_model_to_competition
-        data = {"source": "periodic", "summary_len": 10, "discrepancy_count": 0}
+        data = {"source": "periodic", "summary_len": 3, "discrepancy_count": 0}
         _on_self_model_to_competition("self_model_refreshed", data)
         mock_push.assert_not_called()
 
@@ -604,10 +604,10 @@ class TestCX5_GNWBroadcastToAction(unittest.TestCase):
         self.assertEqual(["trading", "general"], ctx["broadcast_domains"])
         self.assertAlmostEqual(0.85, ctx["broadcast_activation"])
 
-    @patch("modules.wiring.get_attention_schema", return_value={"attention_prediction_error": 0.3})
+    @patch("modules.wiring.get_attention_schema", return_value={"attention_prediction_error": 0.1})
     @patch("modules.working_memory.push_to_working_memory")
     def test_routine_situation_cleared(self, mock_push, mock_attention):
-        """PE < 0.5 → context cleared, no WM push."""
+        """PE < 0.2 → context cleared, no WM push (Sprint 1: gate lowered from 0.5 to 0.2)."""
         from modules.wiring import _on_gnw_broadcast_to_action
         import modules.wiring as w
         w._broadcast_context = {"stale": True}  # Set stale context
@@ -2298,14 +2298,14 @@ class TestCX30_ActionOutcomesCausal(unittest.TestCase):
         self.assertEqual(item["weight"], _CX30_INTERVENTION_WEIGHT)
 
     def test_trivial_action_skipped(self):
-        """Actions with near-zero EFE spread are skipped."""
+        """Actions with near-zero EFE spread are skipped (Sprint 1: threshold lowered to 0.001)."""
         import modules.wiring as w
         from modules.wiring import _on_action_outcome_updates_causal_dag
 
         _on_action_outcome_updates_causal_dag("action_selected", {
             "action": "noop",
             "state_topic": "general",
-            "efe_spread": 0.005,
+            "efe_spread": 0.0005,
         })
 
         self.assertEqual(len(w._cx11_buffer), 0)

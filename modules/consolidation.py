@@ -245,15 +245,17 @@ def _get_causal_edge_counts(candidate_ids: list) -> dict:
 
     try:
         conn = connect_fts()
-        placeholders = ",".join("?" * len(candidate_ids))
-        rows = conn.execute(
-            f"SELECT from_id, COUNT(*) as cnt FROM spreading_edges "
-            f"WHERE edge_type IN ('causes', 'enables') "
-            f"AND from_id IN ({placeholders}) GROUP BY from_id",
-            candidate_ids
-        ).fetchall()
-        conn.close()
-        return {r[0]: r[1] for r in rows}
+        try:
+            placeholders = ",".join("?" * len(candidate_ids))
+            rows = conn.execute(
+                f"SELECT from_id, COUNT(*) as cnt FROM spreading_edges "
+                f"WHERE edge_type IN ('causes', 'enables') "
+                f"AND from_id IN ({placeholders}) GROUP BY from_id",
+                candidate_ids
+            ).fetchall()
+            return {r[0]: r[1] for r in rows}
+        finally:
+            conn.close()
     except Exception:
         return {}
 
@@ -448,6 +450,8 @@ def _phase_clustering(candidates: list) -> list:
                 "episode_ids": [m["id"] for m in members],
                 "texts": [m["data"] for m in members],
                 "count": len(members),
+                # Sprint 6 FIX-14: pass timestamps for temporal renormalization
+                "timestamps": [m.get("created_at", "") for m in members if m.get("created_at")],
             })
         else:
             subclusters = _subcluster_by_vector(topic, members)
@@ -1009,87 +1013,86 @@ def _extract_causal_chains(fts_db_path: str = None) -> int:
     db = fts_db_path or _FTS_DB
     try:
         conn = _connect_fts(db)
+        try:
+            # Check if causal_chains table exists (created by migration 019)
+            if not conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
+            ).fetchone():
+                return 0
 
-        # Check if causal_chains table exists (created by migration 019)
-        if not conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
-        ).fetchone():
+            # Find roots: nodes with outgoing causal edges but NO incoming causal edges
+            all_from = {r[0] for r in conn.execute(
+                "SELECT DISTINCT from_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
+            ).fetchall()}
+            all_to = {r[0] for r in conn.execute(
+                "SELECT DISTINCT to_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
+            ).fetchall()}
+            roots = all_from - all_to
+
+            if not roots:
+                return 0
+
+            chains_stored = 0
+            seen_chains = set()
+
+            for root in roots:
+                # BFS along causal edges
+                chain = [root]
+                frontier = [root]
+                visited = {root}
+
+                while frontier:
+                    node = frontier.pop(0)
+                    children = conn.execute(
+                        "SELECT to_id, COALESCE(strength, 0.5) FROM spreading_edges "
+                        "WHERE from_id = ? AND edge_type IN ('causes', 'enables') LIMIT 5",
+                        (node,)
+                    ).fetchall()
+
+                    best_child = None
+                    best_strength = 0.0
+                    for child_id, child_strength in children:
+                        if child_id not in visited and child_strength > best_strength:
+                            best_child = child_id
+                            best_strength = child_strength
+
+                    if best_child:
+                        chain.append(best_child)
+                        visited.add(best_child)
+                        frontier.append(best_child)
+
+                if len(chain) < 2:
+                    continue
+
+                chain_key = "->".join(sorted(chain[:3]))
+                if chain_key in seen_chains:
+                    continue
+                seen_chains.add(chain_key)
+
+                # Compute average chain strength
+                strengths = []
+                for i in range(len(chain) - 1):
+                    row = conn.execute(
+                        "SELECT COALESCE(strength, 0.5) FROM spreading_edges "
+                        "WHERE from_id = ? AND to_id = ?",
+                        (chain[i], chain[i + 1])
+                    ).fetchone()
+                    if row:
+                        strengths.append(row[0])
+                avg_strength = sum(strengths) / len(strengths) if strengths else 0.5
+
+                chain_id = str(uuid.uuid4())[:8]
+                conn.execute("""
+                    INSERT OR REPLACE INTO causal_chains (chain_id, nodes, strength, mechanism, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (chain_id, json.dumps(chain), avg_strength, "", now_iso()))
+                chains_stored += 1
+
+            conn.commit()
+            _logger.info("Causal chains: %d chains extracted from %d roots", chains_stored, len(roots))
+            return chains_stored
+        finally:
             conn.close()
-            return 0
-
-        # Find roots: nodes with outgoing causal edges but NO incoming causal edges
-        all_from = {r[0] for r in conn.execute(
-            "SELECT DISTINCT from_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
-        ).fetchall()}
-        all_to = {r[0] for r in conn.execute(
-            "SELECT DISTINCT to_id FROM spreading_edges WHERE edge_type IN ('causes', 'enables')"
-        ).fetchall()}
-        roots = all_from - all_to
-
-        if not roots:
-            conn.close()
-            return 0
-
-        chains_stored = 0
-        seen_chains = set()
-
-        for root in roots:
-            # BFS along causal edges
-            chain = [root]
-            frontier = [root]
-            visited = {root}
-
-            while frontier:
-                node = frontier.pop(0)
-                children = conn.execute(
-                    "SELECT to_id, COALESCE(strength, 0.5) FROM spreading_edges "
-                    "WHERE from_id = ? AND edge_type IN ('causes', 'enables') LIMIT 5",
-                    (node,)
-                ).fetchall()
-
-                best_child = None
-                best_strength = 0.0
-                for child_id, child_strength in children:
-                    if child_id not in visited and child_strength > best_strength:
-                        best_child = child_id
-                        best_strength = child_strength
-
-                if best_child:
-                    chain.append(best_child)
-                    visited.add(best_child)
-                    frontier.append(best_child)
-
-            if len(chain) < 2:
-                continue
-
-            chain_key = "->".join(sorted(chain[:3]))
-            if chain_key in seen_chains:
-                continue
-            seen_chains.add(chain_key)
-
-            # Compute average chain strength
-            strengths = []
-            for i in range(len(chain) - 1):
-                row = conn.execute(
-                    "SELECT COALESCE(strength, 0.5) FROM spreading_edges "
-                    "WHERE from_id = ? AND to_id = ?",
-                    (chain[i], chain[i + 1])
-                ).fetchone()
-                if row:
-                    strengths.append(row[0])
-            avg_strength = sum(strengths) / len(strengths) if strengths else 0.5
-
-            chain_id = str(uuid.uuid4())[:8]
-            conn.execute("""
-                INSERT OR REPLACE INTO causal_chains (chain_id, nodes, strength, mechanism, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (chain_id, json.dumps(chain), avg_strength, "", now_iso()))
-            chains_stored += 1
-
-        conn.commit()
-        conn.close()
-        _logger.info("Causal chains: %d chains extracted from %d roots", chains_stored, len(roots))
-        return chains_stored
 
     except Exception as e:
         _logger.error("Causal chain extraction error: %s", e)
@@ -1680,72 +1683,70 @@ def _compress_causal_intermediaries(chain_members: set) -> int:
     compressed = 0
     try:
         conn = _connect_fts()
+        try:
+            # Check causal_chains table exists
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
+            ).fetchone()
+            if not exists:
+                return 0
 
-        # Check causal_chains table exists
-        exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_chains'"
-        ).fetchone()
-        if not exists:
-            conn.close()
-            return 0
+            chains = conn.execute(
+                "SELECT chain_id, nodes, strength FROM causal_chains"
+            ).fetchall()
 
-        chains = conn.execute(
-            "SELECT chain_id, nodes, strength FROM causal_chains"
-        ).fetchall()
+            if not chains:
+                return 0
 
-        if not chains:
-            conn.close()
-            return 0
+            from modules.spreading import _init_edge_table, _record_edges
+            _init_edge_table(conn)
+            ts = now_iso()
 
-        from modules.spreading import _init_edge_table, _record_edges
-        _init_edge_table(conn)
-        ts = now_iso()
-
-        for chain_id, nodes_json, chain_strength in chains:
-            try:
-                nodes = json.loads(nodes_json)
-            except Exception:
-                continue
-
-            if len(nodes) < 3:
-                continue
-
-            # Check each B node (intermediary) in A→B→C
-            for i in range(1, len(nodes) - 1):
-                a_id, b_id, c_id = nodes[i - 1], nodes[i], nodes[i + 1]
-
-                # B must not be a protected chain member with strong connections
-                if b_id in chain_members:
+            for chain_id, nodes_json, chain_strength in chains:
+                try:
+                    nodes = json.loads(nodes_json)
+                except Exception:
                     continue
 
-                # Check B's access count from PG (zero = never retrieved)
-                try:
-                    b_pts = pg.get_by_ids([b_id])
-                    if not b_pts:
+                if len(nodes) < 3:
+                    continue
+
+                # Check each B node (intermediary) in A→B→C
+                for i in range(1, len(nodes) - 1):
+                    a_id, b_id, c_id = nodes[i - 1], nodes[i], nodes[i + 1]
+
+                    # B must not be a protected chain member with strong connections
+                    if b_id in chain_members:
                         continue
-                    b_payload = b_pts[0].payload or {}
-                    b_access = int(b_payload.get("attention_access_count", 0) or 0)
-                    if b_access > 0:
-                        continue  # B is still being accessed — don't compress
-                except Exception:
-                    continue
 
-                # Create summary edge A→C (bypass B)
-                _record_edges(conn, a_id, [c_id], ts,
-                               edge_type='enables',
-                               strength=chain_strength * 0.8)
+                    # Check B's access count from PG (zero = never retrieved)
+                    try:
+                        b_pts = pg.get_by_ids([b_id])
+                        if not b_pts:
+                            continue
+                        b_payload = b_pts[0].payload or {}
+                        b_access = int(b_payload.get("attention_access_count", 0) or 0)
+                        if b_access > 0:
+                            continue  # B is still being accessed — don't compress
+                    except Exception:
+                        continue
 
-                # Mark B as causal_compressed in PG
-                try:
-                    pg.update_payload(b_id, {"causal_compressed": True})
-                except Exception:
-                    pass
+                    # Create summary edge A→C (bypass B)
+                    _record_edges(conn, a_id, [c_id], ts,
+                                   edge_type='enables',
+                                   strength=chain_strength * 0.8)
 
-                compressed += 1
-                _logger.debug("Causal compress: %s→%s→%s → direct %s→%s",
-                              a_id[:8], b_id[:8], c_id[:8], a_id[:8], c_id[:8])
+                    # Mark B as causal_compressed in PG
+                    try:
+                        pg.update_payload(b_id, {"causal_compressed": True})
+                    except Exception:
+                        pass
 
-        conn.close()
+                    compressed += 1
+                    _logger.debug("Causal compress: %s→%s→%s → direct %s→%s",
+                                  a_id[:8], b_id[:8], c_id[:8], a_id[:8], c_id[:8])
+        finally:
+            conn.close()
     except Exception as e:
         _logger.debug("Causal intermediary compression error: %s", e)
 

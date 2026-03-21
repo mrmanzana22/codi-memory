@@ -219,109 +219,109 @@ def check_runtime_invariants() -> list:
     try:
         from modules.config import connect_fts
         conn = connect_fts(fts_db)
-
-        # 1. Transition stats must exist and be populated (Friston 2010)
         try:
-            row = conn.execute("SELECT COUNT(*) FROM transition_stats").fetchone()
-            if row and row[0] < 5:
+            # 1. Transition stats must exist and be populated (Friston 2010)
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM transition_stats").fetchone()
+                if row and row[0] < 5:
+                    violations.append({
+                        "type": "runtime", "module": "precision_weighting",
+                        "name": "transition_stats_sparse",
+                        "detail": f"Only {row[0]} transition records (need >=5 for dampening)",
+                        "theory": "Friston 2010",
+                    })
+            except sqlite3.OperationalError:
                 violations.append({
                     "type": "runtime", "module": "precision_weighting",
-                    "name": "transition_stats_sparse",
-                    "detail": f"Only {row[0]} transition records (need >=5 for dampening)",
+                    "name": "transition_stats_missing",
+                    "detail": "Table transition_stats does not exist",
                     "theory": "Friston 2010",
                 })
-        except sqlite3.OperationalError:
-            violations.append({
-                "type": "runtime", "module": "precision_weighting",
-                "name": "transition_stats_missing",
-                "detail": "Table transition_stats does not exist",
-                "theory": "Friston 2010",
-            })
 
-        # 2. Prediction results should not be dominated by sleep_loop (PCI fix)
-        try:
-            total = conn.execute("SELECT COUNT(*) FROM prediction_results").fetchone()
-            columns = {
-                row[1] for row in conn.execute("PRAGMA table_info(prediction_results)").fetchall()
-            }
-            if "source" not in columns:
+            # 2. Prediction results should not be dominated by sleep_loop (PCI fix)
+            try:
+                total = conn.execute("SELECT COUNT(*) FROM prediction_results").fetchone()
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(prediction_results)").fetchall()
+                }
+                if "source" not in columns:
+                    violations.append({
+                        "type": "runtime", "module": "prediction",
+                        "name": "source_column_missing",
+                        "detail": "prediction_results.source missing; contamination check unavailable",
+                        "theory": "PCI fix (Proposal #42)",
+                    })
+                else:
+                    sleep = conn.execute(
+                        "SELECT COUNT(*) FROM prediction_results WHERE source = 'sleep_loop'"
+                    ).fetchone()
+                    if total and total[0] > 20 and sleep and sleep[0] > 0:
+                        ratio = sleep[0] / total[0]
+                        if ratio > 0.3:
+                            violations.append({
+                                "type": "runtime", "module": "prediction",
+                                "name": "sleep_loop_contamination",
+                                "detail": f"sleep_loop is {ratio:.0%} of predictions ({sleep[0]}/{total[0]})",
+                                "theory": "PCI fix (Proposal #42)",
+                            })
+            except sqlite3.OperationalError:
                 violations.append({
                     "type": "runtime", "module": "prediction",
-                    "name": "source_column_missing",
-                    "detail": "prediction_results.source missing; contamination check unavailable",
+                    "name": "prediction_results_missing",
+                    "detail": "Table prediction_results does not exist",
                     "theory": "PCI fix (Proposal #42)",
                 })
-            else:
-                sleep = conn.execute(
-                    "SELECT COUNT(*) FROM prediction_results WHERE source = 'sleep_loop'"
+
+            # 3. Attention schema should be persisting (Graziano 2013 AST)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM attention_transitions"
                 ).fetchone()
-                if total and total[0] > 20 and sleep and sleep[0] > 0:
-                    ratio = sleep[0] / total[0]
-                    if ratio > 0.3:
-                        violations.append({
-                            "type": "runtime", "module": "prediction",
-                            "name": "sleep_loop_contamination",
-                            "detail": f"sleep_loop is {ratio:.0%} of predictions ({sleep[0]}/{total[0]})",
-                            "theory": "PCI fix (Proposal #42)",
-                        })
-        except sqlite3.OperationalError:
-            violations.append({
-                "type": "runtime", "module": "prediction",
-                "name": "prediction_results_missing",
-                "detail": "Table prediction_results does not exist",
-                "theory": "PCI fix (Proposal #42)",
-            })
+                if row and row[0] == 0:
+                    violations.append({
+                        "type": "runtime", "module": "attention",
+                        "name": "no_attention_transitions",
+                        "detail": "attention_transitions table is empty",
+                        "theory": "Graziano 2013 AST",
+                    })
+            except sqlite3.OperationalError:
+                pass
 
-        # 3. Attention schema should be persisting (Graziano 2013 AST)
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM attention_transitions"
-            ).fetchone()
-            if row and row[0] == 0:
-                violations.append({
-                    "type": "runtime", "module": "attention",
-                    "name": "no_attention_transitions",
-                    "detail": "attention_transitions table is empty",
-                    "theory": "Graziano 2013 AST",
-                })
-        except sqlite3.OperationalError:
-            pass
+            # 4. Labile memories should not exceed window (Nader 2000)
+            try:
+                expired = conn.execute("""
+                    SELECT COUNT(*) FROM labile_memories
+                    WHERE datetime(window_expires) < datetime('now', '-1 hour')
+                """).fetchone()
+                if expired and expired[0] > 5:
+                    violations.append({
+                        "type": "runtime", "module": "reconsolidation",
+                        "name": "stale_labile_memories",
+                        "detail": f"{expired[0]} labile memories past expiry window",
+                        "theory": "Nader 2000: window must be enforced",
+                    })
+            except sqlite3.OperationalError:
+                pass
 
-        # 4. Labile memories should not exceed window (Nader 2000)
-        try:
-            expired = conn.execute("""
-                SELECT COUNT(*) FROM labile_memories
-                WHERE datetime(window_expires) < datetime('now', '-1 hour')
-            """).fetchone()
-            if expired and expired[0] > 5:
-                violations.append({
-                    "type": "runtime", "module": "reconsolidation",
-                    "name": "stale_labile_memories",
-                    "detail": f"{expired[0]} labile memories past expiry window",
-                    "theory": "Nader 2000: window must be enforced",
-                })
-        except sqlite3.OperationalError:
-            pass
-
-        # 5. Event counts should show active wiring (GWT broadcast)
-        try:
-            events = conn.execute("""
-                SELECT event, count FROM event_counts
-                WHERE event IN ('prediction_error', 'attention_prediction_error',
-                                'memory_stored', 'workspace_broadcast')
-            """).fetchall()
-            event_dict = {e[0]: e[1] for e in events}
-            if not event_dict.get('prediction_error', 0):
-                violations.append({
-                    "type": "runtime", "module": "wiring",
-                    "name": "no_prediction_errors",
-                    "detail": "Zero prediction_error events recorded",
-                    "theory": "Clark 2013: prediction loop must be active",
-                })
-        except sqlite3.OperationalError:
-            pass
-
-        conn.close()
+            # 5. Event counts should show active wiring (GWT broadcast)
+            try:
+                events = conn.execute("""
+                    SELECT event, count FROM event_counts
+                    WHERE event IN ('prediction_error', 'attention_prediction_error',
+                                    'memory_stored', 'workspace_broadcast')
+                """).fetchall()
+                event_dict = {e[0]: e[1] for e in events}
+                if not event_dict.get('prediction_error', 0):
+                    violations.append({
+                        "type": "runtime", "module": "wiring",
+                        "name": "no_prediction_errors",
+                        "detail": "Zero prediction_error events recorded",
+                        "theory": "Clark 2013: prediction loop must be active",
+                    })
+            except sqlite3.OperationalError:
+                pass
+        finally:
+            conn.close()
     except Exception as e:
         violations.append({
             "type": "runtime", "module": "sqlite",

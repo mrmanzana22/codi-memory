@@ -292,17 +292,19 @@ def classify_failure_cox(
             from modules.config import FTS_DB_PATH as _fts_path, connect_fts
             _path = fts_db_path or _fts_path
             conn = connect_fts(_path)
-            # Check if any words from query appear in FTS index
-            words = [w for w in query.lower().split() if len(w) > 3]
-            for w in words[:3]:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?",
-                    (w,)
-                ).fetchone()
-                if row and row[0] > 0:
-                    has_related = True
-                    break
-            conn.close()
+            try:
+                # Check if any words from query appear in FTS index
+                words = [w for w in query.lower().split() if len(w) > 3]
+                for w in words[:3]:
+                    row = conn.execute(
+                        "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?",
+                        (w,)
+                    ).fetchone()
+                    if row and row[0] > 0:
+                        has_related = True
+                        break
+            finally:
+                conn.close()
         except Exception:
             pass
 
@@ -443,11 +445,14 @@ def _get_beta_prior(topic: str, fts_db_path: str) -> tuple:
     try:
         from modules.db_pool import get_conn
         conn = get_conn(fts_db_path)
-        row = conn.execute(
-            "SELECT alpha, beta FROM fok_priors WHERE topic = ?", (topic,)
-        ).fetchone()
-        if row:
-            return (float(row[0]), float(row[1]))
+        try:
+            row = conn.execute(
+                "SELECT alpha, beta FROM fok_priors WHERE topic = ?", (topic,)
+            ).fetchone()
+            if row:
+                return (float(row[0]), float(row[1]))
+        finally:
+            conn.close()
     except Exception:
         pass
     return (1.0, 1.0)
@@ -476,36 +481,38 @@ def update_fok_prior(topic: str, success: bool, fts_db_path: str = None):
     try:
         from modules.db_pool import get_conn
         conn = get_conn(fts_db_path)
+        try:
+            row = conn.execute(
+                "SELECT alpha, beta, n_observations FROM fok_priors WHERE topic = ?",
+                (topic,)
+            ).fetchone()
 
-        row = conn.execute(
-            "SELECT alpha, beta, n_observations FROM fok_priors WHERE topic = ?",
-            (topic,)
-        ).fetchone()
+            if row:
+                a, b, n = float(row[0]), float(row[1]), int(row[2])
+                # Discount (forget old observations slowly)
+                a *= DISCOUNT_GAMMA
+                b *= DISCOUNT_GAMMA
+            else:
+                a, b, n = 1.0, 1.0, 0
 
-        if row:
-            a, b, n = float(row[0]), float(row[1]), int(row[2])
-            # Discount (forget old observations slowly)
-            a *= DISCOUNT_GAMMA
-            b *= DISCOUNT_GAMMA
-        else:
-            a, b, n = 1.0, 1.0, 0
+            # Conjugate update
+            if success:
+                a += 1.0
+            else:
+                b += 1.0
 
-        # Conjugate update
-        if success:
-            a += 1.0
-        else:
-            b += 1.0
-
-        conn.execute("""
-            INSERT INTO fok_priors (topic, alpha, beta, n_observations, last_updated)
-            VALUES (?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(topic) DO UPDATE SET
-                alpha = excluded.alpha,
-                beta = excluded.beta,
-                n_observations = excluded.n_observations,
-                last_updated = excluded.last_updated
-        """, (topic, round(a, 4), round(b, 4), n + 1))
-        conn.commit()
+            conn.execute("""
+                INSERT INTO fok_priors (topic, alpha, beta, n_observations, last_updated)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(topic) DO UPDATE SET
+                    alpha = excluded.alpha,
+                    beta = excluded.beta,
+                    n_observations = excluded.n_observations,
+                    last_updated = excluded.last_updated
+            """, (topic, round(a, 4), round(b, 4), n + 1))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -545,15 +552,18 @@ def estimate_familiarity(query: str, fts_db_path: str = None, wm_conn=None) -> f
         try:
             from modules.db_pool import get_conn as _get_conn
             conn = _get_conn(fts_db_path)
-            words = [w for w in query.split() if len(w) > 2 and w.isalnum()]
-            if words:
-                fts_q = " OR ".join(words[:5])
-                cnt = conn.execute(
-                    "SELECT COUNT(*) FROM memories_fts WHERE content MATCH ?",
-                    (fts_q,)
-                ).fetchone()[0]
-                score += min(1.0, math.log(cnt + 1) / math.log(100))
-                n_signals += 1
+            try:
+                words = [w for w in query.split() if len(w) > 2 and w.isalnum()]
+                if words:
+                    fts_q = " OR ".join(words[:5])
+                    cnt = conn.execute(
+                        "SELECT COUNT(*) FROM memories_fts WHERE content MATCH ?",
+                        (fts_q,)
+                    ).fetchone()[0]
+                    score += min(1.0, math.log(cnt + 1) / math.log(100))
+                    n_signals += 1
+            finally:
+                conn.close()
         except Exception:
             pass
 
@@ -568,25 +578,15 @@ def estimate_familiarity(query: str, fts_db_path: str = None, wm_conn=None) -> f
     except Exception:
         pass
 
-    # Signal 3: Working memory presence (recent context)
-    _wm = wm_conn
-    if not _wm and fts_db_path and os.path.exists(fts_db_path):
-        try:
-            from modules.db_pool import get_conn as _get_conn
-            _wm = _get_conn(fts_db_path)
-        except Exception:
-            pass
-    if _wm:
-        try:
-            cnt = _wm.execute(
-                "SELECT COUNT(*) FROM working_memory WHERE content LIKE ? AND active = 1",
-                (f"%{query[:20]}%",)
-            ).fetchone()[0]
-            if cnt > 0:
-                score += 0.3
-            n_signals += 1
-        except Exception:
-            n_signals += 1
+    # Signal 3: Working memory presence (recent context) — PostgreSQL backend
+    try:
+        from modules.working_memory import wm_search_content
+        cnt = wm_search_content(query[:20], active_only=True)
+        if cnt > 0:
+            score += 0.3
+        n_signals += 1
+    except Exception:
+        n_signals += 1
 
     if n_signals == 0:
         return 0.5
@@ -700,24 +700,15 @@ def feeling_of_knowing(query: str, fts_db_path: str = None, wm_conn=None) -> dic
         except Exception:
             pass
 
-    # Evidence 2: Working memory presence
-    _wm_local = wm_conn
-    if not _wm_local and fts_db_path and os.path.exists(fts_db_path):
-        try:
-            _wm_local = get_conn(fts_db_path)
-        except Exception:
-            pass
-    if _wm_local:
-        try:
-            cursor = _wm_local.execute(
-                "SELECT COUNT(*) FROM working_memory WHERE content LIKE ?",
-                (f"%{query[:30]}%",)
-            )
-            if cursor.fetchone()[0] > 0:
-                fok += 0.12
-                basis_parts.append("wm(+0.12)")
-        except Exception:
-            pass
+    # Evidence 2: Working memory presence — PostgreSQL backend
+    try:
+        from modules.working_memory import wm_search_content
+        cnt = wm_search_content(query[:30], active_only=False)
+        if cnt > 0:
+            fok += 0.12
+            basis_parts.append("wm(+0.12)")
+    except Exception:
+        pass
 
     # Clamp beta-based FOK (this becomes the familiarity signal)
     familiarity = max(0.0, min(1.0, fok))

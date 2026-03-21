@@ -146,41 +146,42 @@ def record_synonym_edges(concept_pairs: list, fts_db_path: str = None) -> int:
     edges_created = 0
     try:
         conn = sqlite3.connect(fts_db_path)
-        _init_edge_table(conn)
-        ts = now_iso()
+        try:
+            _init_edge_table(conn)
+            ts = now_iso()
 
-        for pair in concept_pairs:
-            concept_a = pair.get('from', '')
-            concept_b = pair.get('to', '')
-            sim = pair.get('similarity', 0.5)
-            if not concept_a or not concept_b:
-                continue
+            for pair in concept_pairs:
+                concept_a = pair.get('from', '')
+                concept_b = pair.get('to', '')
+                sim = pair.get('similarity', 0.5)
+                if not concept_a or not concept_b:
+                    continue
 
-            # Find memories mentioning concept_a (via BM25/FTS)
-            try:
-                rows_a = conn.execute(
-                    "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
-                    (f"%{concept_a}%",)
-                ).fetchall()
-                rows_b = conn.execute(
-                    "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
-                    (f"%{concept_b}%",)
-                ).fetchall()
-            except Exception:
-                continue
+                # Find memories mentioning concept_a (via BM25/FTS)
+                try:
+                    rows_a = conn.execute(
+                        "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
+                        (f"%{concept_a}%",)
+                    ).fetchall()
+                    rows_b = conn.execute(
+                        "SELECT memory_id FROM memories_text WHERE content LIKE ? LIMIT 10",
+                        (f"%{concept_b}%",)
+                    ).fetchall()
+                except Exception:
+                    continue
 
-            ids_a = [r[0] for r in rows_a if r[0]]
-            ids_b = [r[0] for r in rows_b if r[0]]
+                ids_a = [r[0] for r in rows_a if r[0]]
+                ids_b = [r[0] for r in rows_b if r[0]]
 
-            if ids_a and ids_b:
-                # Create edges from A memories to B memories
-                for from_id in ids_a[:3]:  # Cap to prevent explosion
-                    _record_edges(conn, from_id, ids_b[:3], ts,
-                                  edge_type='similarity', strength=sim,
-                                  no_downgrade=True)
-                    edges_created += min(len(ids_b), 3)
-
-        conn.close()
+                if ids_a and ids_b:
+                    # Create edges from A memories to B memories
+                    for from_id in ids_a[:3]:  # Cap to prevent explosion
+                        _record_edges(conn, from_id, ids_b[:3], ts,
+                                      edge_type='similarity', strength=sim,
+                                      no_downgrade=True)
+                        edges_created += min(len(ids_b), 3)
+        finally:
+            conn.close()
     except Exception as e:
         _logger.warning("record_synonym_edges error: %s", e)
 
@@ -203,28 +204,29 @@ def is_causal_chain_member(point_id: str, fts_db_path: str = None) -> bool:
 
     try:
         conn = connect_fts(fts_db_path)
-        _init_edge_table(conn)
+        try:
+            _init_edge_table(conn)
 
-        # Check outgoing causal edges (this node -> other)
-        has_outgoing = conn.execute(
-            "SELECT 1 FROM spreading_edges WHERE from_id = ? "
-            "AND edge_type IN ('causes', 'enables') LIMIT 1",
-            (str(point_id),)
-        ).fetchone()
+            # Check outgoing causal edges (this node -> other)
+            has_outgoing = conn.execute(
+                "SELECT 1 FROM spreading_edges WHERE from_id = ? "
+                "AND edge_type IN ('causes', 'enables') LIMIT 1",
+                (str(point_id),)
+            ).fetchone()
 
-        if not has_outgoing:
+            if not has_outgoing:
+                return False
+
+            # Check incoming causal edges (other -> this node)
+            has_incoming = conn.execute(
+                "SELECT 1 FROM spreading_edges WHERE to_id = ? "
+                "AND edge_type IN ('causes', 'enables') LIMIT 1",
+                (str(point_id),)
+            ).fetchone()
+
+            return bool(has_incoming)
+        finally:
             conn.close()
-            return False
-
-        # Check incoming causal edges (other -> this node)
-        has_incoming = conn.execute(
-            "SELECT 1 FROM spreading_edges WHERE to_id = ? "
-            "AND edge_type IN ('causes', 'enables') LIMIT 1",
-            (str(point_id),)
-        ).fetchone()
-
-        conn.close()
-        return bool(has_incoming)
     except sqlite3.Error as exc:
         _logger.exception(
             "Failed causal chain membership lookup for point_id=%s db=%s",
@@ -248,23 +250,25 @@ def get_chain_member_ids(fts_db_path: str = None) -> set:
 
     try:
         conn = connect_fts(fts_db_path)
-        _init_edge_table(conn)
+        try:
+            _init_edge_table(conn)
 
-        # Nodes with outgoing causal edges
-        outgoing = {r[0] for r in conn.execute(
-            "SELECT DISTINCT from_id FROM spreading_edges "
-            "WHERE edge_type IN ('causes', 'enables')"
-        ).fetchall()}
+            # Nodes with outgoing causal edges
+            outgoing = {r[0] for r in conn.execute(
+                "SELECT DISTINCT from_id FROM spreading_edges "
+                "WHERE edge_type IN ('causes', 'enables')"
+            ).fetchall()}
 
-        # Nodes with incoming causal edges
-        incoming = {r[0] for r in conn.execute(
-            "SELECT DISTINCT to_id FROM spreading_edges "
-            "WHERE edge_type IN ('causes', 'enables')"
-        ).fetchall()}
+            # Nodes with incoming causal edges
+            incoming = {r[0] for r in conn.execute(
+                "SELECT DISTINCT to_id FROM spreading_edges "
+                "WHERE edge_type IN ('causes', 'enables')"
+            ).fetchall()}
 
-        conn.close()
-        # Chain members = intersection (have both in and out)
-        return outgoing & incoming
+            # Chain members = intersection (have both in and out)
+            return outgoing & incoming
+        finally:
+            conn.close()
     except sqlite3.Error as exc:
         _logger.exception(
             "Failed batch causal chain member lookup for db=%s",

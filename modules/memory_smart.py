@@ -556,11 +556,13 @@ def _auto_connect_neighbors(new_id: str, content: str, exclude_ids: list = None)
                 from modules.config import connect_fts
                 from modules.utils import now_iso
                 edge_conn = connect_fts()
-                from modules.spreading import _init_edge_table, _record_edges
-                _init_edge_table(edge_conn)
-                _record_edges(edge_conn, new_id, connections, now_iso(),
-                              edge_type="co_occurs")
-                edge_conn.close()
+                try:
+                    from modules.spreading import _init_edge_table, _record_edges
+                    _init_edge_table(edge_conn)
+                    _record_edges(edge_conn, new_id, connections, now_iso(),
+                                  edge_type="co_occurs")
+                finally:
+                    edge_conn.close()
             except Exception:
                 pass
     except Exception:
@@ -631,14 +633,16 @@ def _get_efe_gate_threshold() -> float:
         if not os.path.exists(FTS_DB_PATH):
             return EFE_GATE_BASE_THRESHOLD
         conn = connect_fts(FTS_DB_PATH)
-        # Get recent average precision as proxy for model confidence
-        row = conn.execute("""
-            SELECT AVG(precision_weight) FROM (
-                SELECT precision_weight FROM prediction_results
-                ORDER BY id DESC LIMIT 20
-            )
-        """).fetchone()
-        conn.close()
+        try:
+            # Get recent average precision as proxy for model confidence
+            row = conn.execute("""
+                SELECT AVG(precision_weight) FROM (
+                    SELECT precision_weight FROM prediction_results
+                    ORDER BY id DESC LIMIT 20
+                )
+            """).fetchone()
+        finally:
+            conn.close()
         if row and row[0]:
             precision = row[0]
             # High precision → higher threshold (be more selective)
@@ -747,20 +751,13 @@ def _auto_enrich_content(content: str, category: str) -> str:
     import os
     enrichments = []
 
-    # 1. Active working memory topics
+    # 1. Active working memory topics (PostgreSQL backend)
     try:
-        from modules.config import connect_fts, FTS_DB_PATH
-        if os.path.exists(FTS_DB_PATH):
-            conn = connect_fts(FTS_DB_PATH)
-            rows = conn.execute(
-                "SELECT DISTINCT topic FROM working_memory WHERE active = 1 "
-                "AND topic NOT IN ('', 'general', 'metamemory', 'contradiction') "
-                "LIMIT 3"
-            ).fetchall()
-            conn.close()
-            topics = [r[0] for r in rows if r[0]]
-            if topics:
-                enrichments.append(f"[topics: {', '.join(topics)}]")
+        from modules.working_memory import wm_get_active_topics
+        topics = wm_get_active_topics(limit=3)
+        topics = [t for t in topics if t not in ('', 'general', 'metamemory', 'metamemoria', 'contradiction')]
+        if topics:
+            enrichments.append(f"[topics: {', '.join(topics)}]")
     except Exception:
         pass
 
@@ -792,11 +789,13 @@ def _auto_enrich_content(content: str, category: str) -> str:
         from modules.config import connect_fts, FTS_DB_PATH
         if os.path.exists(FTS_DB_PATH):
             conn = connect_fts(FTS_DB_PATH)
-            row = conn.execute(
-                "SELECT title FROM goals WHERE status = 'active' "
-                "ORDER BY activation DESC LIMIT 1"
-            ).fetchone()
-            conn.close()
+            try:
+                row = conn.execute(
+                    "SELECT title FROM goals WHERE status = 'active' "
+                    "ORDER BY activation DESC LIMIT 1"
+                ).fetchone()
+            finally:
+                conn.close()
             if row and row[0]:
                 enrichments.append(f"[goal: {row[0]}]")
     except Exception:

@@ -460,39 +460,39 @@ def _get_high_surprise_domains(min_observations: int = 3, window: int = 50) -> l
         return []
     try:
         conn = connect_fts(_FTS_DB)
+        try:
+            # Get per-topic transition counts for IG computation
+            transition_rows = conn.execute("""
+                SELECT from_topic, to_topic, count
+                FROM transition_stats
+                ORDER BY count DESC
+            """).fetchall()
 
-        # Get per-topic transition counts for IG computation
-        transition_rows = conn.execute("""
-            SELECT from_topic, to_topic, count
-            FROM transition_stats
-            ORDER BY count DESC
-        """).fetchall()
+            # Build transition model per source topic
+            transitions_by_topic = {}
+            for from_t, to_t, cnt in transition_rows:
+                if from_t not in transitions_by_topic:
+                    transitions_by_topic[from_t] = {}
+                transitions_by_topic[from_t][to_t] = cnt
 
-        # Build transition model per source topic
-        transitions_by_topic = {}
-        for from_t, to_t, cnt in transition_rows:
-            if from_t not in transitions_by_topic:
-                transitions_by_topic[from_t] = {}
-            transitions_by_topic[from_t][to_t] = cnt
-
-        # Get per-topic surprise stats from recent predictions
-        rows = conn.execute("""
-            SELECT actual_topic,
-                   AVG(surprise_score) AS avg_surprise,
-                   COUNT(*) AS cnt,
-                   AVG(hit) AS accuracy
-            FROM (
-                SELECT actual_topic, surprise_score, hit
-                FROM prediction_results
-                WHERE COALESCE(source, 'interactive') != 'sleep_loop'
-                ORDER BY id DESC LIMIT ?
-            )
-            GROUP BY actual_topic
-            HAVING cnt >= ?
-            ORDER BY avg_surprise DESC
-        """, (window, min_observations)).fetchall()
-
-        conn.close()
+            # Get per-topic surprise stats from recent predictions
+            rows = conn.execute("""
+                SELECT actual_topic,
+                       AVG(surprise_score) AS avg_surprise,
+                       COUNT(*) AS cnt,
+                       AVG(hit) AS accuracy
+                FROM (
+                    SELECT actual_topic, surprise_score, hit
+                    FROM prediction_results
+                    WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                    ORDER BY id DESC LIMIT ?
+                )
+                GROUP BY actual_topic
+                HAVING cnt >= ?
+                ORDER BY avg_surprise DESC
+            """, (window, min_observations)).fetchall()
+        finally:
+            conn.close()
 
         results = []
         for topic, avg_s, cnt, acc in rows:
@@ -654,16 +654,18 @@ def auto_curiosity_tick() -> dict:
             low_surprise_topics = set()
             try:
                 conn = connect_fts(_FTS_DB)
-                rows = conn.execute("""
-                    SELECT actual_topic, AVG(surprise_score) AS avg_s
-                    FROM (SELECT actual_topic, surprise_score FROM prediction_results
-                          WHERE COALESCE(source, 'interactive') != 'sleep_loop'
-                          ORDER BY id DESC LIMIT 20)
-                    GROUP BY actual_topic
-                    HAVING avg_s < 0.3
-                """).fetchall()
-                low_surprise_topics = {r[0] for r in rows}
-                conn.close()
+                try:
+                    rows = conn.execute("""
+                        SELECT actual_topic, AVG(surprise_score) AS avg_s
+                        FROM (SELECT actual_topic, surprise_score FROM prediction_results
+                              WHERE COALESCE(source, 'interactive') != 'sleep_loop'
+                              ORDER BY id DESC LIMIT 20)
+                        GROUP BY actual_topic
+                        HAVING avg_s < 0.3
+                    """).fetchall()
+                    low_surprise_topics = {r[0] for r in rows}
+                finally:
+                    conn.close()
             except Exception:
                 pass
 

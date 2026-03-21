@@ -288,19 +288,21 @@ def mark_as_labile(memory_id: str, prediction_error: float = 0.0,
     """
     try:
         conn = _consolidation_conn()
-        now = now_col()
-        expires = now + timedelta(hours=RECONSOLIDATION_WINDOW_HOURS)
+        try:
+            now = now_col()
+            expires = now + timedelta(hours=RECONSOLIDATION_WINDOW_HOURS)
 
-        cur = conn.execute("""
-            INSERT OR IGNORE INTO labile_memories
-            (memory_id, marked_at, window_expires, prediction_error, trigger_context)
-            VALUES (?, ?, ?, ?, ?)
-        """, (memory_id, now.isoformat(), expires.isoformat(),
-              prediction_error, trigger_context))
-        conn.commit()
-        inserted = cur.rowcount > 0
-        conn.close()
-        return inserted
+            cur = conn.execute("""
+                INSERT OR IGNORE INTO labile_memories
+                (memory_id, marked_at, window_expires, prediction_error, trigger_context)
+                VALUES (?, ?, ?, ?, ?)
+            """, (memory_id, now.isoformat(), expires.isoformat(),
+                  prediction_error, trigger_context))
+            conn.commit()
+            inserted = cur.rowcount > 0
+            return inserted
+        finally:
+            conn.close()
     except Exception as e:
         _logger.warning("Could not mark labile: %s", redact_secrets(str(e)))
         return False
@@ -310,10 +312,12 @@ def clear_expired_labile():
     """Remove expired labile memory entries."""
     try:
         conn = _consolidation_conn()
-        now = now_iso()
-        conn.execute("DELETE FROM labile_memories WHERE window_expires < ?", (now,))
-        conn.commit()
-        conn.close()
+        try:
+            now = now_iso()
+            conn.execute("DELETE FROM labile_memories WHERE window_expires < ?", (now,))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -422,12 +426,14 @@ def _correct_memory_impl(
         is_labile = False
         try:
             conn = _consolidation_conn()
-            row = conn.execute(
-                "SELECT 1 FROM labile_memories WHERE memory_id = ? AND window_expires > ?",
-                (full_id, now_iso())
-            ).fetchone()
-            conn.close()
-            is_labile = row is not None
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM labile_memories WHERE memory_id = ? AND window_expires > ?",
+                    (full_id, now_iso())
+                ).fetchone()
+                is_labile = row is not None
+            finally:
+                conn.close()
         except Exception:
             pass
 
@@ -493,16 +499,18 @@ def _correct_memory_impl(
     # 7b. Log reconsolidation AFTER successful upsert (audit trail)
     try:
         conn = _consolidation_conn()
-        conn.execute("""
-            INSERT INTO reconsolidation_log
-            (memory_id, memory_type, action, prediction_error, memory_strength,
-             old_content, new_content, blend_weight, trigger_context, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
-              old_content[:500], new_content[:500], 0.0,
-              correction[:200], now_iso()))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("""
+                INSERT INTO reconsolidation_log
+                (memory_id, memory_type, action, prediction_error, memory_strength,
+                 old_content, new_content, blend_weight, trigger_context, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (full_id, "episodic", "correct_memory", actual_pe, old_confidence,
+                  old_content[:500], new_content[:500], 0.0,
+                  correction[:200], now_iso()))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         _logger.warning("Could not log reconsolidation: %s", redact_secrets(str(e)))
 
@@ -568,32 +576,34 @@ def queue_correction_suggestion(
     import json
     try:
         conn = _consolidation_conn()
-        now = now_col()
-        expires = now + timedelta(hours=window_hours)
+        try:
+            now = now_col()
+            expires = now + timedelta(hours=window_hours)
 
-        cursor = conn.execute("""
-            INSERT INTO pending_corrections
-            (old_memory_id, new_memory_id, old_text, new_text,
-             prediction_error, shared_entities, channels,
-             status, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-        """, (
-            old_memory_id,
-            new_memory_id or "",
-            old_text[:500],
-            new_text[:500],
-            prediction_error,
-            json.dumps(shared_entities or []),
-            json.dumps(channels or {}),
-            now.isoformat(),
-            expires.isoformat(),
-        ))
-        conn.commit()
-        row_id = cursor.lastrowid
-        conn.close()
-        _logger.info("Queued correction suggestion #%d for memory %s (PE=%.2f)",
-                      row_id, old_memory_id[:8], prediction_error)
-        return row_id
+            cursor = conn.execute("""
+                INSERT INTO pending_corrections
+                (old_memory_id, new_memory_id, old_text, new_text,
+                 prediction_error, shared_entities, channels,
+                 status, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            """, (
+                old_memory_id,
+                new_memory_id or "",
+                old_text[:500],
+                new_text[:500],
+                prediction_error,
+                json.dumps(shared_entities or []),
+                json.dumps(channels or {}),
+                now.isoformat(),
+                expires.isoformat(),
+            ))
+            conn.commit()
+            row_id = cursor.lastrowid
+            _logger.info("Queued correction suggestion #%d for memory %s (PE=%.2f)",
+                          row_id, old_memory_id[:8], prediction_error)
+            return row_id
+        finally:
+            conn.close()
     except Exception as e:
         _logger.error("Failed to queue correction: %s", redact_secrets(str(e)))
         return -1
@@ -610,28 +620,30 @@ def get_pending_corrections(include_expired: bool = False) -> str:
     import json
     try:
         conn = _consolidation_conn()
-        now = now_iso()
+        try:
+            now = now_iso()
 
-        if include_expired:
-            rows = conn.execute("""
-                SELECT id, old_memory_id, old_text, new_text,
-                       prediction_error, shared_entities, status,
-                       created_at, expires_at
-                FROM pending_corrections
-                ORDER BY prediction_error DESC
-                LIMIT 20
-            """).fetchall()
-        else:
-            rows = conn.execute("""
-                SELECT id, old_memory_id, old_text, new_text,
-                       prediction_error, shared_entities, status,
-                       created_at, expires_at
-                FROM pending_corrections
-                WHERE status = 'pending' AND expires_at > ?
-                ORDER BY prediction_error DESC
-                LIMIT 20
-            """, (now,)).fetchall()
-        conn.close()
+            if include_expired:
+                rows = conn.execute("""
+                    SELECT id, old_memory_id, old_text, new_text,
+                           prediction_error, shared_entities, status,
+                           created_at, expires_at
+                    FROM pending_corrections
+                    ORDER BY prediction_error DESC
+                    LIMIT 20
+                """).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT id, old_memory_id, old_text, new_text,
+                           prediction_error, shared_entities, status,
+                           created_at, expires_at
+                    FROM pending_corrections
+                    WHERE status = 'pending' AND expires_at > ?
+                    ORDER BY prediction_error DESC
+                    LIMIT 20
+                """, (now,)).fetchall()
+        finally:
+            conn.close()
 
         if not rows:
             return "[reconsolidation] No pending corrections."
@@ -661,18 +673,20 @@ def expire_stale_corrections() -> int:
     """
     try:
         conn = _consolidation_conn()
-        now = now_iso()
-        cursor = conn.execute("""
-            UPDATE pending_corrections
-            SET status = 'expired', reviewed_at = ?
-            WHERE status = 'pending' AND expires_at <= ?
-        """, (now, now))
-        count = cursor.rowcount
-        conn.commit()
-        conn.close()
-        if count > 0:
-            _logger.info("Expired %d stale correction suggestions", count)
-        return count
+        try:
+            now = now_iso()
+            cursor = conn.execute("""
+                UPDATE pending_corrections
+                SET status = 'expired', reviewed_at = ?
+                WHERE status = 'pending' AND expires_at <= ?
+            """, (now, now))
+            count = cursor.rowcount
+            conn.commit()
+            if count > 0:
+                _logger.info("Expired %d stale correction suggestions", count)
+            return count
+        finally:
+            conn.close()
     except Exception as e:
         _logger.warning("expire_stale_corrections error: %s", redact_secrets(str(e)))
         return 0

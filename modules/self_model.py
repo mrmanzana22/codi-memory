@@ -203,11 +203,13 @@ def identify_knowledge_gaps() -> str:
             import os
             if os.path.exists(FTS_DB_PATH):
                 fts_conn = connect_fts()
-                from modules.retrieval_metadata import get_top_failed_topics
-                for topic, _count in get_top_failed_topics(fts_conn, limit=5):
-                    if topic:
-                        dynamic_themes.add(topic.lower())
-                fts_conn.close()
+                try:
+                    from modules.retrieval_metadata import get_top_failed_topics
+                    for topic, _count in get_top_failed_topics(fts_conn, limit=5):
+                        if topic:
+                            dynamic_themes.add(topic.lower())
+                finally:
+                    fts_conn.close()
         except Exception:
             pass
 
@@ -566,8 +568,10 @@ def _legacy_assess_butlin() -> str:
         # Check if reconsolidation has been exercised
         try:
             conn = _consolidation_conn()
-            recon_count = conn.execute("SELECT COUNT(*) FROM reconsolidation_log").fetchone()[0]
-            conn.close()
+            try:
+                recon_count = conn.execute("SELECT COUNT(*) FROM reconsolidation_log").fetchone()[0]
+            finally:
+                conn.close()
         except Exception:
             recon_count = 0
         if recon_count >= 5:
@@ -799,6 +803,7 @@ def detect_self_discrepancies() -> dict:
     if not os.path.exists(FTS_DB_PATH):
         return {"discrepancies": [], "count": 0, "summary": "no data"}
 
+    conn = None
     try:
         conn = connect_fts()
         _init_discrepancy_table(conn)
@@ -1179,10 +1184,11 @@ def detect_self_discrepancies() -> dict:
             except Exception:
                 pass
 
-        conn.close()
-
     except Exception:
         pass
+    finally:
+        if conn is not None:
+            conn.close()
 
     summary_parts = []
     for d in discrepancies[:3]:
@@ -1236,35 +1242,37 @@ def log_reasoning_trace(query: str, strategy: str, strategy_reason: str,
     """
     try:
         conn = connect_fts()
-        _init_reasoning_traces_table(conn)
+        try:
+            _init_reasoning_traces_table(conn)
 
-        conn.execute("""
-            INSERT INTO metacognition_traces
-            (query, strategy_chosen, strategy_reason, fok_score, fok_basis,
-             result_count, top_score, outcome, duration_ms, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            query[:200],
-            strategy,
-            strategy_reason,
-            fok_score,
-            fok_basis[:200] if fok_basis else "",
-            result_count,
-            top_score,
-            outcome,
-            duration_ms,
-            now_iso(),
-        ))
+            conn.execute("""
+                INSERT INTO metacognition_traces
+                (query, strategy_chosen, strategy_reason, fok_score, fok_basis,
+                 result_count, top_score, outcome, duration_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                query[:200],
+                strategy,
+                strategy_reason,
+                fok_score,
+                fok_basis[:200] if fok_basis else "",
+                result_count,
+                top_score,
+                outcome,
+                duration_ms,
+                now_iso(),
+            ))
 
-        # FIFO cleanup: keep max 1000
-        conn.execute("""
-            DELETE FROM metacognition_traces
-            WHERE id NOT IN (
-                SELECT id FROM metacognition_traces ORDER BY id DESC LIMIT 1000
-            )
-        """)
-        conn.commit()
-        conn.close()
+            # FIFO cleanup: keep max 1000
+            conn.execute("""
+                DELETE FROM metacognition_traces
+                WHERE id NOT IN (
+                    SELECT id FROM metacognition_traces ORDER BY id DESC LIMIT 1000
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -1276,14 +1284,16 @@ def get_reasoning_traces(limit: int = 20) -> list:
     """
     try:
         conn = connect_fts()
-        _init_reasoning_traces_table(conn)
-        rows = conn.execute("""
-            SELECT query, strategy_chosen, strategy_reason, fok_score,
-                   result_count, top_score, outcome, duration_ms, created_at
-            FROM metacognition_traces
-            ORDER BY id DESC LIMIT ?
-        """, (min(limit, 100),)).fetchall()
-        conn.close()
+        try:
+            _init_reasoning_traces_table(conn)
+            rows = conn.execute("""
+                SELECT query, strategy_chosen, strategy_reason, fok_score,
+                       result_count, top_score, outcome, duration_ms, created_at
+                FROM metacognition_traces
+                ORDER BY id DESC LIMIT ?
+            """, (min(limit, 100),)).fetchall()
+        finally:
+            conn.close()
         return [
             {
                 "query": r[0],
@@ -1332,36 +1342,36 @@ def get_self_as_agent_model():
     # Enrich from L2 prediction data
     try:
         conn = connect_fts()
+        try:
+            # Capabilities from L2 accuracy
+            rows = conn.execute("""
+                SELECT domain, actual_accuracy, sample_size
+                FROM prediction_state_l2 WHERE sample_size >= 5
+            """).fetchall()
+            for domain, acc, n in rows:
+                traits.capabilities[domain] = round(acc, 2)
 
-        # Capabilities from L2 accuracy
-        rows = conn.execute("""
-            SELECT domain, actual_accuracy, sample_size
-            FROM prediction_state_l2 WHERE sample_size >= 5
-        """).fetchall()
-        for domain, acc, n in rows:
-            traits.capabilities[domain] = round(acc, 2)
+            # Current state from session
+            row = conn.execute("""
+                SELECT last_topic, goal_locked, goal_topics
+                FROM prediction_state_l1 WHERE id = 1
+            """).fetchone()
+            if row:
+                state.current_topic = row[0] or ""
+                if row[1] and row[2]:
+                    goals = json.loads(row[2])
+                    if goals:
+                        state.current_goal = max(goals, key=goals.get)
 
-        # Current state from session
-        row = conn.execute("""
-            SELECT last_topic, goal_locked, goal_topics
-            FROM prediction_state_l1 WHERE id = 1
-        """).fetchone()
-        if row:
-            state.current_topic = row[0] or ""
-            if row[1] and row[2]:
-                goals = json.loads(row[2])
-                if goals:
-                    state.current_goal = max(goals, key=goals.get)
-
-        # Predictions from L0
-        row = conn.execute("""
-            SELECT predicted_topic, confidence FROM prediction_state WHERE id = 1
-        """).fetchone()
-        if row:
-            predictions.predicted_topic = row[0] or ""
-            predictions.confidence = row[1] or 0.5
-
-        conn.close()
+            # Predictions from L0
+            row = conn.execute("""
+                SELECT predicted_topic, confidence FROM prediction_state WHERE id = 1
+            """).fetchone()
+            if row:
+                predictions.predicted_topic = row[0] or ""
+                predictions.confidence = row[1] or 0.5
+        finally:
+            conn.close()
     except Exception:
         pass
 

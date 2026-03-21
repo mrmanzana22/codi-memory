@@ -345,16 +345,18 @@ def _integrate_wm_chains(period_days: int = 7) -> list:
     try:
         from modules.config import connect_fts
         conn = connect_fts()
-        chains = conn.execute("""
-            SELECT chain_id, topic, COUNT(*) as items,
-                   MIN(occurred_at) as first_at, MAX(occurred_at) as last_at
-            FROM working_memory
-            WHERE active = 1 OR occurred_at > datetime('now', ? || ' days')
-            GROUP BY chain_id
-            HAVING items >= 3
-            ORDER BY first_at
-        """, (f"-{period_days}",)).fetchall()
-        conn.close()
+        try:
+            chains = conn.execute("""
+                SELECT chain_id, topic, COUNT(*) as items,
+                       MIN(occurred_at) as first_at, MAX(occurred_at) as last_at
+                FROM working_memory
+                WHERE active = 1 OR occurred_at > datetime('now', ? || ' days')
+                GROUP BY chain_id
+                HAVING items >= 3
+                ORDER BY first_at
+            """, (f"-{period_days}",)).fetchall()
+        finally:
+            conn.close()
         return [{
             "chain_id": c[0], "topic": c[1], "items": c[2],
             "period": f"{c[3][:10]} to {c[4][:10]}",

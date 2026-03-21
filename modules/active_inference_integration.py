@@ -77,13 +77,15 @@ def _mark_v2_cutover():
     global _v2_cutover_marked
     try:
         conn = _get_conn()
-        from modules.config import now_iso
-        conn.execute(
-            "INSERT OR IGNORE INTO sleep_loop_state (key, value) VALUES ('ai_semantics_v2_at', ?)",
-            (now_iso(),),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            from modules.config import now_iso
+            conn.execute(
+                "INSERT OR IGNORE INTO sleep_loop_state (key, value) VALUES ('ai_semantics_v2_at', ?)",
+                (now_iso(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
         _v2_cutover_marked = True
     except Exception:
         pass  # Non-critical, will retry next step

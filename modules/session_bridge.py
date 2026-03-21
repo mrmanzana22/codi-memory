@@ -91,6 +91,7 @@ def checkpoint_session_close(
 
     now = now_iso()
 
+    conn = None
     try:
         conn = _get_conn()
         # --- DEDUPE WINDOW ---
@@ -120,7 +121,6 @@ def checkpoint_session_close(
                     pass  # Fall through to data collection, will UPDATE instead
                 else:
                     # Same or lower priority: skip
-                    conn.close()
                     return {"ok": False, "checkpoint_id": existing_id, "deduped": True}
 
         # --- COLLECT DATA FROM 7+ SOURCES ---
@@ -311,15 +311,16 @@ def checkpoint_session_close(
             "active_project": active_project,
         })
 
-        conn.close()
         return {"ok": True, "checkpoint_id": checkpoint_id, "deduped": False}
 
     except Exception as e:
-        try:
-            conn.close()
-        except Exception:
-            _logger.debug("failed to close db connection during error cleanup", exc_info=True)
         return {"ok": False, "error": redact_secrets(str(e)), "checkpoint_id": None}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                _logger.debug("failed to close db connection during cleanup", exc_info=True)
 
 
 # ============================================================
@@ -339,19 +340,20 @@ def load_session_bridge() -> dict | None:
     """
     try:
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT * FROM session_checkpoints ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
+        try:
+            row = conn.execute(
+                "SELECT * FROM session_checkpoints ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
 
-        if not row:
+            if not row:
+                return None
+
+            # Get column names
+            col_names = [desc[0] for desc in conn.execute(
+                "SELECT * FROM session_checkpoints LIMIT 0"
+            ).description]
+        finally:
             conn.close()
-            return None
-
-        # Get column names
-        col_names = [desc[0] for desc in conn.execute(
-            "SELECT * FROM session_checkpoints LIMIT 0"
-        ).description]
-        conn.close()
 
         checkpoint = dict(zip(col_names, row))
 
@@ -479,27 +481,26 @@ def register_tools(mcp):
         """Show last session checkpoint and bridge status for diagnostics."""
         try:
             conn = _get_conn()
+            try:
+                # Count total checkpoints
+                total = conn.execute("SELECT COUNT(*) FROM session_checkpoints").fetchone()[0]
 
-            # Count total checkpoints
-            total = conn.execute("SELECT COUNT(*) FROM session_checkpoints").fetchone()[0]
+                # Last checkpoint
+                row = conn.execute(
+                    "SELECT id, source, active_project, session_summary, created_at "
+                    "FROM session_checkpoints ORDER BY created_at DESC LIMIT 1"
+                ).fetchone()
 
-            # Last checkpoint
-            row = conn.execute(
-                "SELECT id, source, active_project, session_summary, created_at "
-                "FROM session_checkpoints ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
+                if not row:
+                    return f"Session Bridge: 0 checkpoints. No data yet."
 
-            if not row:
+                cp_id, cp_source, cp_project, cp_summary, cp_ts = row
+                hours = _hours_since(cp_ts)
+
+                # Try loading bridge
+                bridge = load_session_bridge()
+            finally:
                 conn.close()
-                return f"Session Bridge: 0 checkpoints. No data yet."
-
-            cp_id, cp_source, cp_project, cp_summary, cp_ts = row
-            hours = _hours_since(cp_ts)
-
-            # Try loading bridge
-            bridge = load_session_bridge()
-
-            conn.close()
 
             lines = [
                 "# SESSION BRIDGE STATUS",

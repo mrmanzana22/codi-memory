@@ -479,6 +479,7 @@ TICK_MAX_MS = {
     "prospective": 3000,         # was 2000
     "proactive_contact": 3000,   # was 2000
     "cx_health": 5000,            # CPO v2: snapshot + HTML update
+    "fhrr_encoding": 15000,       # load_all_sessions(~8s) + prototypes(<2s) + synonyms(<1s)
 }
 
 
@@ -647,10 +648,12 @@ def _get_last_full_consolidation_at():
 
     try:
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM consolidation_log WHERE scope='full'"
+            ).fetchone()
+        finally:
+            conn.close()
         if row and row[0]:
             return row[0]
         return _CONSOLIDATION_READ_FAILED if pg_read_failed else None
@@ -691,9 +694,9 @@ def _should_run_full_consolidation() -> bool:
     try:
         from modules.config import now_col
         now = now_col()
-        # Only during night hours (10pm-6am) to minimize interference
-        if not (22 <= now.hour or now.hour < 6):
-            return False
+        # Sprint 2 FIX-05: allow daytime with high debt (>4.0) to prevent 17-day stalls
+        is_night = (22 <= now.hour or now.hour < 6)
+        # Will check debt below; for now just flag daytime
 
         last_full = _get_last_full_consolidation_at()
 
@@ -711,17 +714,21 @@ def _should_run_full_consolidation() -> bool:
         # memories_text.created_at written by datetime('now') = naive UTC
         last_full_utc = to_sqlite_utc(last_full)
         conn = _get_conn()
-        new_memories_row = conn.execute(
-            "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
-            (last_full_utc,)
-        ).fetchone()
-        conn.close()
+        try:
+            new_memories_row = conn.execute(
+                "SELECT COUNT(*) FROM memories_text WHERE created_at > ?",
+                (last_full_utc,)
+            ).fetchone()
+        finally:
+            conn.close()
 
         new_memories = new_memories_row[0] if new_memories_row else 0
 
         # Info-debt formula: high memory load + enough time elapsed = consolidate
         debt = math.log(1 + new_memories) * (1 - math.exp(-0.1 * hours_since))
-        return debt > 2.0
+        # Sprint 2 FIX-05: night=2.0, daytime=4.0 (Diekelmann 2010: consolidation benefits any rest)
+        threshold = 2.0 if is_night else 4.0
+        return debt > threshold
 
     except Exception:
         return False  # fail safe: don't run full on error
@@ -1040,11 +1047,13 @@ def _replay_consolidation_event():
     """
     try:
         conn = _get_conn()
-        last_emitted_row = conn.execute(
-            "SELECT value FROM sleep_loop_state WHERE key = 'last_consolidation_event_ts'"
-        ).fetchone()
-        last_emitted_ts = last_emitted_row[0] if last_emitted_row else None
-        conn.close()
+        try:
+            last_emitted_row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = 'last_consolidation_event_ts'"
+            ).fetchone()
+            last_emitted_ts = last_emitted_row[0] if last_emitted_row else None
+        finally:
+            conn.close()
 
         from modules.config_pg import get_conn as get_pg_conn
         with get_pg_conn() as pg_conn:
@@ -1110,12 +1119,14 @@ def _replay_consolidation_event():
         # Update marker
         if latest_ts:
             conn = _get_conn()
-            conn.execute(
-                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-                ("last_consolidation_event_ts", latest_ts)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                    ("last_consolidation_event_ts", latest_ts)
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     except Exception as e:
         _logger.debug("_replay_consolidation_event: %s", e)
@@ -1232,15 +1243,17 @@ def _tick_self_model(budget_ms: int) -> dict:
             # Belt-and-suspenders: direct SQLite write to event_counts
             try:
                 conn = _get_conn()
-                conn.execute("""
-                    INSERT INTO event_counts (event, count, last_seen)
-                    VALUES ('self_model_refreshed', 1, ?)
-                    ON CONFLICT(event) DO UPDATE SET
-                        count = count + 1,
-                        last_seen = excluded.last_seen
-                """, (now_iso(),))
-                conn.commit()
-                conn.close()
+                try:
+                    conn.execute("""
+                        INSERT INTO event_counts (event, count, last_seen)
+                        VALUES ('self_model_refreshed', 1, ?)
+                        ON CONFLICT(event) DO UPDATE SET
+                            count = count + 1,
+                            last_seen = excluded.last_seen
+                    """, (now_iso(),))
+                    conn.commit()
+                finally:
+                    conn.close()
             except Exception:
                 pass  # EventBus emit is primary; this is backup
             elapsed = (time.monotonic() - start) * 1000
@@ -1267,10 +1280,12 @@ def _load_pad_from_db():
     """
     try:
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             import json as _json
             pad = _json.loads(row[0])
@@ -1299,18 +1314,20 @@ def _persist_pad_to_db():
         if not current.get('timestamp'):
             return
         conn = _get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-            ("pad_current", _json.dumps({
-                'pleasure': current['pleasure'],
-                'arousal': current['arousal'],
-                'dominance': current['dominance'],
-                'timestamp': current['timestamp'],
-                'trigger': current.get('trigger', ''),
-            }))
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                ("pad_current", _json.dumps({
+                    'pleasure': current['pleasure'],
+                    'arousal': current['arousal'],
+                    'dominance': current['dominance'],
+                    'timestamp': current['timestamp'],
+                    'trigger': current.get('trigger', ''),
+                }))
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -1815,10 +1832,12 @@ def _tick_causal_discovery(budget_ms: int) -> dict:
         # Check if enough new data since last run
         last_ts_key = "last_causal_discovery"
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT value FROM sleep_loop_state WHERE key = ?", (last_ts_key,)
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = ?", (last_ts_key,)
+            ).fetchone()
+        finally:
+            conn.close()
 
         last_ts = row[0] if row else "1970-01-01T00:00:00"
         new_count = _count_new_transitions(FTS_DB_PATH, last_ts)
@@ -1894,11 +1913,13 @@ def _get_proactive_last_sent() -> datetime | None:
     """Get the last time a proactive message was sent."""
     try:
         conn = _get_conn()
-        row = conn.execute(
-            "SELECT value FROM sleep_loop_state WHERE key = ?",
-            (_PROACTIVE_STATE_KEY,)
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = ?",
+                (_PROACTIVE_STATE_KEY,)
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             return datetime.fromisoformat(row[0])
     except Exception:
@@ -1910,12 +1931,14 @@ def _set_proactive_last_sent():
     """Record that a proactive message was sent now."""
     try:
         conn = _get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-            (_PROACTIVE_STATE_KEY, now_iso())
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                (_PROACTIVE_STATE_KEY, now_iso())
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -1936,12 +1959,14 @@ def _cache_last_consolidation_result():
 
         if not row:
             conn = _get_conn()
-            conn.execute(
-                "DELETE FROM sleep_loop_state WHERE key = ?",
-                ("last_consolidation_result",)
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "DELETE FROM sleep_loop_state WHERE key = ?",
+                    ("last_consolidation_result",)
+                )
+                conn.commit()
+            finally:
+                conn.close()
             return
 
         payload = {
@@ -1955,12 +1980,14 @@ def _cache_last_consolidation_result():
         }
 
         conn = _get_conn()
-        conn.execute(
-            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-            ("last_consolidation_result", json.dumps(payload))
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                ("last_consolidation_result", json.dumps(payload))
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -2055,14 +2082,16 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
         # Signal 3: System health (write-worker crashes from recent ticks)
         try:
             conn = _get_conn()
-            row = conn.execute(
-                """SELECT COUNT(*) FROM tool_calls
-                   WHERE tool_name LIKE 'sleep_tick_%'
-                   AND success = 0
-                   AND error_type IS NOT NULL
-                   AND datetime(started_at) > datetime('now', '-3 hours')"""
-            ).fetchone()
-            conn.close()
+            try:
+                row = conn.execute(
+                    """SELECT COUNT(*) FROM tool_calls
+                       WHERE tool_name LIKE 'sleep_tick_%'
+                       AND success = 0
+                       AND error_type IS NOT NULL
+                       AND datetime(started_at) > datetime('now', '-3 hours')"""
+                ).fetchone()
+            finally:
+                conn.close()
             if row and row[0] >= 10:
                 signals.append(f"Sistema inestable: {row[0]} tick errors en ultimas 3h")
         except Exception:
@@ -2072,15 +2101,17 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
         try:
             _cache_last_consolidation_result()
             conn = _get_conn()
-            row = conn.execute(
-                """SELECT value FROM sleep_loop_state
-                   WHERE key = 'last_consolidation_result'"""
-            ).fetchone()
-            last_notified = conn.execute(
-                """SELECT value FROM sleep_loop_state
-                   WHERE key = 'last_notified_consolidation_batch_id'"""
-            ).fetchone()
-            conn.close()
+            try:
+                row = conn.execute(
+                    """SELECT value FROM sleep_loop_state
+                       WHERE key = 'last_consolidation_result'"""
+                ).fetchone()
+                last_notified = conn.execute(
+                    """SELECT value FROM sleep_loop_state
+                       WHERE key = 'last_notified_consolidation_batch_id'"""
+                ).fetchone()
+            finally:
+                conn.close()
             if row:
                 consol = json.loads(row[0]) if isinstance(row[0], str) else {}
                 new_facts = consol.get("facts_created", 0)
@@ -2145,12 +2176,14 @@ def _tick_proactive_contact(budget_ms: int) -> dict:
             result["telegram_sent"] = len(signals)
             if consolidation_batch_to_mark:
                 conn = _get_conn()
-                conn.execute(
-                    "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-                    ("last_notified_consolidation_batch_id", consolidation_batch_to_mark)
-                )
-                conn.commit()
-                conn.close()
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                        ("last_notified_consolidation_batch_id", consolidation_batch_to_mark)
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
         else:
             # With force=True, notify_hare only returns False on Telegram API
             # failure (not cooldown).  Mark ok=True to avoid polluting tick
@@ -2558,12 +2591,14 @@ def _record_tick_timestamp(tick_name: str, key_prefix: str = "last"):
     """Record tick success/attempt timestamps for world model state reading."""
     try:
         conn = _get_conn()
-        conn.execute("""
-            INSERT INTO sleep_loop_state (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        """, (f"{key_prefix}_{tick_name}", now_iso()))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("""
+                INSERT INTO sleep_loop_state (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (f"{key_prefix}_{tick_name}", now_iso()))
+            conn.commit()
+        finally:
+            conn.close()
     except Exception:
         pass
 
@@ -2720,12 +2755,15 @@ def _tick_fhrr_encoding(budget_ms: int) -> dict:
         stats = get_index_stats()
 
         # Sprint 5A: Recompute schema prototypes for touched topics
+        loaded_sessions = None
         prototypes_saved = 0
         try:
             remaining_ms = budget_ms - int((time.monotonic() - t0) * 1000)
             if encoded > 0 and remaining_ms > 500:
                 from modules.hippocampal_index import get_all_prototypes, save_prototypes
-                protos = get_all_prototypes()
+                from modules.hippocampal_index import load_all_sessions
+                loaded_sessions = load_all_sessions()
+                protos = get_all_prototypes(sessions=loaded_sessions)
                 prototypes_saved = save_prototypes(protos)
         except Exception as e:
             _logger.debug("fhrr_encoding prototype update: %s", e)
@@ -2754,7 +2792,10 @@ def _tick_fhrr_encoding(budget_ms: int) -> dict:
                 if _tc % 6 == 0:
                     from modules.hippocampal_index import discover_synonym_edges
                     from modules.spreading import record_synonym_edges
-                    pairs = discover_synonym_edges(threshold=0.80, max_pairs=100)
+                    pairs = discover_synonym_edges(
+                        threshold=0.80, max_pairs=100,
+                        sessions=loaded_sessions  # reuse sessions loaded for prototypes
+                    )
                     if pairs:
                         synonyms_found = record_synonym_edges(pairs)
         except Exception as e:
@@ -2818,8 +2859,10 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
     world_model = SleepWorldModel()
     try:
         wm_conn = _get_conn()
-        world_model.load(wm_conn)
-        wm_conn.close()
+        try:
+            world_model.load(wm_conn)
+        finally:
+            wm_conn.close()
     except Exception:
         pass  # World model works with priors if load fails
 
@@ -2997,8 +3040,10 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
     # S4-05: Persist learned effects for next run
     try:
         wm_conn = _get_conn()
-        world_model.persist(wm_conn)
-        wm_conn.close()
+        try:
+            world_model.persist(wm_conn)
+        finally:
+            wm_conn.close()
     except Exception:
         pass
 
@@ -3116,17 +3161,17 @@ def register_tools(mcp):
         """Show recent sleep reports from session checkpoints. Useful for diagnosing background maintenance."""
         try:
             conn = _get_conn()
-
-            cutoff = (now_col() - timedelta(days=days)).isoformat()
-            rows = conn.execute(
-                "SELECT id, created_at, source, sleep_report "
-                "FROM session_checkpoints "
-                "WHERE created_at > ? "
-                "ORDER BY created_at DESC LIMIT 20",
-                (cutoff,)
-            ).fetchall()
-
-            conn.close()
+            try:
+                cutoff = (now_col() - timedelta(days=days)).isoformat()
+                rows = conn.execute(
+                    "SELECT id, created_at, source, sleep_report "
+                    "FROM session_checkpoints "
+                    "WHERE created_at > ? "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (cutoff,)
+                ).fetchall()
+            finally:
+                conn.close()
 
             if not rows:
                 return f"No checkpoints in the last {days} days."

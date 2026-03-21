@@ -37,7 +37,7 @@ class TestButlinAssessment:
     def test_total_score_present(self):
         from modules.consciousness import assess_butlin_indicators
         result = assess_butlin_indicators()
-        assert "Total Score:" in result
+        assert "Structural Score:" in result  # Sprint 4: renamed from Total Score
 
     def test_contains_theory_sections(self):
         from modules.consciousness import assess_butlin_indicators

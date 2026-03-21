@@ -231,30 +231,30 @@ def _apply_coalition_bonus(candidates: list) -> None:
 def apply_recurrent_amplification(winners: list, losers: list) -> None:
     """GWT-4 / S3-01: Iterative nonlinear ignition (Dehaene & Changeux 2003).
 
-    N passes of recurrent amplification create bistable phase transition:
-    the winner gets logistic self-excitation (fastest growth at a=0.5,
-    saturates near 0 and 1), while ALL losers suffer lateral inhibition
-    proportional to winner strength.
+    Sprint 5 FIX-13: ALL winners get amplified (proportionally by rank).
+    Lateral inhibition only affects LOSERS, not other winners.
 
-    After N passes the system settles into one of two attractors:
-    - Above ignition threshold → winner near 1.0 ("conscious access")
-    - Below → stays low ("unconscious processing")
-
-    NMDA-mediated recurrence makes workspace access all-or-none.
-    Only the top winner gets amplified (single content in spotlight).
+    Lamme 2006: recurrent processing is bidirectional across multiple areas.
+    Cowan 2001: workspace holds 4+/-1 items with graded activation.
+    Winner[0] gets full boost, winner[i] gets boost * 0.5^i (rank decay).
     """
     if not winners:
         return
 
-    for _ in range(N_AMPLIFICATION_PASSES):
-        a = winners[0].activation
-        # Logistic self-excitation: fastest growth at a=0.5, saturates near 0 and 1
-        boost = W_RECURRENT * a * (1.0 - a)
-        winners[0].activation = min(1.0, a + boost)
+    _RANK_DECAY = 0.5  # Each subsequent winner gets 50% less amplification
 
-        # Lateral inhibition proportional to winner's current activation
+    for _ in range(N_AMPLIFICATION_PASSES):
+        # Amplify ALL winners with rank-based decay
+        for rank, w in enumerate(winners):
+            a = w.activation
+            rank_factor = _RANK_DECAY ** rank  # 1.0, 0.5, 0.25, ...
+            boost = W_RECURRENT * rank_factor * a * (1.0 - a)
+            w.activation = min(1.0, a + boost)
+
+        # Lateral inhibition only on LOSERS (not other winners)
+        top_a = winners[0].activation
         for loser in losers:
-            loser.activation = max(0.0, loser.activation - W_LATERAL_INHIBITION * winners[0].activation)
+            loser.activation = max(0.0, loser.activation - W_LATERAL_INHIBITION * top_a)
 
 
 def _emit_competition_event(result: CompetitionResult):

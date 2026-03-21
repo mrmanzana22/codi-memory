@@ -503,18 +503,20 @@ def collect_cx_metrics() -> Dict[str, Optional[float]]:
         import math
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        # Aggregate across last 24h of snapshots (not just latest)
-        rows = db.execute(
-            """SELECT payload FROM cx_snapshots
-               WHERE ts > datetime('now', '-24 hours')
-               ORDER BY ts DESC"""
-        ).fetchall()
-        if not rows:
-            # Fallback: last 10 snapshots regardless of time
+        try:
+            # Aggregate across last 24h of snapshots (not just latest)
             rows = db.execute(
-                "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 10"
+                """SELECT payload FROM cx_snapshots
+                   WHERE ts > datetime('now', '-24 hours')
+                   ORDER BY ts DESC"""
             ).fetchall()
-        db.close()
+            if not rows:
+                # Fallback: last 10 snapshots regardless of time
+                rows = db.execute(
+                    "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 10"
+                ).fetchall()
+        finally:
+            db.close()
         if rows:
             # Aggregate fire counts across all snapshots
             aggregated_fires = {}
@@ -574,13 +576,15 @@ def collect_gnw_metrics() -> Dict[str, Optional[float]]:
         import json
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        # GNW fires are tracked in cx_snapshots fire_counts
-        # CX-5, CX-9, CX-16 are GNW-triggered (WORKSPACE_COMPETITION_COMPLETE)
-        # Aggregate across stored snapshots for GNW data
-        all_rows = db.execute(
-            "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 50"
-        ).fetchall()
-        db.close()
+        try:
+            # GNW fires are tracked in cx_snapshots fire_counts
+            # CX-5, CX-9, CX-16 are GNW-triggered (WORKSPACE_COMPETITION_COMPLETE)
+            # Aggregate across stored snapshots for GNW data
+            all_rows = db.execute(
+                "SELECT payload FROM cx_snapshots ORDER BY ts DESC LIMIT 50"
+            ).fetchall()
+        finally:
+            db.close()
         if all_rows:
             # GNW CX IDs: WORKSPACE_COMPETITION_COMPLETE event
             gnw_cx = {"CX-5", "CX-9", "CX-16", "CX-25"}
@@ -640,14 +644,16 @@ def collect_prediction_metrics() -> Dict[str, Optional[float]]:
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        # Prediction accuracy from prediction_results.hit
-        # Filter: only interactive/sleep_loop sources (curiosity_resolution inflates to 99%)
-        rows = db.execute(
-            """SELECT hit, surprise_score FROM prediction_results
-               WHERE source IN ('interactive', 'sleep_loop', 'preturn')
-               ORDER BY created_at DESC LIMIT 100"""
-        ).fetchall()
-        db.close()
+        try:
+            # Prediction accuracy from prediction_results.hit
+            # Filter: only interactive/sleep_loop sources (curiosity_resolution inflates to 99%)
+            rows = db.execute(
+                """SELECT hit, surprise_score FROM prediction_results
+                   WHERE source IN ('interactive', 'sleep_loop', 'preturn')
+                   ORDER BY created_at DESC LIMIT 100"""
+            ).fetchall()
+        finally:
+            db.close()
         if rows:
             hits = [r[0] for r in rows if r[0] is not None]
             if hits:
@@ -666,10 +672,12 @@ def collect_prediction_metrics() -> Dict[str, Optional[float]]:
                     import json as _j2
                     from modules.config import connect_fts as _cfts, FTS_DB_PATH as _fdb
                     _pdb = _cfts(_fdb)
-                    _pad_row = _pdb.execute(
-                        "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
-                    ).fetchone()
-                    _pdb.close()
+                    try:
+                        _pad_row = _pdb.execute(
+                            "SELECT value FROM sleep_loop_state WHERE key = 'pad_current'"
+                        ).fetchone()
+                    finally:
+                        _pdb.close()
                     if _pad_row:
                         _pad_data = _j2.loads(_pad_row[0])
                         has_pad = _pad_data.get("timestamp") is not None
@@ -694,11 +702,13 @@ def collect_causal_metrics() -> Dict[str, Optional[float]]:
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        # Read from causal_discovery_state table (latest entry)
-        row = db.execute(
-            "SELECT n_edges, topics FROM causal_discovery_state ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-        db.close()
+        try:
+            # Read from causal_discovery_state table (latest entry)
+            row = db.execute(
+                "SELECT n_edges, topics FROM causal_discovery_state ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            db.close()
         if row:
             import json
             n_edges = row[0] or 0
@@ -758,12 +768,14 @@ def collect_self_model_metrics() -> Dict[str, Optional[float]]:
         try:
             from modules.config import connect_fts, FTS_DB_PATH
             db = connect_fts(FTS_DB_PATH)
-            row = db.execute(
-                """SELECT COUNT(*) FROM tool_calls
-                   WHERE tool_name LIKE '%self_model%'
-                   AND started_at > datetime('now', '-7 days')"""
-            ).fetchone()
-            db.close()
+            try:
+                row = db.execute(
+                    """SELECT COUNT(*) FROM tool_calls
+                       WHERE tool_name LIKE '%self_model%'
+                       AND started_at > datetime('now', '-7 days')"""
+                ).fetchone()
+            finally:
+                db.close()
             if row and row[0] is not None:
                 metrics["self_model_refresh_frequency"] = row[0] / 7.0
         except Exception:
@@ -794,6 +806,9 @@ def collect_reconsolidation_metrics() -> Dict[str, Optional[float]]:
             metrics["reconsolidation_trigger_rate"] = total / pe_events
     except Exception as e:
         _logger.debug("collect_reconsolidation_metrics: %s", e)
+    finally:
+        if db is not None:
+            db.close()
     return metrics
 
 
@@ -827,6 +842,9 @@ def collect_consolidation_metrics() -> Dict[str, Optional[float]]:
             metrics["consolidation_coverage"] = min(1.0, daily_consolidated / daily_episodes_est)
     except Exception as e:
         _logger.debug("collect_consolidation_metrics: %s", e)
+    finally:
+        if db is not None:
+            db.close()
     return metrics
 
 
@@ -867,12 +885,16 @@ def collect_metacognition_metrics() -> Dict[str, Optional[float]]:
             metrics["monitoring_control_loop"] = 0.0
     except Exception as e:
         _logger.debug("collect_metacognition_metrics: %s", e)
+    finally:
+        if db is not None:
+            db.close()
     return metrics
 
 
 def collect_pe_metrics() -> Dict[str, Optional[float]]:
     """Collect PE hub metrics from prediction_results + CX snapshots."""
     metrics = {}
+    db = None
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
@@ -906,15 +928,18 @@ def collect_pe_metrics() -> Dict[str, Optional[float]]:
                 except Exception:
                     pass
             metrics["pe_flow_diversity"] = len(all_cx_ids)
-        db.close()
     except Exception as e:
         _logger.debug("collect_pe_metrics: %s", e)
+    finally:
+        if db is not None:
+            db.close()
     return metrics
 
 
 def collect_active_inference_metrics() -> Dict[str, Optional[float]]:
     """Collect L7 Active Inference metrics from generative_model_transitions."""
     metrics = {}
+    db = None
     try:
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
@@ -945,9 +970,11 @@ def collect_active_inference_metrics() -> Dict[str, Optional[float]]:
                 metrics["action_selection_latency"] = sum(all_p50s) / len(all_p50s)
         except Exception:
             pass
-        db.close()
     except Exception as e:
         _logger.debug("collect_active_inference_metrics: %s", e)
+    finally:
+        if db is not None:
+            db.close()
     return metrics
 
 
@@ -962,11 +989,13 @@ def collect_forgetting_metrics() -> Dict[str, Optional[float]]:
         # RIF: check strength_log for suppression events
         from modules.config import connect_fts, FTS_DB_PATH
         db = connect_fts(FTS_DB_PATH)
-        rif_count = db.execute(
-            "SELECT COUNT(*) FROM strength_log WHERE event = 'rif_suppression'"
-        ).fetchone()
-        total = db.execute("SELECT COUNT(*) FROM strength_log").fetchone()
-        db.close()
+        try:
+            rif_count = db.execute(
+                "SELECT COUNT(*) FROM strength_log WHERE event = 'rif_suppression'"
+            ).fetchone()
+            total = db.execute("SELECT COUNT(*) FROM strength_log").fetchone()
+        finally:
+            db.close()
         if total and total[0] > 0 and rif_count:
             metrics["rif_suppression_rate"] = rif_count[0] / total[0]
         else:

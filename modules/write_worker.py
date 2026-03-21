@@ -226,13 +226,13 @@ def _execute_add_memory(payload: dict) -> dict:
 
 def _execute_checkpoint_memoria(payload: dict) -> dict:
     """Execute a 'checkpoint_memoria' job: full checkpoint pipeline."""
-    from modules.flush import _checkpoint_memoria
+    from modules.flush import _checkpoint_memoria_sync
 
     momento = payload["momento"]
     que_paso = payload["que_paso"]
     por_que_importa = payload["por_que_importa"]
 
-    result_str = _checkpoint_memoria(momento, que_paso, por_que_importa)
+    result_str = _checkpoint_memoria_sync(momento, que_paso, por_que_importa)
 
     return {"result": str(result_str)[:200]}
 

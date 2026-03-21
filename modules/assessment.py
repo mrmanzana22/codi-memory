@@ -402,9 +402,13 @@ def _score_gwt2(ev: Dict) -> Dict:
 def _score_gwt3(ev: Dict) -> Dict:
     cc = ev["comp_count"]
     subs = ev["comp_subscribers"]
-    if cc >= 10:
+    # Sprint 4 FIX-09: require active subscribers for FULL (not just historical count)
+    if cc >= 10 and subs >= 1:
         return {"name": "GWT-3", "theory": "GWT", "score": 1.0,
                 "evidence": f"Broadcast exercised: {cc} competitions, {subs} active subscribers"}
+    if cc >= 10 and subs == 0:
+        return {"name": "GWT-3", "theory": "GWT", "score": 0.5,
+                "evidence": f"Broadcast historical ({cc} competitions) but 0 active subscribers (partial)"}
     if cc > 0:
         return {"name": "GWT-3", "theory": "GWT", "score": 0.7,
                 "evidence": f"Broadcast nascent: {cc} competitions (need 10+ for full)"}
@@ -597,9 +601,13 @@ def _score_rpt2(ev: Dict) -> Dict:
     if at >= 6 and phi_e >= 0.3:
         return {"name": "RPT-2", "theory": "RPT", "score": 1.0,
                 "evidence": f"Integrated: {at} event types, Phi_E={phi_e:.2f} ({cycles} cycles, Barrett & Seth 2011)"}
+    if at >= 6 and phi_e > 0:
+        return {"name": "RPT-2", "theory": "RPT", "score": 0.7,
+                "evidence": f"Integration nascent: {at} types, Phi_E={phi_e:.2f} (need Phi_E>=0.3 for full)"}
     if at >= 6:
-        return {"name": "RPT-2", "theory": "RPT", "score": 1.0,
-                "evidence": f"Cross-module integration: {at} event types (Phi_E={phi_e:.2f}, {cycles} cycles)"}
+        # Sprint 4 FIX-09: differentiation without integration = PARTIAL (Tononi 2004)
+        return {"name": "RPT-2", "theory": "RPT", "score": 0.5,
+                "evidence": f"Differentiated but not integrated: {at} event types, Phi_E={phi_e:.2f} ({cycles} cycles)"}
     if at >= 3:
         return {"name": "RPT-2", "theory": "RPT", "score": 0.7,
                 "evidence": f"Integration nascent: {at} event types (Phi_E={phi_e:.2f}, {cycles} cycles)"}
@@ -750,11 +758,29 @@ def get_assessment(evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
     worker_health = get_worker_health()
 
+    # Sprint 4 FIX-09: compute functional effectiveness ratio
+    # Structural score counts architecture presence.
+    # Functional score requires effective CX fires as evidence of real integration.
+    cx_effective = 0
+    cx_total = 34
+    try:
+        from modules.cx_observability import get_effective_fire_counts
+        fires = get_effective_fire_counts()
+        cx_effective = len([v for v in fires.values() if v > 0])
+    except Exception:
+        pass
+    integration_effectiveness = cx_effective / max(cx_total, 1)
+    # Functional pct = structural pct * integration_effectiveness (0 to 1)
+    # With 0 CX fires, functional is 0. With 20/34, functional is ~59% of structural.
+    functional_pct = (total / max_score * 100 * max(0.3, integration_effectiveness)) if max_score > 0 else 0
+
     return {
         "version": ASSESSMENT_VERSION,
         "score_total": total,
         "max_score": max_score,
         "pct": (total / max_score * 100) if max_score > 0 else 0,
+        "functional_pct": round(functional_pct, 1),
+        "cx_effectiveness": round(integration_effectiveness, 3),
         "indicators": indicators,
         "summary": summary,
         "evidence_sources": evidence_sources,
@@ -771,7 +797,10 @@ def format_assessment(assessment: Dict[str, Any]) -> str:
     summary = assessment["summary"]
 
     lines = ["# Butlin Consciousness Assessment\n"]
-    lines.append(f"**Total Score: {total:.1f}/{max_score:.0f} ({pct:.0f}%)**\n")
+    func_pct = assessment.get("functional_pct", pct)
+    cx_eff = assessment.get("cx_effectiveness", 0)
+    lines.append(f"**Structural Score: {total:.1f}/{max_score:.0f} ({pct:.0f}%)**")
+    lines.append(f"**Functional Score: {func_pct:.0f}%** (CX effectiveness: {cx_eff:.1%})\n")
 
     current_theory = ""
     for ind in indicators:

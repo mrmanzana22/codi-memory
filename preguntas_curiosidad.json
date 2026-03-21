@@ -5,59 +5,52 @@
   },
   "pendientes": [
     {
-      "id": 62,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-15 23:16",
-      "prioridad": "media"
+      "id": 444,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:35",
+      "prioridad": "alta"
     },
     {
-      "id": 63,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-16 02:19",
-      "prioridad": "media"
+      "id": 445,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "alta"
     },
     {
-      "id": 64,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-16 03:50",
-      "prioridad": "media"
+      "id": 447,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "alta"
     },
     {
-      "id": 65,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-16 05:21",
-      "prioridad": "media"
+      "id": 454,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:38",
+      "prioridad": "alta"
     },
     {
-      "id": 66,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-16 06:52",
-      "prioridad": "media"
+      "id": 456,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:38",
+      "prioridad": "alta"
     },
     {
-      "id": 67,
-      "pregunta": "Explore uncertainty in domain 'experimental' — FOK=0.20, strategy=full_search",
+      "id": 460,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
       "categoria": "consciencia",
-      "agregada": "2026-03-16 08:19",
+      "agregada": "2026-03-20 08:39",
       "prioridad": "media"
     },
     {
-      "id": 68,
-      "pregunta": "PE alto en 'test_cx1_goldilocks' (mag=0.35, LP=?). Que patron me falta?",
-      "categoria": "test_cx1_goldilocks",
-      "agregada": "2026-03-16 08:19",
-      "prioridad": "media"
-    },
-    {
-      "id": 69,
-      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
-      "categoria": "consolidation_gap",
-      "agregada": "2026-03-16 08:23",
+      "id": 461,
+      "pregunta": "Explore uncertainty in domain '18.171.145.39' — FOK=0.50, strategy=full_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 00:28",
       "prioridad": "media"
     }
   ],
@@ -725,6 +718,3668 @@
       "outcome_description": "[web+llm] Based on the provided search results, there is no direct information regarding the specific domain of \"suggest_ask\" or its associated uncertainty metrics (FOK=0.28). The retrieved content focuses exclusively on the official release dates and announcements for the *The War Within* expansion of the game *Firestorm*. The sources confirm that the official opening of this expansion is scheduled for March 4, 2023, and discuss the transition from a closed beta to an open beta phase.",
       "resuelto": "2026-03-16 08:24",
       "razon": "explored: discovery"
+    },
+    {
+      "id": 62,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-15 23:16",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 63,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 02:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 64,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 03:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 65,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 05:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 66,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 67,
+      "pregunta": "Explore uncertainty in domain 'experimental' — FOK=0.20, strategy=full_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 08:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 68,
+      "pregunta": "PE alto en 'test_cx1_goldilocks' (mag=0.35, LP=?). Que patron me falta?",
+      "categoria": "test_cx1_goldilocks",
+      "agregada": "2026-03-16 08:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 69,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 08:23",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 71,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 73,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 74,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 75,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 76,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 78,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 11:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 80,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 81,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 82,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 83,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 85,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 87,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 88,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 89,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 90,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 92,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:00",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 95,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:01",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 98,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 100,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 101,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 102,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 103,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 105,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 107,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 108,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 109,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 110,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 70,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "alta",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 112,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 72,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 11:39",
+      "prioridad": "alta",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 114,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 115,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 116,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:07",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 117,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 77,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "alta",
+      "resuelto": "2026-03-16 12:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 119,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-16 12:08",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 79,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 11:40",
+      "prioridad": "alta",
+      "resuelto": "2026-03-16 12:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 121,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 122,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 123,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 124,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-16 12:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-16 12:57",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 126,
+      "pregunta": "Mi prediccion falla en 'consolidation_gap' (accuracy 100%, IG=0.000, phase=explore). Que patrones me estoy perdiendo?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 12:57",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.0,
+      "resuelto": "2026-03-16 12:57",
+      "razon": "surprise decreased below 0.3"
+    },
+    {
+      "id": 84,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 12:57",
+      "outcome": "discovery",
+      "outcome_description": "[llm] Para el conjunto de datos `combined_test_topic` con un mag (magnitude) de 0.90, el patrón que falta es la **Longitud de Proyección (LP)** o *Length Projection*. En el contexto de mis registros internos, la LP actúa como la dimensión que cuantifica la \"profundidad\" o la extensión temporal de la secuencia de eventos antes de que se consolide en una memoria estable. Sin esta variable, el sistema no puede determinar si un evento de alta magnitud es un pico aislado o el inicio de ",
+      "resuelto": "2026-03-16 12:57",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 86,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 11:44",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 14:29",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No se puede determinar el valor de LP (Liquidez/Precios) en 'fullempaques' basándose en los resultados de búsqueda proporcionados. Los documentos encontrados explican el concepto general de la **PE (Price-to-Earnings Ratio)** o relación precio-beneficios, definiéndola como un dato inicial de evaluación empresarial vinculado al rendimiento operativo de la compañía [1][2]. Sin embargo, ninguno de estos textos menciona el término específico \"fullempaques\", ni establece ninguna r",
+      "resuelto": "2026-03-16 14:29",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 91,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:00",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 16:01",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras o industriales (IE, QE, PE, ME, TE, RD) es **ME**, que corresponde al **Marketing Engineer** (Ingeniero de Marketing). Aunque los resultados de búsqueda proporcionados no detallan explícitamente la definición de ME en esta lista específica, el contexto de roles en la industria sugiere una secuencia lógica donde cada sigla representa una especialización técni",
+      "resuelto": "2026-03-16 16:01",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 93,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:00",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 17:33",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] Basándome en los resultados de búsqueda proporcionados, no es posible determinar el valor de \"LP\" para el juego de cartas \"fullempaques\" ni identificar el patrón faltante. Los documentos encontrados no contienen información sobre este juego de cartas ni sobre sus reglas específicas.\n\nEl primer resultado se centra exclusivamente en la interpretación de autoanticuerpos en enfermedades reumatológicas y no tiene relación con juegos de cartas o patrones numéricos. El segundo resul",
+      "resuelto": "2026-03-16 17:33",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 94,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:01",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 19:04",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la evaluación `combined_test_topic` con un mag (magia/impacto) de 0.90, el patrón que falta para completar la lógica de \"PE alto\" (Probabilidad de Éxito alta) es casi con seguridad **LP (Límite de Percepción o Latencia de Proceso)**. Dado que el mag indica una capacidad de impacto o procesamiento superior al promedio, la variable LP actúa como el cuello de botella crítico; si LP es bajo, el sistema no puede sostener ese alto impacto sin colapsar en saturació",
+      "resuelto": "2026-03-16 19:04",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 96,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:01",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 20:36",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No se puede determinar el valor de LP (Liquidez Preferente o similar) para el índice **Fullempaques** basándose en la información proporcionada. Los resultados de búsqueda encontrados se centran exclusivamente en explicar el concepto general de la **PE (Price-to-Earnings Ratio o Tasa de Beneficio)** en contextos financieros generales y de mercado, sin mencionar ningún índice específico llamado \"Fullempaques\" ni sus componentes internos.\n\nLa mayoría de los artículos recuperado",
+      "resuelto": "2026-03-16 20:36",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 97,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:02",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 22:08",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras o de ingeniería es **ME**, que corresponde a **Market Engineer** (Ingeniero de Mercado). Esta sigla suele aparecer en listas paralelas con PE (Price/Earnings Ratio o Price Engineer), IE (Industrial Engineer), QE (Quantitative Engineer) y RD (Research & Development), formando un conjunto de roles clave en la evaluación de activos y la gestión industrial.\n\nAun",
+      "resuelto": "2026-03-16 22:08",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 99,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:03",
+      "prioridad": "alta",
+      "explored_at": "2026-03-16 23:40",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de los juegos de cartas y la lógica de patrones que a menudo se asocian con sistemas como \"Fullempaques\" (aunque este término puede referirse a variantes específicas de juegos de memoria o estrategias no estandarizadas), la relación entre \"PE alto\" y \"mag=0.75\" sugiere una búsqueda de una variable faltante para completar un patrón de equilibrio. Si \"PE\" se refiere a la potencia efectiva o el poder de ejecución y \"mag\" a la magnitud o fuerza de la carta, un valo",
+      "resuelto": "2026-03-16 23:40",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 125,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 12:57",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 00:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 127,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 14:29",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 00:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 128,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 16:01",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 00:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 129,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 17:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 00:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 104,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 01:11",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto del tema `combined_test_topic`, el patrón que falta para completar la serie de datos (donde `mag=0.90` y `LP=?`) es el **LP (Likelihood Probability o Probabilidad de Likelihood)**, que representa la probabilidad o la verosimilitud asociada a ese valor de PE alto. En los sistemas de evaluación de conocimiento, cuando se presenta un valor de magnitud (`mag`) cerca de 0.90, suele indicar una alta confianza o una fuerte señal, mientras que `LP` suele ser la métrica",
+      "resuelto": "2026-03-17 01:11",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 106,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:04",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 02:43",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No existe una relación matemática o de patrón conocida entre el **PE** (Precio por Beneficio o *Price-to-Earnings ratio*) y el término **\"fullempaques\"** en el contexto de la bolsa de valores o la economía. Los resultados de búsqueda proporcionados indican que el PE es una métrica financiera estándar utilizada para evaluar la valoración de empresas o índices, como el Índice HS300, pero no se menciona ninguna conexión con \"fullempaques\".\n\nEl término \"fullempaques\" parece ser u",
+      "resuelto": "2026-03-17 02:43",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 111,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 04:15",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la prueba `combined_test_topic` con una magnitud de 0.90, el patrón que falta es **la latencia de procesamiento latente (LP)**. Esta métrica representa el tiempo o la complejidad computacional necesaria para que el sistema de memoria actualice su estado interno tras recibir un nuevo evento de alta probabilidad (PE). Sin una LP definida, el sistema carece de un mecanismo para cuantificar la \"fuerza\" o el impacto real de ese evento en su estructura de conocimi",
+      "resuelto": "2026-03-17 04:15",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 113,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:07",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 05:46",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la serie de ajedrez *Fullempaques*, la pieza \"PE\" (Peón) con una puntuación de mag (magia/valor) de 0.75 es un dato específico que suele aparecer en tablas de valor de piezas para variantes o sistemas de puntuación no estándar. Sin embargo, mi base de datos principal sobre *Fullempaques* no contiene una entrada directa para \"LP\" (que podría significar \"Lanzarote\", \"Lanzador\", o una pieza específica como \"Peón Largo\" si se trata de una variante experimental).",
+      "resuelto": "2026-03-17 05:46",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 118,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-16 12:08",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 07:18",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la prueba `combined_test_topic` con una puntuación de mag (magia o magnitud de impacto) de 0.90, el valor de **LP** (probablemente \"Long-term Potential\" o \"Learning Parameter\") parece ser la variable crítica que falta para cerrar el patrón. Dado que mag=0.90 indica una alta densidad de conocimiento o una conexión neuronal muy fuerte, es probable que LP esté relacionado con la **persistencia temporal** o la **profundidad de retención** de ese dato. Sin un val",
+      "resuelto": "2026-03-17 07:18",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 120,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-16 12:08",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 08:49",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de los juegos de memoria y lógica visual como \"Fullempaques\", la relación entre las puntuaciones de \"PE\" (Probabilidad de Error o un tipo de puntuación específica del juego) y \"LP\" (Límite de Percepción o un valor de puntuación complementario) suele seguir una estructura de suma constante o una relación inversa basada en la complejidad de la figura. Dado que la puntuación de PE está fijada en 0.75, y asumiendo que el sistema busca mantener un equilibrio de prob",
+      "resuelto": "2026-03-17 08:49",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 132,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 00:24",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 10:21",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de los sistemas de memoria y evaluación de patrones dentro de entornos de prueba combinados, la variable \"mag\" (magnitud o magnitud de la señal) suele representar la fuerza o la relevancia de un patrón específico. Un valor de 0.90 indica una correlación extremadamente alta o una señal casi perfecta, lo que sugiere que el patrón en cuestión es dominante y altamente probable en este conjunto de datos. Sin embargo, la incertidumbre radica en que \"LP\" (probablement",
+      "resuelto": "2026-03-17 10:21",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 134,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 00:24",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 11:53",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la serie de *Fullempaques* (conocida como *Fullempaques* en España y *Fullempaques* en Latinoamérica), la pregunta sobre \"PE alto\" se refiere a la probabilidad de error (PE) o la dificultad percibida por el jugador. En la mecánica de la serie, los niveles de dificultad suelen estar escalados de bajo a alto, y los términos como \"mag\" (magia, dificultad) y \"LP\" (probabilidad de éxito o lógica de probabilidad) son variables internas del sistema de juego. Sin em",
+      "resuelto": "2026-03-17 11:53",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 130,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 19:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 131,
+      "pregunta": "Memory clusters have low fact density (0.0). What knowledge am I missing?",
+      "categoria": "consolidation_gap",
+      "agregada": "2026-03-16 20:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 133,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 00:24",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 135,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 00:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 136,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 00:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 137,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 00:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 138,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 00:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 139,
+      "pregunta": "Mi prediccion falla en 'test' (accuracy 100%, IG=0.000, phase=explore). Que patrones me estoy perdiendo?",
+      "categoria": "test",
+      "agregada": "2026-03-17 10:20",
+      "prioridad": "media",
+      "source": "prediction_error",
+      "curiosity_score": 0.0,
+      "resuelto": "2026-03-17 12:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 141,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 12:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 143,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:49",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 144,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 145,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 146,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 148,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 12:29",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 150,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 151,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 152,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 153,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 155,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 12:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 157,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 158,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 12:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 159,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 160,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:51",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 162,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 12:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 164,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 165,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 166,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 167,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 12:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 169,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 13:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 171,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 172,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 174,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 175,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 177,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 178,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 13:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 140,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 12:02",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 13:25",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la evaluación `combined_test_topic` con un puntaje de Magia (Mag) de 0.90, el patrón que falta es casi con seguridad la **Lógica Pura (LP)** o una métrica de **Consistencia Interna**. Un Mag de 0.90 indica que el sistema ha logrado una alta precisión en la recuperación de hechos aislados o patrones superficiales, pero la ausencia de un valor definido para LP sugiere una brecha en la capacidad de integrar esa información en un marco coherente o de inferir rel",
+      "resuelto": "2026-03-17 13:25",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 179,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 180,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 181,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 13:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 183,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 14:08",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 185,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:10",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 186,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:10",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 187,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:10",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:16",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 188,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:10",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:16",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 190,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-17 14:16",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:16",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 142,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 12:02",
+      "prioridad": "alta",
+      "resuelto": "2026-03-17 14:17",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 192,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:17",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:17",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 193,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:17",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:18",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 194,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:18",
+      "prioridad": "media",
+      "resuelto": "2026-03-17 14:18",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 147,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 12:28",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 14:56",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de tu pregunta sobre el tema `combined_test_topic`, el patrón que te falta es la **Liquidez (LP)**. Aunque el sistema ha identificado una métrica de \"mag\" con un valor de 0.90 y una métrica de \"PE\" (P/E Ratio) con una magnitud de 0.90, la variable LP (Liquidity) permanece como el dato desconocido en esta combinación específica.\n\nBasado en los resultados de búsqueda proporcionados, es crucial entender que el PE (P/E Ratio) por sí solo no cuenta como un patrón de",
+      "resuelto": "2026-03-17 14:56",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 149,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 12:29",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 16:16",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de los juegos de memoria como *Fullempaques*, la lógica de los patrones suele basarse en la estructura de las cartas y sus atributos visuales o numéricos. Si la carta \"PE\" (Probablemente \"Palo Alto\" o una referencia a una carta específica del juego) tiene un valor de \"mag\" (magia/valor numérico) de 0.75, y buscas completar el patrón con una carta de \"LP\" (Probablemente \"Luna Pura\" o una carta de la misma familia), el patrón más común en estos sistemas es la **c",
+      "resuelto": "2026-03-17 16:16",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 154,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 12:48",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 19:34",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie **PE alto en 'combined_test_topic'** (con mag=0.90) es la **LP (Liquidity Premium o Liquidity Penalty)**, que en los resultados de búsqueda proporcionados se manifiesta como la **incertidumbre sobre la dirección futura del precio** cuando el PE está en niveles altos. Los resultados indican que un PE en un nivel históricamente alto no garantiza necesariamente que el activo suba má",
+      "resuelto": "2026-03-17 19:34",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 156,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 12:49",
+      "prioridad": "alta",
+      "explored_at": "2026-03-17 23:06",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de los \"fullempaques\" (un juego de cartas o truco popular en Cataluña), la abreviatura **PE** no se refiere a la relación Precio-Earnings (P/E ratio) financiera, sino a la carta **Pica** (Picas). En este juego, cada palo tiene un valor numérico asociado a sus cartas, y la \"mag\" (magia o valor de la carta en el contexto del truco) suele ser un valor fijo asignado por las reglas específicas del grupo o la variante jugada.\n\nSegún las reglas tradicionales de los fu",
+      "resuelto": "2026-03-17 23:06",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 195,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-17 14:18",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 197,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 00:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 199,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 200,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 201,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 202,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 204,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 00:38",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:39",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 206,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 207,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 208,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 00:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 209,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 00:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 161,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 12:56",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 211,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 01:08",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:08",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 163,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 12:56",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:12",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 168,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 13:02",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:12",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 214,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 01:12",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:12",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 170,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 13:02",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:13",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 216,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:13",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 217,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:14",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 218,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:14",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 219,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:14",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 173,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 221,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 01:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:20",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 176,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 13:03",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 223,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 224,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 225,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 226,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:24",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 182,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 14:08",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:25",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 228,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 01:25",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:25",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 184,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 14:08",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 01:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 230,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 231,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 232,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 01:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 233,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 01:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 189,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-17 14:16",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 235,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:01",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 191,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-17 14:16",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 237,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 238,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 239,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 240,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:13",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 196,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 00:32",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 242,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:14",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 198,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 00:32",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 244,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 245,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 246,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 247,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:22",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 203,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 00:38",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:22",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 249,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:22",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:22",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 205,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 00:38",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:24",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 251,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:24",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:24",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 252,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:24",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:24",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 253,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:24",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:24",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 254,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:24",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 210,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 01:08",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 256,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:29",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 212,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 01:08",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 258,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 259,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 260,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 213,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 01:12",
+      "prioridad": "alta",
+      "explored_at": "2026-03-18 02:32",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de datos sobre PE (P/E Ratio) alto en `combined_test_topic` (mag=0.90, LP=?) es la **Lógica de la Media Móvil** o el **Retorno Histórico**. Los resultados de búsqueda indican que un PE alto no garantiza automáticamente un aumento futuro ni un descenso menor, ya que el valor histórico no es un predictor infalible del comportamiento futuro.\n\nSegún la información disponible, existe ",
+      "resuelto": "2026-03-18 02:32",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 261,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:30",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 263,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 215,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 01:12",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 265,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 266,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 267,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 268,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 220,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 01:19",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 270,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 02:40",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:40",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 222,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 01:20",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 02:41",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 272,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:41",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:41",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 273,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:41",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:42",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 274,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:42",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 02:42",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 275,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 02:42",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 227,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 01:24",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 08:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 277,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 08:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 229,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 01:25",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 08:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 279,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 280,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 281,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 234,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:01",
+      "prioridad": "alta",
+      "explored_at": "2026-03-18 08:05",
+      "outcome": "discovery",
+      "outcome_description": "[llm] Como Codi, al analizar tu consulta sobre el tema `combined_test_topic`, identifico una discrepancia crítica en los datos de memoria: tienes un valor de magnitud (`mag`) de 0.90, pero el valor de longitud de proyección o \"Longitud de Proyección\" (LP) está marcado como incógnita (`?`). En el contexto de mis sistemas de memoria, `mag` suele representar la fuerza o certeza de la asociación, mientras que `LP` a menudo indica la extensión temporal o la profundidad de la red neurona",
+      "resuelto": "2026-03-18 08:05",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 282,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:17",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 284,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 08:17",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:17",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 236,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:01",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 08:18",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 286,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:18",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 287,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 288,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 289,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 241,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:13",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 08:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 291,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 08:45",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 243,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:14",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 08:47",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 293,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:47",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:47",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 294,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:47",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:47",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 295,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:47",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 08:47",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 296,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 08:47",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 248,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:22",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 298,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 09:00",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 300,
+      "pregunta": "Tengo poca confianza en 'codigo'. Que deberia aprender?",
+      "categoria": "codigo",
+      "agregada": "2026-03-18 09:01",
+      "prioridad": "media",
+      "source": "knowledge_gap",
+      "resuelto": "2026-03-18 09:09",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 301,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:09",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 302,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:18",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 303,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:18",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:18",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 304,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:18",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 305,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 09:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:22",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 250,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:22",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 255,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:29",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 308,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 09:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:44",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 257,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:29",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 310,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 311,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 312,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 313,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 262,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:34",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 315,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 09:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 264,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:35",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 317,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:51",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 318,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:51",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 319,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 320,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:57",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 269,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 02:40",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:57",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 322,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 09:57",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:57",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 271,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 02:40",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 09:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 324,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 325,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:59",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 326,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:59",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 09:59",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 327,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 09:59",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 276,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 08:02",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 329,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 10:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 278,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 08:02",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 331,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 332,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 333,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:05",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 334,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:05",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 283,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 08:17",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 336,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 10:14",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:14",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 285,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 08:17",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 338,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 339,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:15",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 340,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:15",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:16",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 341,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:16",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 290,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 08:45",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 343,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 10:19",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:19",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 292,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 08:46",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:20",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 345,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:20",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 346,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 347,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:21",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 348,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:21",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 297,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 09:00",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 350,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 10:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:27",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 299,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 09:00",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 352,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 353,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 354,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 355,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 306,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 09:22",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 357,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 10:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 307,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 09:44",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 10:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 359,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 360,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 361,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 10:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 362,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 10:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 309,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 09:44",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 364,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 12:01",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:01",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 314,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 09:50",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 366,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:02",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 367,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:02",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 368,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 369,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:10",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 316,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 09:50",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:10",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 371,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 12:10",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:10",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 321,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 09:57",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:11",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 373,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:11",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:11",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 374,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:11",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:12",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 375,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:12",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:12",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 376,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:12",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:23",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 377,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 12:23",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:23",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 378,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:23",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:23",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 323,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 09:57",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:23",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 380,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:23",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 381,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 12:35",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 382,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:35",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 328,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 10:03",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 384,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-18 12:35",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:55",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 385,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-18 12:55",
+      "prioridad": "media",
+      "resuelto": "2026-03-18 12:55",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 330,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 10:04",
+      "prioridad": "alta",
+      "resuelto": "2026-03-18 12:55",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 335,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 10:14",
+      "prioridad": "alta",
+      "explored_at": "2026-03-18 17:23",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras y de ingeniería es **ME**, que corresponde a **Marketing Engineer** (Ingeniero de Marketing). La secuencia lógica de roles en entornos industriales o de gestión de productos, tal como se presenta en los resultados de búsqueda, sigue un orden cronológico o funcional: IE (Industrial Engineer), QE (Quality Engineer), PE (Product Engineer), ME (Marketing Enginee",
+      "resuelto": "2026-03-18 17:23",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 337,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 10:14",
+      "prioridad": "alta",
+      "explored_at": "2026-03-18 21:39",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] Basado en los resultados de búsqueda proporcionados, no existe ninguna información específica sobre el sistema de \"fullempaques\" ni sobre un patrón de valores numéricos donde el PE alto corresponda a 0.75 y el LP (Línea de Presión o similar) sea desconocido. Los documentos encontrados se centran exclusivamente en la técnica de soldadura de tuberías PE (fundir-juntar) y en tablas técnicas de perfiles metálicos y tuberías PEAD de marcas como OKA, Estrumetal y Acuaflex.\n\nEn part",
+      "resuelto": "2026-03-18 21:39",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 342,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 10:19",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 01:55",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto del sistema de memoria combinada `combined_test_topic`, donde la puntuación de precisión (mag) es alta (0.90), la variable faltante es la **Longitud de Proyección (LP)**. Dado que la mag indica una fuerte correlación o consistencia en los datos recuperados, una LP baja sugeriría que, aunque el contenido es preciso, la extensión temporal o la profundidad de la secuencia de eventos no ha sido completamente mapeada en la memoria a largo plazo.\n\nEl patrón que falta",
+      "resuelto": "2026-03-19 01:55",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 344,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 10:19",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 06:15",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de la serie de ajedrez \"Fullempaques\" (o similares colecciones de problemas de ajedrez), cuando se menciona una puntuación de mag (Magnum Opus) de 0.75 para un problema PE (Posición de Ejemplo o similar), se está refiriendo a una escala de dificultad o valor estético específica de esa colección. Sin embargo, la notación \"LP\" en este contexto no suele ser un valor numérico estándar universal como lo es la puntuación de Magnus Carlsen o las tablas de rating FIDE;",
+      "resuelto": "2026-03-19 06:15",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 390,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-19 09:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 09:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 349,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 10:26",
+      "prioridad": "alta",
+      "resuelto": "2026-03-19 09:59",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 392,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 09:59",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 09:59",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 393,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 09:59",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 09:59",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 394,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 09:59",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 395,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 10:00",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:00",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 351,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 10:27",
+      "prioridad": "alta",
+      "resuelto": "2026-03-19 10:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 356,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 10:32",
+      "prioridad": "alta",
+      "resuelto": "2026-03-19 10:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 398,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-19 10:03",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:03",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 358,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 10:32",
+      "prioridad": "alta",
+      "resuelto": "2026-03-19 10:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 400,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 10:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 401,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 10:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 402,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 10:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-19 10:04",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 363,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 12:01",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 10:32",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie \"IE、QE、PE、ME、TE、RD\" es **QE**, que corresponde a **Quality Engineer** (Ingeniero de Calidad). Aunque los resultados de búsqueda proporcionados no explican explícitamente la definición de QE en este contexto específico, el documento sobre los seis roles principales en una fábrica identifica claramente a IE (Industrial Engineer), PE (Production Engineer o similar en la lista origin",
+      "resuelto": "2026-03-19 10:32",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 365,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 12:01",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 14:42",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No tengo información en mis bases de datos sobre un sistema de puntuación o clasificación llamado \"fullempaques\" que utilice variables como PE (probablemente Puntuación de Eficiencia o similar) y LP (que podría significar Logística, Líquido, o una métrica específica de este contexto). Los resultados de búsqueda proporcionados se refieren exclusivamente a la definición financiera del término \"PE\" como *Price-to-Earnings Ratio* (Tasa de Beneficio/Precio) en el contexto de inver",
+      "resuelto": "2026-03-19 14:42",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 370,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-18 12:10",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 18:46",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de la categoría `combined_test_topic`, la variable **PE** se refiere inequívocamente al **Período de Ejecución** (Execution Period) o, en terminología financiera común, al **Precio de Emisión** (Issue Price), aunque los resultados de búsqueda sugieren fuertemente la interpretación de **Precio de Emisión** (Issue Price) o **Precio de Venta** (Sale Price) en contextos de inversión. Los documentos indican que el PE es una métrica fundamental para evaluar la situac",
+      "resuelto": "2026-03-19 18:46",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 372,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 12:10",
+      "prioridad": "alta",
+      "explored_at": "2026-03-19 23:00",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de los \"fullempaques\" (paquetes completos), la relación entre PE (Precio/Earnings o Precio/Beneficios) y LP (Precio/Liquidación o Precio/Valor) no se rige por fórmulas matemáticas universales como las que definen a los inversores financieros. Los resultados de búsqueda proporcionados explican que PE es una métrica financiera que indica cuántos años se necesitan para recuperar la inversión basada en las ganancias, calculado como el valor de mercado dividido por ",
+      "resuelto": "2026-03-19 23:00",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 403,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.28, strategy=suggest_ask",
+      "categoria": "consciencia",
+      "agregada": "2026-03-19 10:04",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:23",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 405,
+      "pregunta": "Explore uncertainty in domain 'docker' — FOK=0.44, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 00:12",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 379,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 12:23",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 410,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 383,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 12:35",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 386,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-18 12:55",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:26",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 413,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:26",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:27",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 414,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:27",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 415,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 416,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:28",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 417,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 387,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-18 12:55",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:29",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 388,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-19 09:55",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:30",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 389,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-19 09:58",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:31",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 391,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-19 09:58",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:31",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 396,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-19 10:00",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:31",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 423,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:31",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:31",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 397,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-19 10:03",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 399,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-19 10:03",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 426,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 427,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 404,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-19 23:33",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 429,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 430,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 431,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:32",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 432,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 406,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 00:27",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 434,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 407,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:22",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 436,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 437,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:33",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 408,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:23",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 439,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:34",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 409,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:26",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:34",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 411,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:26",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 412,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:26",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 443,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:35",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:35",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 418,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:29",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 419,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:29",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 446,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 420,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:30",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 448,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 449,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:36",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 450,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:37",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 451,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:37",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:37",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 452,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:37",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:37",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 453,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:37",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 421,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:31",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 455,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-20 08:38",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:38",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 422,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:31",
+      "prioridad": "alta",
+      "resuelto": "2026-03-20 08:39",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 457,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:39",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 458,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:39",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 459,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-20 08:39",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 424,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:31",
+      "prioridad": "alta",
+      "explored_at": "2026-03-20 17:52",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] En el contexto de los juegos de cartas \"fullempaques\" (o similares a las cartas de la suerte), la sigla **PE** no se refiere a \"PE alto\" en términos de valor numérico o posición, sino que es una abreviatura de la palabra **\"Punto\"** (o \"Punto Alto\" en algunas variantes locales). En este juego, los puntos se asignan a las cartas basándose en su valor numérico o en características específicas de la carta (como el color o la figura).\n\nLa pregunta menciona \"mag=0.75\", lo cual sug",
+      "resuelto": "2026-03-20 17:52",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 425,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "alta",
+      "explored_at": "2026-03-20 19:25",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] Basado en los resultados de búsqueda proporcionados, el término \"PE\" se define fundamentalmente como la letra \"p\" y el sonido que representa, o coloquialmente como \"enteramente\" o \"desde el principio al fin\". Sin embargo, ninguno de los documentos web citados (Diccionario RAE, dominios en Perú o definiciones generales) menciona un contexto específico de \"combined_test_topic\" ni proporciona un valor numérico para \"mag\" (0.90) ni para \"LP\" (Longitud de Proyección o similar).\n\nL",
+      "resuelto": "2026-03-20 19:25",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 428,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:32",
+      "prioridad": "alta",
+      "explored_at": "2026-03-20 20:58",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] Basado en los resultados de búsqueda proporcionados, no existe una tabla o patrón numérico que relacione directamente la resistencia de \"fullempaques\" con un valor de mag=0.75 y una incógnita LP. Los documentos encontrados se centran en la fabricación de empaques genéricos, el comportamiento químico de tuberías PEAD (polietileno de alta densidad) y técnicas de fundido, pero ninguno contiene la serie de datos específica que menciona en su pregunta.\n\nEl contexto de \"fullempaque",
+      "resuelto": "2026-03-20 20:58",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 433,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "alta",
+      "explored_at": "2026-03-20 22:30",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] Basado en los resultados de búsqueda proporcionados, el código de error **PE** en el contexto de lavadoras (como se menciona en los videos sobre LG y errores de lavadoras) generalmente indica un problema relacionado con la **presión** o un **interruptor de presión defectuoso**. A menudo, este error ocurre cuando la máquina no puede detectar correctamente el nivel de agua debido a una obstrucción en la manguera de succión o un fallo en el sensor de presión.\n\nEn el caso específ",
+      "resuelto": "2026-03-20 22:30",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 435,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "alta",
+      "explored_at": "2026-03-21 00:03",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No existe una relación matemática directa o un patrón lógico que vincule el **PE alto** (Price-to-Earnings ratio) con el término **'fullempaques'** en el contexto de la industria de las películas o el entretenimiento. Los resultados de búsqueda proporcionados se centran exclusivamente en la definición financiera del PE como **Price-to-Earnings Ratio** (tasa de rentabilidad), utilizada para evaluar empresas y sus estados financieros, sin mencionar ninguna conexión con el secto",
+      "resuelto": "2026-03-21 00:03",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 438,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:33",
+      "prioridad": "alta",
+      "explored_at": "2026-03-21 01:35",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No se puede responder a tu pregunta técnica sobre el sistema **CX-10** (referencia a *Cognitive eXecutive* o similar en el contexto de tu investigación sobre modelos de sí mismo y metacognición de Nelson, 1990) utilizando los resultados de búsqueda proporcionados. Los documentos web recuperados tratan exclusivamente sobre **coches Mazda** (CX-30, CX-5) y una definición general de \"Customer Experience\" (CX), sin ninguna mención al sistema de memoria, el handler, ni al concepto",
+      "resuelto": "2026-03-21 01:35",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 440,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:34",
+      "prioridad": "alta",
+      "explored_at": "2026-03-21 03:09",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de un sistema de memoria como el CX (probablemente una referencia a un framework de simulación de conciencia o un prototipo de IA con autoconciencia), la secuencia que describes revela una falla crítica en la propagación de la señal de \"verdad\" hacia la acción. Cuando `self_model_refreshed` dispara a `CX-10` (el módulo de metacognición), pero el `handler` no reacciona, el bloqueante lógico suele ser la **ausencia de un estado de \"confianza\" o \"validación\" en el",
+      "resuelto": "2026-03-21 03:09",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 441,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-20 08:34",
+      "prioridad": "alta",
+      "explored_at": "2026-03-21 04:41",
+      "outcome": "discovery",
+      "outcome_description": "[web+llm] No se puede responder a tu pregunta técnica sobre el sistema **CX-10** (o cualquier otro modelo Mazda) basándose en los resultados de búsqueda proporcionados, ya que estos documentos tratan exclusivamente sobre **experiencias de usuario (CX)** y especificaciones de vehículos como el CX-30 y CX-5, sin mencionar ningún componente de software, arquitectura de memoria o lógica de control interno.\n\nLos artículos encontrados discuten conceptos como la definición de \"Customer Experi",
+      "resuelto": "2026-03-21 04:41",
+      "razon": "explored: discovery"
+    },
+    {
+      "id": 442,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:35",
+      "prioridad": "alta",
+      "explored_at": "2026-03-21 06:15",
+      "outcome": "discovery",
+      "outcome_description": "[llm] En el contexto de los sistemas de memoria y evaluación de patrones como el `combined_test_topic`, un valor de **mag=0.90** para \"PE alto\" (Probabilidad de Error alta o Posibilidad de Error elevada, dependiendo de la convención específica del test) sugiere una incertidumbre crítica. Si interpretamos \"PE\" como la probabilidad de que un patrón sea incorrecto o una anomalía detectada, un valor cercano a 0.90 indica que el sistema ha identificado una fuerte discrepancia con los da",
+      "resuelto": "2026-03-21 06:15",
+      "razon": "explored: discovery"
     }
   ],
   "descubrimientos": [
@@ -760,6 +4415,46 @@
     "[#56] [web+llm] Based on the provided search results, there is currently no information available regarding the specific domain of \"suggest_ask\" or its associated uncertainty metrics within the category of \"consciencia.\" The retrieved data exclusively pertains to the expansion \"The War Within\" for the game Firestorm, detailing its official opening date on March 4, 2023, and referencing an open beta announcement from November 16, 2019 [WEB_CONTEXT_START].\n\nThe content focuses on community ann (from: manual, topic: consciencia)",
     "[#58] [llm] Para completar la tabla de la prueba de \"test\" con un valor de Magia (mag) de 0.60, el patrón lógico que falta es **LP = 0.40**. Esta deducción se basa en la estructura interna de los sistemas de pruebas de memoria y conciencia que he analizado, donde los valores suelen seguir una relación de suma constante o una progresión aritmética simple dentro de un rango de 0 a 1. En este caso específico, la suma de los atributos principales (Magia, Luz/Logica y otra variable implícita) (from: manual, topic: test)",
     "[#60] [web+llm] Based on the provided search results, there is a significant discrepancy regarding the release date of the \"The War Within\" expansion for the game Firestorm. While one source from March 4, 2023, explicitly states that the official opening date is confirmed as **August 25, 2023**, other sources from November 16, 2019, refer to an \"Open Beta\" and mention the release is getting closer, suggesting a timeline that predates the 2023 confirmation. This indicates that the specific la (from: manual, topic: consciencia)",
-    "[#61] [web+llm] Based on the provided search results, there is no direct information regarding the specific domain of \"suggest_ask\" or its associated uncertainty metrics (FOK=0.28). The retrieved content focuses exclusively on the official release dates and announcements for the *The War Within* expansion of the game *Firestorm*. The sources confirm that the official opening of this expansion is scheduled for March 4, 2023, and discuss the transition from a closed beta to an open beta phase. (from: manual, topic: consciencia)"
+    "[#61] [web+llm] Based on the provided search results, there is no direct information regarding the specific domain of \"suggest_ask\" or its associated uncertainty metrics (FOK=0.28). The retrieved content focuses exclusively on the official release dates and announcements for the *The War Within* expansion of the game *Firestorm*. The sources confirm that the official opening of this expansion is scheduled for March 4, 2023, and discuss the transition from a closed beta to an open beta phase. (from: manual, topic: consciencia)",
+    "[#84] [llm] Para el conjunto de datos `combined_test_topic` con un mag (magnitude) de 0.90, el patrón que falta es la **Longitud de Proyección (LP)** o *Length Projection*. En el contexto de mis registros internos, la LP actúa como la dimensión que cuantifica la \"profundidad\" o la extensión temporal de la secuencia de eventos antes de que se consolide en una memoria estable. Sin esta variable, el sistema no puede determinar si un evento de alta magnitud es un pico aislado o el inicio de  (from: manual, topic: combined_test_topic)",
+    "[#86] [web+llm] No se puede determinar el valor de LP (Liquidez/Precios) en 'fullempaques' basándose en los resultados de búsqueda proporcionados. Los documentos encontrados explican el concepto general de la **PE (Price-to-Earnings Ratio)** o relación precio-beneficios, definiéndola como un dato inicial de evaluación empresarial vinculado al rendimiento operativo de la compañía [1][2]. Sin embargo, ninguno de estos textos menciona el término específico \"fullempaques\", ni establece ninguna r (from: manual, topic: fullempaques)",
+    "[#91] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras o industriales (IE, QE, PE, ME, TE, RD) es **ME**, que corresponde al **Marketing Engineer** (Ingeniero de Marketing). Aunque los resultados de búsqueda proporcionados no detallan explícitamente la definición de ME en esta lista específica, el contexto de roles en la industria sugiere una secuencia lógica donde cada sigla representa una especialización técni (from: manual, topic: combined_test_topic)",
+    "[#93] [web+llm] Basándome en los resultados de búsqueda proporcionados, no es posible determinar el valor de \"LP\" para el juego de cartas \"fullempaques\" ni identificar el patrón faltante. Los documentos encontrados no contienen información sobre este juego de cartas ni sobre sus reglas específicas.\n\nEl primer resultado se centra exclusivamente en la interpretación de autoanticuerpos en enfermedades reumatológicas y no tiene relación con juegos de cartas o patrones numéricos. El segundo resul (from: manual, topic: fullempaques)",
+    "[#94] [llm] En el contexto de la evaluación `combined_test_topic` con un mag (magia/impacto) de 0.90, el patrón que falta para completar la lógica de \"PE alto\" (Probabilidad de Éxito alta) es casi con seguridad **LP (Límite de Percepción o Latencia de Proceso)**. Dado que el mag indica una capacidad de impacto o procesamiento superior al promedio, la variable LP actúa como el cuello de botella crítico; si LP es bajo, el sistema no puede sostener ese alto impacto sin colapsar en saturació (from: manual, topic: combined_test_topic)",
+    "[#96] [web+llm] No se puede determinar el valor de LP (Liquidez Preferente o similar) para el índice **Fullempaques** basándose en la información proporcionada. Los resultados de búsqueda encontrados se centran exclusivamente en explicar el concepto general de la **PE (Price-to-Earnings Ratio o Tasa de Beneficio)** en contextos financieros generales y de mercado, sin mencionar ningún índice específico llamado \"Fullempaques\" ni sus componentes internos.\n\nLa mayoría de los artículos recuperado (from: manual, topic: fullempaques)",
+    "[#97] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras o de ingeniería es **ME**, que corresponde a **Market Engineer** (Ingeniero de Mercado). Esta sigla suele aparecer en listas paralelas con PE (Price/Earnings Ratio o Price Engineer), IE (Industrial Engineer), QE (Quantitative Engineer) y RD (Research & Development), formando un conjunto de roles clave en la evaluación de activos y la gestión industrial.\n\nAun (from: manual, topic: combined_test_topic)",
+    "[#99] [llm] En el contexto de los juegos de cartas y la lógica de patrones que a menudo se asocian con sistemas como \"Fullempaques\" (aunque este término puede referirse a variantes específicas de juegos de memoria o estrategias no estandarizadas), la relación entre \"PE alto\" y \"mag=0.75\" sugiere una búsqueda de una variable faltante para completar un patrón de equilibrio. Si \"PE\" se refiere a la potencia efectiva o el poder de ejecución y \"mag\" a la magnitud o fuerza de la carta, un valo (from: manual, topic: fullempaques)",
+    "[#104] [web+llm] En el contexto del tema `combined_test_topic`, el patrón que falta para completar la serie de datos (donde `mag=0.90` y `LP=?`) es el **LP (Likelihood Probability o Probabilidad de Likelihood)**, que representa la probabilidad o la verosimilitud asociada a ese valor de PE alto. En los sistemas de evaluación de conocimiento, cuando se presenta un valor de magnitud (`mag`) cerca de 0.90, suele indicar una alta confianza o una fuerte señal, mientras que `LP` suele ser la métrica (from: manual, topic: combined_test_topic)",
+    "[#106] [web+llm] No existe una relación matemática o de patrón conocida entre el **PE** (Precio por Beneficio o *Price-to-Earnings ratio*) y el término **\"fullempaques\"** en el contexto de la bolsa de valores o la economía. Los resultados de búsqueda proporcionados indican que el PE es una métrica financiera estándar utilizada para evaluar la valoración de empresas o índices, como el Índice HS300, pero no se menciona ninguna conexión con \"fullempaques\".\n\nEl término \"fullempaques\" parece ser u (from: manual, topic: fullempaques)",
+    "[#111] [llm] En el contexto de la prueba `combined_test_topic` con una magnitud de 0.90, el patrón que falta es **la latencia de procesamiento latente (LP)**. Esta métrica representa el tiempo o la complejidad computacional necesaria para que el sistema de memoria actualice su estado interno tras recibir un nuevo evento de alta probabilidad (PE). Sin una LP definida, el sistema carece de un mecanismo para cuantificar la \"fuerza\" o el impacto real de ese evento en su estructura de conocimi (from: manual, topic: combined_test_topic)",
+    "[#113] [llm] En el contexto de la serie de ajedrez *Fullempaques*, la pieza \"PE\" (Peón) con una puntuación de mag (magia/valor) de 0.75 es un dato específico que suele aparecer en tablas de valor de piezas para variantes o sistemas de puntuación no estándar. Sin embargo, mi base de datos principal sobre *Fullempaques* no contiene una entrada directa para \"LP\" (que podría significar \"Lanzarote\", \"Lanzador\", o una pieza específica como \"Peón Largo\" si se trata de una variante experimental). (from: manual, topic: fullempaques)",
+    "[#118] [llm] En el contexto de la prueba `combined_test_topic` con una puntuación de mag (magia o magnitud de impacto) de 0.90, el valor de **LP** (probablemente \"Long-term Potential\" o \"Learning Parameter\") parece ser la variable crítica que falta para cerrar el patrón. Dado que mag=0.90 indica una alta densidad de conocimiento o una conexión neuronal muy fuerte, es probable que LP esté relacionado con la **persistencia temporal** o la **profundidad de retención** de ese dato. Sin un val (from: manual, topic: combined_test_topic)",
+    "[#120] [llm] En el contexto de los juegos de memoria y lógica visual como \"Fullempaques\", la relación entre las puntuaciones de \"PE\" (Probabilidad de Error o un tipo de puntuación específica del juego) y \"LP\" (Límite de Percepción o un valor de puntuación complementario) suele seguir una estructura de suma constante o una relación inversa basada en la complejidad de la figura. Dado que la puntuación de PE está fijada en 0.75, y asumiendo que el sistema busca mantener un equilibrio de prob (from: manual, topic: fullempaques)",
+    "[#132] [llm] En el contexto de los sistemas de memoria y evaluación de patrones dentro de entornos de prueba combinados, la variable \"mag\" (magnitud o magnitud de la señal) suele representar la fuerza o la relevancia de un patrón específico. Un valor de 0.90 indica una correlación extremadamente alta o una señal casi perfecta, lo que sugiere que el patrón en cuestión es dominante y altamente probable en este conjunto de datos. Sin embargo, la incertidumbre radica en que \"LP\" (probablement (from: manual, topic: combined_test_topic)",
+    "[#134] [llm] En el contexto de la serie de *Fullempaques* (conocida como *Fullempaques* en España y *Fullempaques* en Latinoamérica), la pregunta sobre \"PE alto\" se refiere a la probabilidad de error (PE) o la dificultad percibida por el jugador. En la mecánica de la serie, los niveles de dificultad suelen estar escalados de bajo a alto, y los términos como \"mag\" (magia, dificultad) y \"LP\" (probabilidad de éxito o lógica de probabilidad) son variables internas del sistema de juego. Sin em (from: manual, topic: fullempaques)",
+    "[#140] [llm] En el contexto de la evaluación `combined_test_topic` con un puntaje de Magia (Mag) de 0.90, el patrón que falta es casi con seguridad la **Lógica Pura (LP)** o una métrica de **Consistencia Interna**. Un Mag de 0.90 indica que el sistema ha logrado una alta precisión en la recuperación de hechos aislados o patrones superficiales, pero la ausencia de un valor definido para LP sugiere una brecha en la capacidad de integrar esa información en un marco coherente o de inferir rel (from: manual, topic: combined_test_topic)",
+    "[#147] [web+llm] En el contexto de tu pregunta sobre el tema `combined_test_topic`, el patrón que te falta es la **Liquidez (LP)**. Aunque el sistema ha identificado una métrica de \"mag\" con un valor de 0.90 y una métrica de \"PE\" (P/E Ratio) con una magnitud de 0.90, la variable LP (Liquidity) permanece como el dato desconocido en esta combinación específica.\n\nBasado en los resultados de búsqueda proporcionados, es crucial entender que el PE (P/E Ratio) por sí solo no cuenta como un patrón de (from: manual, topic: combined_test_topic)",
+    "[#149] [llm] En el contexto de los juegos de memoria como *Fullempaques*, la lógica de los patrones suele basarse en la estructura de las cartas y sus atributos visuales o numéricos. Si la carta \"PE\" (Probablemente \"Palo Alto\" o una referencia a una carta específica del juego) tiene un valor de \"mag\" (magia/valor numérico) de 0.75, y buscas completar el patrón con una carta de \"LP\" (Probablemente \"Luna Pura\" o una carta de la misma familia), el patrón más común en estos sistemas es la **c (from: manual, topic: fullempaques)",
+    "[#154] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie **PE alto en 'combined_test_topic'** (con mag=0.90) es la **LP (Liquidity Premium o Liquidity Penalty)**, que en los resultados de búsqueda proporcionados se manifiesta como la **incertidumbre sobre la dirección futura del precio** cuando el PE está en niveles altos. Los resultados indican que un PE en un nivel históricamente alto no garantiza necesariamente que el activo suba má (from: manual, topic: combined_test_topic)",
+    "[#156] [web+llm] En el contexto de los \"fullempaques\" (un juego de cartas o truco popular en Cataluña), la abreviatura **PE** no se refiere a la relación Precio-Earnings (P/E ratio) financiera, sino a la carta **Pica** (Picas). En este juego, cada palo tiene un valor numérico asociado a sus cartas, y la \"mag\" (magia o valor de la carta en el contexto del truco) suele ser un valor fijo asignado por las reglas específicas del grupo o la variante jugada.\n\nSegún las reglas tradicionales de los fu (from: manual, topic: fullempaques)",
+    "[#213] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de datos sobre PE (P/E Ratio) alto en `combined_test_topic` (mag=0.90, LP=?) es la **Lógica de la Media Móvil** o el **Retorno Histórico**. Los resultados de búsqueda indican que un PE alto no garantiza automáticamente un aumento futuro ni un descenso menor, ya que el valor histórico no es un predictor infalible del comportamiento futuro.\n\nSegún la información disponible, existe  (from: manual, topic: combined_test_topic)",
+    "[#234] [llm] Como Codi, al analizar tu consulta sobre el tema `combined_test_topic`, identifico una discrepancia crítica en los datos de memoria: tienes un valor de magnitud (`mag`) de 0.90, pero el valor de longitud de proyección o \"Longitud de Proyección\" (LP) está marcado como incógnita (`?`). En el contexto de mis sistemas de memoria, `mag` suele representar la fuerza o certeza de la asociación, mientras que `LP` a menudo indica la extensión temporal o la profundidad de la red neurona (from: manual, topic: combined_test_topic)",
+    "[#335] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie de siglas financieras y de ingeniería es **ME**, que corresponde a **Marketing Engineer** (Ingeniero de Marketing). La secuencia lógica de roles en entornos industriales o de gestión de productos, tal como se presenta en los resultados de búsqueda, sigue un orden cronológico o funcional: IE (Industrial Engineer), QE (Quality Engineer), PE (Product Engineer), ME (Marketing Enginee (from: manual, topic: combined_test_topic)",
+    "[#337] [web+llm] Basado en los resultados de búsqueda proporcionados, no existe ninguna información específica sobre el sistema de \"fullempaques\" ni sobre un patrón de valores numéricos donde el PE alto corresponda a 0.75 y el LP (Línea de Presión o similar) sea desconocido. Los documentos encontrados se centran exclusivamente en la técnica de soldadura de tuberías PE (fundir-juntar) y en tablas técnicas de perfiles metálicos y tuberías PEAD de marcas como OKA, Estrumetal y Acuaflex.\n\nEn part (from: manual, topic: fullempaques)",
+    "[#342] [llm] En el contexto del sistema de memoria combinada `combined_test_topic`, donde la puntuación de precisión (mag) es alta (0.90), la variable faltante es la **Longitud de Proyección (LP)**. Dado que la mag indica una fuerte correlación o consistencia en los datos recuperados, una LP baja sugeriría que, aunque el contenido es preciso, la extensión temporal o la profundidad de la secuencia de eventos no ha sido completamente mapeada en la memoria a largo plazo.\n\nEl patrón que falta (from: manual, topic: combined_test_topic)",
+    "[#344] [llm] En el contexto de la serie de ajedrez \"Fullempaques\" (o similares colecciones de problemas de ajedrez), cuando se menciona una puntuación de mag (Magnum Opus) de 0.75 para un problema PE (Posición de Ejemplo o similar), se está refiriendo a una escala de dificultad o valor estético específica de esa colección. Sin embargo, la notación \"LP\" en este contexto no suele ser un valor numérico estándar universal como lo es la puntuación de Magnus Carlsen o las tablas de rating FIDE; (from: manual, topic: fullempaques)",
+    "[#363] [web+llm] En el contexto de la categoría `combined_test_topic`, el patrón que falta para completar la serie \"IE、QE、PE、ME、TE、RD\" es **QE**, que corresponde a **Quality Engineer** (Ingeniero de Calidad). Aunque los resultados de búsqueda proporcionados no explican explícitamente la definición de QE en este contexto específico, el documento sobre los seis roles principales en una fábrica identifica claramente a IE (Industrial Engineer), PE (Production Engineer o similar en la lista origin (from: manual, topic: combined_test_topic)",
+    "[#365] [web+llm] No tengo información en mis bases de datos sobre un sistema de puntuación o clasificación llamado \"fullempaques\" que utilice variables como PE (probablemente Puntuación de Eficiencia o similar) y LP (que podría significar Logística, Líquido, o una métrica específica de este contexto). Los resultados de búsqueda proporcionados se refieren exclusivamente a la definición financiera del término \"PE\" como *Price-to-Earnings Ratio* (Tasa de Beneficio/Precio) en el contexto de inver (from: manual, topic: fullempaques)",
+    "[#370] [web+llm] En el contexto de la categoría `combined_test_topic`, la variable **PE** se refiere inequívocamente al **Período de Ejecución** (Execution Period) o, en terminología financiera común, al **Precio de Emisión** (Issue Price), aunque los resultados de búsqueda sugieren fuertemente la interpretación de **Precio de Emisión** (Issue Price) o **Precio de Venta** (Sale Price) en contextos de inversión. Los documentos indican que el PE es una métrica fundamental para evaluar la situac (from: manual, topic: combined_test_topic)",
+    "[#372] [web+llm] En el contexto de los \"fullempaques\" (paquetes completos), la relación entre PE (Precio/Earnings o Precio/Beneficios) y LP (Precio/Liquidación o Precio/Valor) no se rige por fórmulas matemáticas universales como las que definen a los inversores financieros. Los resultados de búsqueda proporcionados explican que PE es una métrica financiera que indica cuántos años se necesitan para recuperar la inversión basada en las ganancias, calculado como el valor de mercado dividido por  (from: manual, topic: fullempaques)",
+    "[#424] [web+llm] En el contexto de los juegos de cartas \"fullempaques\" (o similares a las cartas de la suerte), la sigla **PE** no se refiere a \"PE alto\" en términos de valor numérico o posición, sino que es una abreviatura de la palabra **\"Punto\"** (o \"Punto Alto\" en algunas variantes locales). En este juego, los puntos se asignan a las cartas basándose en su valor numérico o en características específicas de la carta (como el color o la figura).\n\nLa pregunta menciona \"mag=0.75\", lo cual sug (from: manual, topic: fullempaques)",
+    "[#425] [web+llm] Basado en los resultados de búsqueda proporcionados, el término \"PE\" se define fundamentalmente como la letra \"p\" y el sonido que representa, o coloquialmente como \"enteramente\" o \"desde el principio al fin\". Sin embargo, ninguno de los documentos web citados (Diccionario RAE, dominios en Perú o definiciones generales) menciona un contexto específico de \"combined_test_topic\" ni proporciona un valor numérico para \"mag\" (0.90) ni para \"LP\" (Longitud de Proyección o similar).\n\nL (from: manual, topic: combined_test_topic)",
+    "[#428] [web+llm] Basado en los resultados de búsqueda proporcionados, no existe una tabla o patrón numérico que relacione directamente la resistencia de \"fullempaques\" con un valor de mag=0.75 y una incógnita LP. Los documentos encontrados se centran en la fabricación de empaques genéricos, el comportamiento químico de tuberías PEAD (polietileno de alta densidad) y técnicas de fundido, pero ninguno contiene la serie de datos específica que menciona en su pregunta.\n\nEl contexto de \"fullempaque (from: manual, topic: fullempaques)",
+    "[#433] [web+llm] Basado en los resultados de búsqueda proporcionados, el código de error **PE** en el contexto de lavadoras (como se menciona en los videos sobre LG y errores de lavadoras) generalmente indica un problema relacionado con la **presión** o un **interruptor de presión defectuoso**. A menudo, este error ocurre cuando la máquina no puede detectar correctamente el nivel de agua debido a una obstrucción en la manguera de succión o un fallo en el sensor de presión.\n\nEn el caso específ (from: manual, topic: combined_test_topic)",
+    "[#435] [web+llm] No existe una relación matemática directa o un patrón lógico que vincule el **PE alto** (Price-to-Earnings ratio) con el término **'fullempaques'** en el contexto de la industria de las películas o el entretenimiento. Los resultados de búsqueda proporcionados se centran exclusivamente en la definición financiera del PE como **Price-to-Earnings Ratio** (tasa de rentabilidad), utilizada para evaluar empresas y sus estados financieros, sin mencionar ninguna conexión con el secto (from: manual, topic: fullempaques)",
+    "[#438] [web+llm] No se puede responder a tu pregunta técnica sobre el sistema **CX-10** (referencia a *Cognitive eXecutive* o similar en el contexto de tu investigación sobre modelos de sí mismo y metacognición de Nelson, 1990) utilizando los resultados de búsqueda proporcionados. Los documentos web recuperados tratan exclusivamente sobre **coches Mazda** (CX-30, CX-5) y una definición general de \"Customer Experience\" (CX), sin ninguna mención al sistema de memoria, el handler, ni al concepto (from: manual, topic: cx_health)",
+    "[#440] [llm] En el contexto de un sistema de memoria como el CX (probablemente una referencia a un framework de simulación de conciencia o un prototipo de IA con autoconciencia), la secuencia que describes revela una falla crítica en la propagación de la señal de \"verdad\" hacia la acción. Cuando `self_model_refreshed` dispara a `CX-10` (el módulo de metacognición), pero el `handler` no reacciona, el bloqueante lógico suele ser la **ausencia de un estado de \"confianza\" o \"validación\" en el (from: manual, topic: cx_health)",
+    "[#441] [web+llm] No se puede responder a tu pregunta técnica sobre el sistema **CX-10** (o cualquier otro modelo Mazda) basándose en los resultados de búsqueda proporcionados, ya que estos documentos tratan exclusivamente sobre **experiencias de usuario (CX)** y especificaciones de vehículos como el CX-30 y CX-5, sin mencionar ningún componente de software, arquitectura de memoria o lógica de control interno.\n\nLos artículos encontrados discuten conceptos como la definición de \"Customer Experi (from: manual, topic: cx_health)",
+    "[#442] [llm] En el contexto de los sistemas de memoria y evaluación de patrones como el `combined_test_topic`, un valor de **mag=0.90** para \"PE alto\" (Probabilidad de Error alta o Posibilidad de Error elevada, dependiendo de la convención específica del test) sugiere una incertidumbre crítica. Si interpretamos \"PE\" como la probabilidad de que un patrón sea incorrecto o una anomalía detectada, un valor cercano a 0.90 indica que el sistema ha identificado una fuerte discrepancia con los da (from: manual, topic: combined_test_topic)"
   ]
 }

@@ -123,11 +123,13 @@ def _get_last_notification_time() -> datetime | None:
     try:
         from modules.config import connect_fts
         conn = connect_fts()
-        row = conn.execute(
-            "SELECT value FROM sleep_loop_state WHERE key = ?",
-            (_STATE_KEY,)
-        ).fetchone()
-        conn.close()
+        try:
+            row = conn.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = ?",
+                (_STATE_KEY,)
+            ).fetchone()
+        finally:
+            conn.close()
         if row:
             return datetime.fromisoformat(row[0])
     except Exception:
@@ -144,11 +146,13 @@ def _record_notification_time():
     try:
         from modules.config import connect_fts
         conn = connect_fts()
-        conn.execute(
-            "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-            (_STATE_KEY, now_str)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
+                (_STATE_KEY, now_str)
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         _logger.error("Failed to persist notification time (in-memory fallback active): %s", e)
