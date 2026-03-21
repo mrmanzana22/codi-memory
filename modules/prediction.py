@@ -189,7 +189,8 @@ def record_surprise(expected: str, actual: str, intensity: str = "medium") -> st
             event_bus.emit(Events.PREDICTION_ERROR, {
                 "topic": actual[:100],
                 "intensity": intensity,
-                "confidence": surprise_value,
+                "confidence": surprise_value,       # kept for backward compat
+                "error_magnitude": surprise_value,  # canonical PE key (handler primary)
                 "source_tool": "record_surprise",
                 "expected": expected[:100],
                 "actual": actual[:100],
