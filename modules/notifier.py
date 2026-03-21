@@ -115,10 +115,10 @@ def notify_hare_urgent(message: str) -> bool:
 # -- Cooldown state persistence --
 
 _STATE_KEY = "notifier_last_sent"
-_last_sent_in_memory: "datetime | None" = None  # in-process fallback if DB unavailable
+_last_sent_in_memory: "Optional[datetime]" = None  # in-process fallback if DB unavailable
 
 
-def _get_last_notification_time() -> datetime | None:
+def _get_last_notification_time() -> Optional[datetime]:
     """Get last notification timestamp from SQLite."""
     try:
         from modules.config import connect_fts

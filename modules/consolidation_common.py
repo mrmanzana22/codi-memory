@@ -11,6 +11,7 @@ import math
 import sqlite3
 import functools
 import logging
+from typing import Optional
 
 import openai
 
@@ -78,7 +79,7 @@ def _cosine_similarity(a: list, b: list) -> float:
 # OLLAMA ROUTING (opt-in via CODI_USE_OLLAMA=true)
 # ============================================================
 
-def _try_ollama(task_type: str, prompt: str) -> str | None:
+def _try_ollama(task_type: str, prompt: str) -> Optional[str]:
     """Try routing a chat completion through Ollama.
 
     Returns response text on success, None if disabled/unavailable/failed.

@@ -602,7 +602,8 @@ class TestSelfModelRefresh:
         monkeypatch.setattr(wiring, "_SELF_MODEL_COOLDOWN", 0)
 
         try:
-            with patch("modules.consciousness.reflect_on_self", return_value="I am Codi"):
+            with patch("modules.consciousness.reflect_on_self", return_value="I am Codi"), \
+                 patch("modules.self_model.detect_self_discrepancies", return_value=None):
                 for _ in range(50):
                     wiring.process_elapsed_time(0.5)
 

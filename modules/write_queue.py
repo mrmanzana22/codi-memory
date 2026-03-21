@@ -130,7 +130,7 @@ def enqueue_write_job(
 # STATUS
 # ============================================================
 
-def get_write_job_status(job_id: str, db_path: str = None) -> dict | None:
+def get_write_job_status(job_id: str, db_path: str = None) -> Optional[dict]:
     """Get detailed status of a write job including latency breakdown.
 
     Returns:
@@ -232,7 +232,7 @@ def get_queue_stats(db_path: str = None) -> dict:
 def claim_next_job(
     lease_seconds: int = 120,
     db_path: str = None,
-) -> dict | None:
+) -> Optional[dict]:
     """Claim the next queued job with a lease.
 
     Uses UPDATE ... WHERE for atomic claim (no race conditions).

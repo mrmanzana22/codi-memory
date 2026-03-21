@@ -32,6 +32,7 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -572,7 +573,7 @@ def _get_and_increment_tick_counter() -> int:
         conn.close()
 
 
-def _get_target_checkpoint(max_age_min: int) -> int | None:
+def _get_target_checkpoint(max_age_min: int) -> Optional[int]:
     """Find latest checkpoint that needs a sleep_report.
 
     Returns checkpoint ID if found, None otherwise.
@@ -1909,7 +1910,7 @@ _PROACTIVE_COOLDOWN_HOURS = 3
 _PROACTIVE_STATE_KEY = "proactive_last_sent"
 
 
-def _get_proactive_last_sent() -> datetime | None:
+def _get_proactive_last_sent() -> Optional[datetime]:
     """Get the last time a proactive message was sent."""
     try:
         conn = _get_conn()

@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import time
+from typing import Optional
 
 from modules.pg_store import pg
 
@@ -115,7 +116,7 @@ def record_spreading(
     collection: str,
     updates: dict,
     *,
-    last_accessed: str | None = None,
+    last_accessed: Optional[str] = None,
 ) -> None:
     """Enqueue spreading activation updates.
 
@@ -245,7 +246,7 @@ def _direct_set_payload(collection: str, point_id: str, payload: dict) -> None:
 
 
 def _direct_spreading(
-    collection: str, updates: dict, last_accessed: str | None
+    collection: str, updates: dict, last_accessed: Optional[str]
 ) -> None:
     """Legacy mode: call pg.update_payload per point (old behavior)."""
     from modules.config import now_iso

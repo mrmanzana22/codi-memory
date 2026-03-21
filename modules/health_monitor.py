@@ -115,7 +115,7 @@ def evaluate_rules(
     return alerts
 
 
-def _rule_wm_stalled(metrics: dict, now_iso: str) -> dict | None:
+def _rule_wm_stalled(metrics: dict, now_iso: str) -> Optional[dict]:
     global_writes = metrics["global"]["writes_24h"]
     wm_writes = metrics["wm"]["writes_24h"]
     if global_writes >= 20 and wm_writes == 0:
@@ -138,7 +138,7 @@ def _rule_wm_stalled(metrics: dict, now_iso: str) -> dict | None:
 _AI_MIN_WRITES_TO_CHECK = 20  # same as _PERSIST_INTERVAL; AI won't persist below this
 
 
-def _rule_ai_disconnected(metrics: dict, now_iso: str) -> dict | None:
+def _rule_ai_disconnected(metrics: dict, now_iso: str) -> Optional[dict]:
     writes = metrics["global"]["writes_24h"]
     events = metrics["global"]["events_24h"]
     observations = metrics["active_inference"]["total_observations"]

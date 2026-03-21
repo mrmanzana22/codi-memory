@@ -20,6 +20,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime
+from typing import Optional
 
 from modules.config import (
     FTS_DB_PATH, _emotional_state, _current_session,
@@ -327,7 +328,7 @@ def checkpoint_session_close(
 # LOAD_SESSION_BRIDGE
 # ============================================================
 
-def load_session_bridge() -> dict | None:
+def load_session_bridge() -> Optional[dict]:
     """Load last checkpoint and generate narrative bridge for wake-up.
 
     Returns dict with:

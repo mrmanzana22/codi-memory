@@ -60,7 +60,7 @@ def _get_conn():
     return connect_fts()
 
 
-def _parse_ts(ts_str: str | None) -> datetime | None:
+def _parse_ts(ts_str: Optional[str]) -> Optional[datetime]:
     if not ts_str:
         return None
     try:
@@ -76,7 +76,7 @@ def _parse_ts(ts_str: str | None) -> datetime | None:
 # LAZY EVALUATION — compute real-time state from last snapshot
 # ============================================================
 
-def get_current_state(pet_row: dict | None = None) -> dict | None:
+def get_current_state(pet_row: Optional[dict] = None) -> Optional[dict]:
     """Compute real-time pet state from last known values + elapsed time.
 
     This is the core innovation: no tick needed. State is always
@@ -232,7 +232,7 @@ def _compute_mood(hunger, happiness, energy, health, alive):
 # CRUD
 # ============================================================
 
-def _get_active_pet() -> dict | None:
+def _get_active_pet() -> Optional[dict]:
     """Get the current alive pet, if any."""
     try:
         conn = _get_conn()
@@ -444,7 +444,7 @@ def _persist_death(pet_id: int):
 # CONSCIOUSNESS INTEGRATION HELPERS
 # ============================================================
 
-def get_pet_awareness() -> dict | None:
+def get_pet_awareness() -> Optional[dict]:
     """Called by self_model tick to check pet needs.
     Returns awareness dict or None if no pet.
     """
@@ -478,7 +478,7 @@ def get_pet_awareness() -> dict | None:
     return state
 
 
-def get_pet_critical_alert() -> str | None:
+def get_pet_critical_alert() -> Optional[str]:
     """Called by proactive_contact tick. Returns alert string or None."""
     state = get_current_state()
     if state is None or state.get("stage") == "egg":

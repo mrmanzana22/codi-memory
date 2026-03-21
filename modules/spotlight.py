@@ -15,6 +15,7 @@ Storage: module-level _spotlight list (in-session only).
 import logging
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 
 from modules.config import now_col, now_iso
 
@@ -72,7 +73,7 @@ def _dedup_by_type(items: list) -> list:
     return [by_type[t] for t in TYPE_ORDER if t in by_type]
 
 
-def select_goal(intentions: list, checkpoint_text: str = "") -> dict | None:
+def select_goal(intentions: list, checkpoint_text: str = "") -> Optional[dict]:
     """Select goal from intentions or checkpoint text.
 
     Args:
@@ -96,7 +97,7 @@ def select_goal(intentions: list, checkpoint_text: str = "") -> dict | None:
     return None
 
 
-def select_risk(health_signals: dict) -> dict | None:
+def select_risk(health_signals: dict) -> Optional[dict]:
     """Select most actionable risk from health signals.
 
     Args:
@@ -134,7 +135,7 @@ def select_risk(health_signals: dict) -> dict | None:
     return None
 
 
-def select_next_action(intentions: list, checkpoint_text: str = "") -> dict | None:
+def select_next_action(intentions: list, checkpoint_text: str = "") -> Optional[dict]:
     """Select next concrete action.
 
     Args:
@@ -311,7 +312,7 @@ def format_spotlight() -> str:
 # PAD MICRO-UPDATES
 # ============================================================
 
-def pad_micro_update(signal: str) -> dict | None:
+def pad_micro_update(signal: str) -> Optional[dict]:
     """Apply minimal PAD adjustment based on operational signal.
 
     Args:

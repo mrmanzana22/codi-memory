@@ -45,12 +45,12 @@ def upsert_health_alerts(
     return ids
 
 
-def _build_dedupe_hash(alert_key: str, subsystem: str, suffix: str | None = None) -> str:
+def _build_dedupe_hash(alert_key: str, subsystem: str, suffix: Optional[str] = None) -> str:
     raw = f"{alert_key}|{subsystem}|{suffix or ''}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _find_open(conn: sqlite3.Connection, dedupe_hash: str) -> dict | None:
+def _find_open(conn: sqlite3.Connection, dedupe_hash: str) -> Optional[dict]:
     row = conn.execute(
         """SELECT id, alert_key, subsystem, status, severity, title, description,
                   evidence_json, recommended_action, first_seen_at, last_seen_at,
@@ -83,7 +83,7 @@ def _insert(conn: sqlite3.Connection, alert: dict, dedupe: str, run_id: str, now
     return int(cur.lastrowid)
 
 
-def _build_evidence_json(existing_json: str | None, new_evidence: dict) -> str:
+def _build_evidence_json(existing_json: Optional[str], new_evidence: dict) -> str:
     """Store 1-deep evidence: latest + previous-latest only (no unbounded nesting)."""
     if existing_json:
         existing = json.loads(existing_json)
@@ -149,7 +149,7 @@ _KEYS = (
 )
 
 
-def _row_to_dict(row: tuple | None) -> dict[str, Any]:
+def _row_to_dict(row: Optional[tuple]) -> dict[str, Any]:
     if row is None:
         return {}
     return dict(zip(_KEYS, row))

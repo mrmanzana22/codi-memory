@@ -5,52 +5,108 @@
   },
   "pendientes": [
     {
-      "id": 444,
-      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
-      "categoria": "fullempaques",
-      "agregada": "2026-03-20 08:35",
-      "prioridad": "alta"
-    },
-    {
-      "id": 445,
+      "id": 514,
       "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
       "categoria": "combined_test_topic",
-      "agregada": "2026-03-20 08:36",
+      "agregada": "2026-03-21 06:54",
       "prioridad": "alta"
     },
     {
-      "id": 447,
+      "id": 516,
       "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
       "categoria": "fullempaques",
-      "agregada": "2026-03-20 08:36",
+      "agregada": "2026-03-21 06:54",
       "prioridad": "alta"
     },
     {
-      "id": 454,
+      "id": 522,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "alta"
+    },
+    {
+      "id": 523,
       "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
       "categoria": "combined_test_topic",
-      "agregada": "2026-03-20 08:38",
+      "agregada": "2026-03-21 06:54",
       "prioridad": "alta"
     },
     {
-      "id": 456,
+      "id": 525,
       "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
       "categoria": "fullempaques",
-      "agregada": "2026-03-20 08:38",
+      "agregada": "2026-03-21 06:54",
       "prioridad": "alta"
     },
     {
-      "id": 460,
+      "id": 531,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:55",
+      "prioridad": "alta"
+    },
+    {
+      "id": 532,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "alta"
+    },
+    {
+      "id": 534,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "alta"
+    },
+    {
+      "id": 537,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "alta"
+    },
+    {
+      "id": 538,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "alta"
+    },
+    {
+      "id": 540,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "alta"
+    },
+    {
+      "id": 543,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "alta"
+    },
+    {
+      "id": 544,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "alta"
+    },
+    {
+      "id": 546,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "alta"
+    },
+    {
+      "id": 551,
       "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
       "categoria": "consciencia",
-      "agregada": "2026-03-20 08:39",
-      "prioridad": "media"
-    },
-    {
-      "id": 461,
-      "pregunta": "Explore uncertainty in domain '18.171.145.39' — FOK=0.50, strategy=full_search",
-      "categoria": "consciencia",
-      "agregada": "2026-03-21 00:28",
+      "agregada": "2026-03-21 06:58",
       "prioridad": "media"
     }
   ],
@@ -4380,6 +4436,744 @@
       "outcome_description": "[llm] En el contexto de los sistemas de memoria y evaluación de patrones como el `combined_test_topic`, un valor de **mag=0.90** para \"PE alto\" (Probabilidad de Error alta o Posibilidad de Error elevada, dependiendo de la convención específica del test) sugiere una incertidumbre crítica. Si interpretamos \"PE\" como la probabilidad de que un patrón sea incorrecto o una anomalía detectada, un valor cercano a 0.90 indica que el sistema ha identificado una fuerte discrepancia con los da",
       "resuelto": "2026-03-21 06:15",
       "razon": "explored: discovery"
+    },
+    {
+      "id": 460,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-20 08:39",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 461,
+      "pregunta": "Explore uncertainty in domain '18.171.145.39' — FOK=0.50, strategy=full_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 00:28",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 463,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 464,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:45",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 465,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 466,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 467,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:44",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:46",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 470,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 472,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 473,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 474,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 475,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 476,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:46",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 479,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 481,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 482,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:48",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 483,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:49",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 484,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:49",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 485,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:49",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 488,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:49",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:49",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 444,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:35",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 490,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 491,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 492,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 493,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:50",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 494,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:50",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 445,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 447,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:36",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 497,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:51",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:51",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 454,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-20 08:38",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 499,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 500,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 501,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 502,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:52",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 503,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:52",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 456,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-20 08:38",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 462,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:43",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 506,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 468,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 508,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 509,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 510,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 511,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 512,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:53",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 469,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 471,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:45",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 515,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 477,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 517,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 518,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 519,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 520,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 521,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 478,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 480,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:48",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 524,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 486,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:49",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 526,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 527,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 528,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 529,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:54",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 530,
+      "pregunta": "Explore uncertainty in domain 'anything' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:54",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:55",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 487,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:49",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 489,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:49",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 533,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 495,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:51",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 535,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 536,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 496,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:51",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 498,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:51",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 539,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 504,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 541,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:56",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 542,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:56",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 505,
+      "pregunta": "PE alto en 'combined_test_topic' (mag=0.90, LP=?). Que patron me falta?",
+      "categoria": "combined_test_topic",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 507,
+      "pregunta": "PE alto en 'fullempaques' (mag=0.75, LP=?). Que patron me falta?",
+      "categoria": "fullempaques",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 545,
+      "pregunta": "PE alto en 'test' (mag=0.60, LP=?). Que patron me falta?",
+      "categoria": "test",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 513,
+      "pregunta": "CX muerto CX-10: 'Self-model → metacognition (Nelson 1990)' — su upstream 'self_model_refreshed' SI dispara pero el handler no. Que guard bloquea?",
+      "categoria": "cx_health",
+      "agregada": "2026-03-21 06:53",
+      "prioridad": "alta",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 547,
+      "pregunta": "Explore uncertainty in domain 'xyzzy_nonexistent_query_12345' — FOK=0.50, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 548,
+      "pregunta": "Explore uncertainty in domain 'broaden_search' — FOK=0.20, strategy=broaden_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 549,
+      "pregunta": "Explore uncertainty in domain 'test' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
+    },
+    {
+      "id": 550,
+      "pregunta": "Explore uncertainty in domain 'xyznonexistent12345' — FOK=0.35, strategy=expand_search",
+      "categoria": "consciencia",
+      "agregada": "2026-03-21 06:58",
+      "prioridad": "media",
+      "resuelto": "2026-03-21 06:58",
+      "razon": "pruned_by_cap"
     }
   ],
   "descubrimientos": [

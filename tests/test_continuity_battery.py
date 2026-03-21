@@ -487,6 +487,10 @@ class TestSynapticHomeostasis:
         captured_updates = []
 
         class FakeCursor:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
             def executemany(self, sql, params):
                 captured_updates.extend(params)
 
@@ -503,8 +507,8 @@ class TestSynapticHomeostasis:
                 pass
             def transaction(self):
                 return FakeTransaction()
-            def executemany(self, sql, params):
-                captured_updates.extend(params)
+            def cursor(self):
+                return FakeCursor()
 
         monkeypatch.setattr("modules.config_pg.get_conn", lambda: FakeConn())
 
@@ -533,15 +537,29 @@ class TestSynapticHomeostasis:
         # Mock config_pg.get_conn to capture batch SQL updates
         captured_updates = []
 
+        class FakeCursor:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def executemany(self, sql, params):
+                captured_updates.extend(params)
+
+        class FakeTransaction:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
         class FakeConn:
             def __enter__(self):
                 return self
             def __exit__(self, *args):
                 pass
             def transaction(self):
-                return self
-            def executemany(self, sql, params):
-                captured_updates.extend(params)
+                return FakeTransaction()
+            def cursor(self):
+                return FakeCursor()
 
         monkeypatch.setattr("modules.config_pg.get_conn", lambda: FakeConn())
 

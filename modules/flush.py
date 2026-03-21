@@ -2,6 +2,7 @@ import logging
 import os
 import json
 from datetime import datetime
+from typing import Optional
 from modules.config import (
     USER_ID, COLLECTION_NAME, MARKDOWN_DIR, JOURNAL_DIR,
     now_short, now_iso, now_col, SESSION_STATE_FILE, _emotional_state,
@@ -228,7 +229,7 @@ def _save_session_state(resumen: str = "") -> bool:
         return False
 
 
-def load_session_state() -> dict | None:
+def load_session_state() -> Optional[dict]:
     """Load previous session state if it exists and is fresh enough.
 
     Returns dict with pad, active_project, wm_topics, session_summary

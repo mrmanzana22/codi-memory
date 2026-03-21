@@ -16,6 +16,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -38,7 +39,7 @@ class LockReadError(RuntimeError):
     """Raised when an existing lockfile cannot be read safely."""
 
 
-def _read_lock() -> dict | None:
+def _read_lock() -> Optional[dict]:
     """Read lockfile contents. Returns None only when the lockfile is absent."""
     if not LOCK_FILE.exists():
         return None
