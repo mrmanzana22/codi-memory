@@ -2282,13 +2282,12 @@ def _tick_health(budget_ms: int) -> dict:
             "SELECT COUNT(*) FROM memories_text"
         ).fetchone()[0]
 
-        # pg.count() is a remote Qdrant call (~2s).  Use cached qdrant_count
-        # from sleep_loop_state when available, refresh only every 6th tick.
+        # pg_total_count cached from PostgreSQL, refresh every 6th tick.
         pg_count = None
         try:
             _sync_state_conn = _get_conn()
             _cached_row = _sync_state_conn.execute(
-                "SELECT value FROM sleep_loop_state WHERE key = 'qdrant_count'"
+                "SELECT value FROM sleep_loop_state WHERE key = 'pg_total_count'"
             ).fetchone()
             _sync_state_conn.close()
             if _cached_row:
@@ -2297,14 +2296,21 @@ def _tick_health(budget_ms: int) -> dict:
             pass
 
         if pg_count is None or _tc_val % 6 == 0:
-            # Refresh from Qdrant (cold start or periodic refresh)
-            pg_count = _pg.count(is_semantic=False).points_count
-            # Persist canonical episodic count for world-model fts_gap (#132)
+            # Refresh total PG count (episodic + semantic) for correct fts comparison
+            try:
+                from modules.config_pg import get_conn as _fts_pg_conn
+                with _fts_pg_conn() as _pc:
+                    with _pc.cursor() as _cur:
+                        _cur.execute("SELECT COUNT(*) FROM memories")
+                        pg_count = _cur.fetchone()[0]
+            except Exception:
+                pg_count = _pg.count(is_semantic=False).points_count  # fallback
+            # Persist total count for world-model fts_gap
             try:
                 state_conn = _get_conn()
                 state_conn.execute(
                     "INSERT OR REPLACE INTO sleep_loop_state (key, value) VALUES (?, ?)",
-                    ("qdrant_count", str(pg_count))
+                    ("pg_total_count", str(pg_count))
                 )
                 state_conn.commit()
                 state_conn.close()
