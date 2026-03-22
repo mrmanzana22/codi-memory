@@ -851,16 +851,19 @@ def _on_affective_charge(data: dict):
         }
 
         # Emit for downstream (wiring, etc.)
-        from modules.events import event_bus, Events
-        event_bus.emit(Events.EMOTION_CHANGED, {
-            "source": "affective_charge",
-            "pleasure": new_p, "arousal": new_a, "dominance": new_d,
-            "emotion": _classify_emotion(new_p, new_a, new_d),
-            "intensity": round(_calculate_emotional_intensity(new_p, new_a, new_d), 2),
-            "trigger": f"ac={data.get('ac', 0):.3f}",
-        })
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.EMOTION_CHANGED, {
+                "source": "affective_charge",
+                "pleasure": new_p, "arousal": new_a, "dominance": new_d,
+                "emotion": _classify_emotion(new_p, new_a, new_d),
+                "intensity": round(_calculate_emotional_intensity(new_p, new_a, new_d), 2),
+                "trigger": f"ac={data.get('ac', 0):.3f}",
+            })
+        except Exception:
+            logger.warning("Failed to emit EMOTION_CHANGED from _on_affective_charge", exc_info=True)
     except Exception:
-        pass
+        logger.debug("_on_affective_charge failed", exc_info=True)
 
 
 def _on_memory_stored(data: dict):
