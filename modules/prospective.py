@@ -521,7 +521,7 @@ def check_intentions(prompt: str, current_context: str = "") -> list:
 def _check_focal(spec: dict, full_text: str) -> dict:
     """Tier 1: Fast keyword matching (spontaneous retrieval path)."""
     keywords = _normalize_keywords(spec.get("keywords", []))
-    threshold = spec.get("match_threshold", 1)
+    threshold = int(spec.get("match_threshold") or 1)
 
     if not keywords:
         return {"matched": False}
@@ -575,7 +575,7 @@ def _check_nonfocal(spec: dict, full_text: str, context_at_creation: str = "") -
             context_bonus = ctx_overlap * 0.15
 
     effective_overlap = overlap + context_bonus
-    threshold = spec.get("semantic_threshold", 0.65)
+    threshold = float(spec.get("semantic_threshold") or 0.65)
 
     if effective_overlap >= threshold:
         detail = f"Semantic overlap: {overlap:.2f}"
