@@ -1809,8 +1809,8 @@ class TestCX21_CausalProtection(unittest.TestCase):
             "consolidated": False,
         }
 
-        with patch("modules.qdrant_utils.scroll_all", return_value=[protected_point, unprotected_point]), \
-             patch("modules.wiring._pg") as mock_pg:
+        with patch("modules.wiring._pg") as mock_pg:
+            mock_pg.scroll.return_value = ([protected_point, unprotected_point], None)
             shy_downscale_ss(batch_size=10)
 
             calls = mock_pg.update_payload.call_args_list

@@ -103,8 +103,12 @@ class TestDespertarPopulates(unittest.TestCase):
         self.assertIn("qdrant down", risks[0]["text"])
 
     def test_intention_creates_next_action(self):
+        # First intention becomes goal; second (execute) becomes next_action
         items = build_spotlight(
-            intentions=[_make_intention("deploy to prod", action_type="execute")],
+            intentions=[
+                _make_intention("ship v2 release", action_type="monitor"),
+                _make_intention("deploy to prod", action_type="execute"),
+            ],
         )
         actions = [i for i in items if i["type"] == "next_action"]
         self.assertEqual(len(actions), 1)

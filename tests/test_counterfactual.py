@@ -117,7 +117,7 @@ class TestAbductionStep:
         conn = sqlite3.connect(db_path)
         conn.execute("""
             CREATE TABLE memories_text (
-                memory_id TEXT, content TEXT, topic TEXT, created_at TEXT
+                memory_id TEXT, content TEXT, category TEXT, created_at TEXT
             )
         """)
         conn.execute(
@@ -147,7 +147,7 @@ class TestAbductionStep:
         conn = sqlite3.connect(db_path)
         conn.execute("""
             CREATE TABLE memories_text (
-                memory_id TEXT, content TEXT, topic TEXT, created_at TEXT
+                memory_id TEXT, content TEXT, category TEXT, created_at TEXT
             )
         """)
         for i in range(20):
