@@ -225,7 +225,7 @@ def _on_emotion_changed(event_name: str, data: dict):
     encoding and retrieval via mood-congruent bias.
     """
     try:
-        arousal = data.get("arousal", 0.0)
+        arousal = data.get("arousal", data.get("new_state", {}).get("A", 0.0))
         emotion = data.get("emotion", "neutral")
         trigger = data.get("trigger", "")
 
