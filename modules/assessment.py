@@ -646,7 +646,7 @@ def get_consciousness_profile(evidence: Optional[Dict[str, Any]] = None) -> Dict
     integration = min(1.0, 0.6 * phi_e + 0.4 * event_diversity)
 
     # 2. Differentiation: unique event types exercised vs total possible
-    total_possible = 19  # Total events in Events class
+    total_possible = 26  # Total events in Events class (excluding _FLUSH_THRESHOLD)
     differentiation = min(1.0, at / total_possible)
 
     # 3. Prediction: PE count + prediction error infrastructure
