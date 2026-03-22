@@ -1937,9 +1937,10 @@ def _log_consolidation_run(result: dict):
     """Log a consolidation run to PostgreSQL."""
     try:
         with get_pg_conn() as conn:
-            # Ensure bridge_edges and batch_topic columns exist (idempotent)
+            # Ensure bridge_edges, batch_topic, consolidated_ids columns exist (idempotent)
             conn.execute("ALTER TABLE consolidation_log ADD COLUMN IF NOT EXISTS bridge_edges INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE consolidation_log ADD COLUMN IF NOT EXISTS batch_topic TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE consolidation_log ADD COLUMN IF NOT EXISTS consolidated_ids JSONB DEFAULT '[]'::jsonb")
 
             # Derive batch_topic from topics touched during consolidation
             topics = result.get("topics", [])

@@ -197,11 +197,18 @@ COMPRESSION_ENABLED = True
 # ============================================================
 # PHASE 1: RECONSOLIDATION PARAMETERS
 # ============================================================
-RECONSOLIDATION_WINDOW_HOURS = 1.0          # Lability window duration
+RECONSOLIDATION_WINDOW_HOURS = 6.0          # Lability window (Nader 2000: ~6h biological)
 RECONSOLIDATION_PE_THRESHOLD = 0.3          # Min prediction error to trigger
 RECONSOLIDATION_STRENGTH_FLOOR = 0.15       # Too weak to reconsolidate
 RECONSOLIDATION_STRENGTH_CEILING = 0.90     # Too strong to reconsolidate
 RECONSOLIDATION_MAX_BLEND = 0.3             # Max 30% new content blends in
+
+# 3-Zone PE Model (Sevenster et al. 2014)
+# Zone 1: RETRIEVAL - pure reactivation, no destabilization
+# Zone 2: RECONSOLIDATE - memory becomes labile, correction after deliberation
+# Zone 3: NEW LEARNING - original preserved, competing trace created
+RECONSOLIDATION_PE_ZONE_RETRIEVAL = 0.30    # PE < this: pure retrieval, no lability
+RECONSOLIDATION_PE_ZONE_NEW_LEARNING = 0.80 # PE >= this: new learning, don't modify original
 
 # ============================================================
 # PHASE 5: INLINE CONTRADICTION DETECTION (Kumaran & Maguire 2007)

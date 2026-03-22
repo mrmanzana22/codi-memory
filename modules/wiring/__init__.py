@@ -98,6 +98,28 @@ def _on_memory_stored(event_name: str, data: dict):
                 relevance=min(1.0, importance),
                 source="event_bus",
             )
+
+        # Proposal 376: Interoceptive PE -> PAD (Seth 2013, Barrett 2017)
+        try:
+            from modules.emotion import compute_interoceptive_pe, INTERO_PAD_BLEND
+            from modules.emotion import _set_emotional_state_impl
+            from modules.config import _emotional_state
+            intero = compute_interoceptive_pe()
+            if intero is not None:
+                cur = _emotional_state["current"]
+                from modules.utils import _clamp_pad_value
+                new_p = _clamp_pad_value(cur["pleasure"] + intero["pleasure_delta"] * INTERO_PAD_BLEND)
+                new_a = _clamp_pad_value(cur["arousal"] + intero["arousal_boost"] * INTERO_PAD_BLEND)
+                new_d = cur["dominance"]  # Interoception does not affect dominance (Seth 2013)
+                delta = abs(new_p - cur["pleasure"]) + abs(new_a - cur["arousal"])
+                if delta >= 0.005:
+                    _set_emotional_state_impl(new_p, new_a, new_d, trigger="interoceptive_pe")
+                    _logger.debug("interoceptive PE: P=%+.3f A=%+.3f (wm=%.2f debt=%d pe=%.2f)",
+                                  intero["pleasure_delta"], intero["arousal_boost"],
+                                  intero["metrics"]["wm_load"], intero["metrics"]["consol_debt"],
+                                  intero["metrics"]["pe_rate"])
+        except Exception:
+            pass  # Graceful: interoception is supplementary, never blocks storage
     except Exception as e:
         _logger.error("_on_memory_stored error: %s", redact_secrets(str(e)))
 
@@ -938,23 +960,33 @@ def _on_retrieval_quality(event_name: str, data: dict):
 def _on_contradiction_detected(event_name: str, data: dict):
     """When contradiction is detected at encoding time.
 
+    3-Zone PE Model (Sevenster et al. 2014):
+      Zone 1 (RETRIEVAL):      PE < 0.30  - no destabilization (handled upstream)
+      Zone 2 (RECONSOLIDATE):  0.30-0.80  - mark labile, queue for deliberation
+      Zone 3 (NEW LEARNING):   PE >= 0.80 - preserve original, create competing trace
+
     CA1 mismatch signal triggers:
     1. Attention capture (push to WM)
-    2. Reconsolidation window (mark old memory as labile)
-    3. Attention schema update
+    2. Reconsolidation window (mark old memory as labile) -- Zone 2 only
+    3. Competing trace linkage (contested_by field) -- Zone 3 only
+    4. Attention schema update
     """
     try:
         pe = data.get("pe", 0.0)
         old_memory_id = data.get("conflicting_memory_id", "")
         old_text = data.get("conflicting_text", "")
         new_text = data.get("new_content", "")
+        new_memory_id = data.get("new_memory_id", "")
         shared_entities = data.get("shared_entities", [])
 
         from modules.working_memory import push_to_working_memory
-        from modules.config import CONTRADICTION_PE_ALERT
+        from modules.config import (
+            CONTRADICTION_PE_ALERT,
+            RECONSOLIDATION_PE_ZONE_NEW_LEARNING,
+        )
 
         if pe >= CONTRADICTION_PE_ALERT:
-            # High PE: explicit alert + mark labile + queue suggestion
+            # High PE: explicit alert
             alert = (
                 f"[CONTRADICTION PE={pe:.2f}] "
                 f"New: '{new_text[:100]}...' conflicts with "
@@ -967,35 +999,40 @@ def _on_contradiction_detected(event_name: str, data: dict):
                 relevance=min(0.95, 0.6 + pe),
                 source="contradiction_detector",
             )
-            # Mark old memory as labile
-            if old_memory_id:
-                try:
-                    from modules.consolidation import mark_as_labile
-                    mark_as_labile(
-                        memory_id=old_memory_id,
-                        prediction_error=pe,
-                        trigger_context=f"Inline PE at encoding: {new_text[:200]}"
-                    )
-                except Exception:
-                    pass
 
-                # Proposal #65 Fix 2: Auto-reconsolidation for high-PE contradictions
-                # Nader 2000: PE during reactivation → labile → reconsolidate with new content
-                # Sevenster et al. 2013: contradiction PE (not topic PE) is the correct trigger
-                if pe >= 0.6:
-                    try:
-                        from modules.reconsolidation import _correct_memory_impl
-                        result = _correct_memory_impl(
-                            memory_id=old_memory_id,
-                            correction=new_text,
-                            force=True,  # PE already validated
-                            bypass_guard=True,  # trusted internal caller
-                        )
-                        _logger.info("Auto-reconsolidation: %s", result)
-                    except Exception:
-                        pass
-                else:
-                    # Moderate PE (0.3-0.6): queue for review (suggest mode)
+            if old_memory_id:
+                if pe >= RECONSOLIDATION_PE_ZONE_NEW_LEARNING:
+                    # ── Zone 3: NEW LEARNING (Sevenster 2014) ──
+                    # PE so high the original trace is NOT destabilized.
+                    # Biology: this is extinction, not reconsolidation.
+                    # Action: preserve original, link competing trace.
+                    _logger.info(
+                        "Zone 3 NEW LEARNING: PE=%.2f >= %.2f — "
+                        "preserving original %s, linking contested_by=%s",
+                        pe, RECONSOLIDATION_PE_ZONE_NEW_LEARNING,
+                        old_memory_id[:8], new_memory_id[:8],
+                    )
+                    if new_memory_id:
+                        try:
+                            # Append to contested_by list on the original memory
+                            pts = _pg.get_by_ids([old_memory_id])
+                            contested = []
+                            if pts:
+                                existing = (pts[0].payload or {}).get("contested_by", [])
+                                if isinstance(existing, list):
+                                    contested = existing
+                            contested.append({
+                                "memory_id": new_memory_id,
+                                "pe": round(pe, 3),
+                                "timestamp": now_iso(),
+                            })
+                            _pg.update_payload(old_memory_id, {
+                                "contested_by": contested,
+                            })
+                        except Exception as exc:
+                            _logger.warning("Zone 3 contested_by failed: %s", exc)
+
+                    # Queue for review with extended window
                     try:
                         from modules.consolidation import queue_correction_suggestion
                         channels = data.get("channels", {})
@@ -1004,14 +1041,51 @@ def _on_contradiction_detected(event_name: str, data: dict):
                             old_text=old_text,
                             new_text=new_text,
                             prediction_error=pe,
-                            new_memory_id=data.get("new_memory_id", ""),
+                            new_memory_id=new_memory_id,
+                            shared_entities=shared_entities,
+                            channels=channels,
+                            window_hours=48.0,
+                        )
+                    except Exception:
+                        pass
+
+                else:
+                    # ── Zone 2: RECONSOLIDATE (Sevenster 2014) ──
+                    # 0.30 <= PE < 0.80: mark labile, queue for deliberation.
+                    # Do NOT auto-correct. Let the sleep loop's
+                    # reconsolidation tick accumulate evidence within the
+                    # 6-hour window before deciding.
+                    _logger.info(
+                        "Zone 2 RECONSOLIDATE: PE=%.2f — "
+                        "marking %s labile, queuing for deliberation",
+                        pe, old_memory_id[:8],
+                    )
+                    try:
+                        from modules.consolidation import mark_as_labile
+                        mark_as_labile(
+                            memory_id=old_memory_id,
+                            prediction_error=pe,
+                            trigger_context=f"Inline PE at encoding: {new_text[:200]}"
+                        )
+                    except Exception:
+                        pass
+
+                    try:
+                        from modules.consolidation import queue_correction_suggestion
+                        channels = data.get("channels", {})
+                        queue_correction_suggestion(
+                            old_memory_id=old_memory_id,
+                            old_text=old_text,
+                            new_text=new_text,
+                            prediction_error=pe,
+                            new_memory_id=new_memory_id,
                             shared_entities=shared_entities,
                             channels=channels,
                         )
                     except Exception:
                         pass
         else:
-            # Moderate PE: silent note
+            # Below CONTRADICTION_PE_ALERT: silent note
             push_to_working_memory(
                 content=f"[PE NOTE] Tension detected (PE={pe:.2f}) with memory {old_memory_id[:8]}",
                 topic="metamemory",
@@ -1024,7 +1098,7 @@ def _on_contradiction_detected(event_name: str, data: dict):
             focus=f"contradiction:{','.join(shared_entities[:3])}",
             driver="contradiction_detected",
             strength=min(1.0, pe),
-            value=min(1.0, pe),  # V: contradiction PE = high destabilizing signal
+            value=min(1.0, pe),
         )
 
     except Exception as e:
@@ -1406,7 +1480,11 @@ def _on_pe_drives_curiosity(event_name: str, data: dict):
 
         # Goldilocks zone (Kidd & Hayden 2015, Kidd 2012): skip noise and boring
         # Lower bound 0.3 per neuro-skill v2 review (proposal 187)
-        if error_magnitude < 0.3 or error_magnitude > 0.95:
+        # P373 Fix 3: Sleep PE dampened 0.6x (Lewis & Durrant 2011).
+        # Adjust floor to 0.18 for sleep sources so dampened PE can still pass.
+        source = data.get("source", "")
+        floor = 0.18 if source.startswith("sleep_") else 0.3
+        if error_magnitude < floor or error_magnitude > 0.95:
             return
 
         # Cooldown per topic (prevent runaway curiosity)
@@ -1767,9 +1845,15 @@ def _on_gnw_broadcast_to_action(event_name: str, data: dict):
         # NOVELTY GATE: Only non-routine situations invoke workspace→action
         attention = get_attention_schema()
         current_pe = attention.get("attention_prediction_error", 0)
-        if current_pe < _PE_NOVELTY_GATE:
+        # Sleep competition is inherently novel — no user query to be "routine" about.
+        # Walker 2009: REM replay IS novel association. Skip PE gate for sleep.
+        competition_id = data.get("competition_id", "")
+        is_sleep = any(d == "working_memory" for d in winner_domains) and not attention.get("current_focus")
+        if current_pe < _PE_NOVELTY_GATE and not is_sleep:
             _broadcast_context = None  # Routine — habitual pathway (Hommel 2013)
             return
+        if is_sleep:
+            current_pe = max(current_pe, top_activation * 0.3)  # Use activation as PE proxy
 
         _broadcast_context = {
             "broadcast_domains": winner_domains,
@@ -1791,6 +1875,7 @@ def _on_gnw_broadcast_to_action(event_name: str, data: dict):
             source="gnw_action_bridge",
         )
 
+        report_effective_fire('CX-5')
         _logger.info("CX-5 GNW→AI: domains=%s, activation=%.2f, PE=%.2f",
                       winner_domains, top_activation, current_pe)
     except Exception as e:
@@ -2223,6 +2308,7 @@ def _on_workspace_to_self_model(event_name: str, data: dict):
 
         t = threading.Thread(target=_bg_reflect, daemon=True, name="cx9-self-refresh")
         t.start()
+        report_effective_fire('CX-9')
     except Exception as e:
         _logger.warning("CX-9 error: %s", redact_secrets(str(e)))
 
@@ -3282,6 +3368,7 @@ def _on_workspace_retrieval_modulates_forgetting(event_name: str, data: dict):
                         except Exception:
                             continue
                     if suppressed > 0:
+                        report_effective_fire('CX-25')
                         _logger.info(
                             "CX-25 GNW→forget: RIF applied to %d/%d same-domain losers (domains=%s)",
                             suppressed, len(rif_targets), winner_domains,
@@ -3289,6 +3376,7 @@ def _on_workspace_retrieval_modulates_forgetting(event_name: str, data: dict):
         except Exception as e:
             _logger.debug("CX-25 error: %s", e)
 
+    report_effective_fire('CX-25')  # Fire on entry (RIF attempt, even if no targets)
     threading.Thread(target=_apply, daemon=True).start()
 
 

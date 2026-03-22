@@ -97,8 +97,33 @@ DEFAULT_MAX_AGE_MIN = 30   # Only run if checkpoint < 30 min old w/o report
 # Fast loop: only these ticks run in --fast mode (pure Python, $0 LLM cost)
 FAST_TICKS = {"prospective", "health", "proactive_contact", "self_model"}
 
-# Tick order: fast first, heavy last (so budget exhaustion doesn't starve fast ticks)
-TICK_ORDER = ["prospective", "health", "health_snapshot", "self_model", "fhrr_encoding", "reconsolidation", "consolidation", "homeostasis", "curiosity", "curiosity_resolve", "backup", "causal_discovery", "sharpe_insights", "proactive_contact", "cx_health", "recall_eval", "cognitive_health"]
+# P375: Sleep loop tick ordering — 5-phase SWS/REM architecture
+# Based on Diekelmann & Born 2010, Walker 2009, Wagner et al. 2004
+TICK_ORDER = [
+    # --- Phase 1: Wake Maintenance ---
+    "prospective",       # Tier 1 | Intention maintenance
+    "health",            # Tier 1 | FTS sync, system health check
+    "proactive_contact", # Tier 1 | User outreach (budget-fresh)
+    "health_snapshot",   # Tier 2 | Operational snapshot
+    # --- Phase 2: SWS Cycle 1 (replay + consolidate) ---
+    "fhrr_encoding",     # Tier 2 | Hippocampal offline replay
+    "reconsolidation",   # Tier 2 | Labile memory correction
+    "consolidation",     # Tier 3 | Heavy memory consolidation
+    # --- Phase 3: REM Cycle 1 (integrate + create associations) ---
+    "homeostasis",       # Tier 2 | Synaptic downscaling
+    "dream_competition", # Tier 3 | GNW sleep competition (Walker 2009)
+    "sharpe_insights",   # Tier 3 | Cross-domain creative association
+    "curiosity",         # Tier 3 | Question generation
+    # --- Phase 4: SWS Cycle 2 (structural learning + reflection) ---
+    "causal_discovery",  # Tier 4 | NOTEARS DAG structural learning
+    "self_model",        # Tier 2 | Metacognitive reflection (post-consolidation)
+    # --- Phase 5: REM Cycle 2 + Dawn (resolve + evaluate + backup) ---
+    "curiosity_resolve", # Tier 3 | Auto-resolve curiosities
+    "cognitive_health",  # Tier 3 | Cognitive contracts evaluation
+    "backup",            # Tier 3 | System backup (post-processing state)
+    "recall_eval",       # Tier 3 | Retrieval quality measurement
+    "cx_health",         # Tier 2 | CX observability snapshot
+]
 
 # S0-05: VOC tiering (CL-12). Was: all 8 ticks every loop. Now: tiered by Value of Computation.
 # Tier 1 (every tick): fast, high-value maintenance
@@ -116,6 +141,7 @@ TICK_TIER = {
     "backup": 3,                # Heavy (Qdrant snapshots)
     "causal_discovery": 4,      # Very heavy (NOTEARS optimization, every 12th tick ~6h)
     "curiosity_resolve": 3,     # Tier 3: auto-resolve curiosities via Ollama (every 6th tick, was Tier 4)
+    "dream_competition": 3,      # GNW sleep competition (Walker 2009)
     "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
     "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
     "cx_health": 2,               # CPO v2: CX observability snapshot + HTML dashboard update
@@ -184,6 +210,7 @@ class SleepWorldModel:
         "recall_eval":        {},  # Recall quality measurement — no direct state effect
         "fhrr_encoding":      {},  # Hippocampal replay — no direct state effect
         "cognitive_health":   {},  # Cognitive contracts evaluation — no direct state effect
+        "dream_competition":  {},  # GNW sleep competition — no direct homeostatic effect
     }
 
     LEARNING_RATE = 0.3  # EMA alpha for learned effects
@@ -481,6 +508,7 @@ TICK_MAX_MS = {
     "proactive_contact": 3000,   # was 2000
     "cx_health": 5000,            # CPO v2: snapshot + HTML update
     "fhrr_encoding": 15000,       # load_all_sessions(~8s) + prototypes(<2s) + synonyms(<1s)
+    "dream_competition": 15000,   # GNW sleep competition — PG queries + competition + recurrent amp
 }
 
 
@@ -965,6 +993,21 @@ def _tick_reconsolidation(budget_ms: int) -> dict:
                             "error_magnitude": avg_pe * 0.6,  # Dampened for sleep context
                             "confidence": 1.0 - avg_pe,
                             "source": "sleep_l2_validation",
+                        })
+                except Exception:
+                    pass
+
+                # P373 Fix 2: Emit METACOGNITIVE_CONTROL_APPLIED for sleep-loop
+                # metacognitive decisions. L2 validation is a metacognitive
+                # control act: domain PE evaluated → memories flagged.
+                # Enables CX-20, CX-24, CX-27 in sleep.
+                try:
+                    for domain, avg_pe, _ in flagged_domains[:MAX_FLAG_PER_CYCLE]:
+                        event_bus.emit(Events.METACOGNITIVE_CONTROL_APPLIED, {
+                            "strategy": "sleep_l2_reconsolidation",
+                            "adjusted_limit": 1,
+                            "fok_score": max(0.0, 1.0 - avg_pe),
+                            "domain": domain,
                         })
                 except Exception:
                     pass
@@ -1530,19 +1573,6 @@ def _tick_curiosity_resolve(budget_ms: int) -> dict:
             except Exception:
                 pass  # Don't fail the tick if LT save fails
 
-            # Emit event for wiring.py reactivity
-            try:
-                from modules.events import event_bus, Events
-                event_bus.emit(Events.CURIOSITY_RESOLVED, {
-                    "curiosidad_id": candidate["id"],
-                    "question": question,
-                    "category": category,
-                    "source": source,
-                    "answer_length": len(answer),
-                })
-            except Exception:
-                pass
-
             result["ok"] = True
             result["detail"] = (
                 f"resolved #{candidate['id']} ({source}): "
@@ -1870,6 +1900,177 @@ def _tick_causal_discovery(budget_ms: int) -> dict:
         result["detail"] = f"error: {str(e)[:80]}"
         result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
 
+    return result
+
+
+def _tick_dream_competition(budget_ms: int) -> dict:
+    """GNW sleep competition — computational dreaming (Walker 2009, Diekelmann & Born 2010).
+
+    During REM, hippocampal traces compete for neocortical integration.
+    We run workspace competition with sleep-adjusted parameters:
+    - Lower ignition (0.15 vs 0.25): dreams are permissive
+    - Lower gamma (4.0 vs 8.0): more random = creative associations
+    - Fewer slots (3 vs 5): less focused than waking
+    - No attention focus: undirected replay
+
+    Candidates sourced from: WM active items, recently consolidated memories,
+    high-PE predictions, and self-model summary.
+
+    Activates: CX-5 (L3->L7), CX-9 (L3->L9), CX-16 (L3->L5), CX-25 (L3->L10).
+    """
+    start = time.monotonic()
+    result = {"tick": "dream_competition", "ok": False, "detail": ""}
+
+    # Sleep competition parameters (Walker 2009)
+    SLEEP_IGNITION = 0.15       # Lower than wake 0.25
+    SLEEP_GAMMA = 4.0           # Lower gamma = more random = creative
+    SLEEP_SLOTS = 3             # Fewer winners in sleep
+    MIN_CANDIDATES = 3          # Need at least 3 to compete
+
+    try:
+        from modules.competition import (
+            CompetitionCandidate, run_workspace_competition,
+            IGNITION_THRESHOLD, SOFTMAX_TEMPERATURE,
+        )
+        import modules.competition as _comp
+
+        candidates = []
+
+        # --- Source 1: Working memory active items (what's "on the mind") ---
+        try:
+            from modules.working_memory import wm_get_active_items
+            wm_items = wm_get_active_items(limit=10)
+            for item in wm_items:
+                candidates.append(CompetitionCandidate(
+                    content=str(item.get("content", ""))[:200],
+                    source_domain="working_memory",
+                    activation=float(item.get("relevance", 0.5)),
+                    memory_id="",
+                    metadata={"topic": item.get("topic", "general"), "source": "dream_wm"},
+                ))
+        except Exception:
+            pass
+
+        # --- Source 2: Recent episodic memories (lightweight PG query, no vector search) ---
+        try:
+            from modules.config_pg import get_conn as _get_pg_conn
+            with _get_pg_conn() as pg_conn:
+                rows = pg_conn.execute(
+                    """SELECT id, memory, importance, category,
+                              metadata->>'narrative_themes' as themes
+                       FROM codi_memories
+                       ORDER BY created_at DESC LIMIT 8"""
+                ).fetchall()
+                for row in rows:
+                    mem_id, content, importance, category, themes = row
+                    imp_map = {"critical": 0.9, "high": 0.75, "medium": 0.5, "low": 0.3}
+                    act = imp_map.get(str(importance), 0.5)
+                    candidates.append(CompetitionCandidate(
+                        content=str(content or "")[:200],
+                        source_domain="episodic",
+                        activation=min(1.0, act + 0.1),
+                        memory_id=str(mem_id) if mem_id else "",
+                        metadata={
+                            "topic": str(themes or category or "general")[:30],
+                            "source": "dream_episodic",
+                        },
+                    ))
+        except Exception:
+            pass
+
+        # --- Source 3: High-PE predictions (surprising items from last 12h) ---
+        try:
+            from modules.config import FTS_DB_PATH, connect_fts
+            from datetime import datetime, timedelta
+            conn = connect_fts(FTS_DB_PATH)
+            cutoff = (datetime.now() - timedelta(hours=12)).isoformat()[:19]
+            pe_rows = conn.execute(
+                """SELECT predicted_topic, surprise_score
+                   FROM prediction_results
+                   WHERE created_at > ? AND hit = 0
+                   ORDER BY surprise_score DESC LIMIT 5""",
+                (cutoff,),
+            ).fetchall()
+            for topic, score in pe_rows:
+                if topic and score and float(score) > 0.3:
+                    candidates.append(CompetitionCandidate(
+                        content=f"[PE] Surprising activity in '{topic}' (score={score:.2f})",
+                        source_domain="prediction",
+                        activation=min(1.0, float(score)),
+                        memory_id="",
+                        metadata={"topic": topic, "source": "dream_pe"},
+                    ))
+        except Exception:
+            pass
+
+        # --- Source 4: Self-model from cached sleep_loop_state (fast, no LLM) ---
+        try:
+            conn_s = _get_conn()
+            row = conn_s.execute(
+                "SELECT value FROM sleep_loop_state WHERE key = 'last_self_summary'"
+            ).fetchone()
+            conn_s.close()
+            if row and row[0] and len(row[0]) > 10:
+                candidates.append(CompetitionCandidate(
+                    content=str(row[0])[:200],
+                    source_domain="semantic",
+                    activation=0.55,
+                    memory_id="",
+                    metadata={"topic": "identity", "source": "dream_self"},
+                ))
+        except Exception:
+            pass
+
+        if len(candidates) < MIN_CANDIDATES:
+            result["ok"] = True
+            result["detail"] = f"insufficient candidates ({len(candidates)}<{MIN_CANDIDATES})"
+            return result
+
+        # Pre-seed attention PE BEFORE competition so CX-5/CX-9 gates pass.
+        # Walker 2009: REM replay IS novel — set PE > 0.2 gate threshold.
+        try:
+            from modules.wiring import _attention_schema
+            _attention_schema["attention_prediction_error"] = 0.35
+            _attention_schema["current_focus"] = ""  # No directed focus in sleep
+            _attention_schema["driver"] = "dream_competition"
+        except Exception:
+            pass
+
+        # --- Run competition with sleep parameters ---
+        # Temporarily patch competition constants for sleep mode
+        orig_ignition = _comp.IGNITION_THRESHOLD
+        orig_gamma = _comp.SOFTMAX_TEMPERATURE
+        try:
+            _comp.IGNITION_THRESHOLD = SLEEP_IGNITION
+            _comp.SOFTMAX_TEMPERATURE = SLEEP_GAMMA
+            comp_result = run_workspace_competition(
+                candidates=candidates,
+                slots=SLEEP_SLOTS,
+                current_focus=None,  # No directed attention in sleep
+            )
+        finally:
+            _comp.IGNITION_THRESHOLD = orig_ignition
+            _comp.SOFTMAX_TEMPERATURE = orig_gamma
+
+        winner_count = len(comp_result.winners)
+        loser_count = len(comp_result.losers)
+        top_act = comp_result.winners[0].activation if comp_result.winners else 0.0
+
+        result["ok"] = True
+        result["detail"] = (
+            f"{winner_count} winners, {loser_count} losers, "
+            f"top={top_act:.2f}, candidates={len(candidates)}"
+        )
+        _logger.info(
+            "Dream competition: %d winners/%d losers (top=%.2f) from %d candidates",
+            winner_count, loser_count, top_act, len(candidates),
+        )
+
+    except Exception as e:
+        result["detail"] = f"error: {str(e)[:80]}"
+        _logger.warning("Dream competition error: %s", e)
+
+    result["elapsed_ms"] = round((time.monotonic() - start) * 1000)
     return result
 
 
@@ -2882,6 +3083,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
         "curiosity_resolve": _tick_curiosity_resolve,
         "backup": _tick_backup,
         "causal_discovery": _tick_causal_discovery,
+        "dream_competition": _tick_dream_competition,
         "sharpe_insights": _tick_sharpe_insights,
         "proactive_contact": _tick_proactive_contact,
         "cx_health": _tick_cx_health,
@@ -2934,6 +3136,22 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
         ordered_ticks = world_model.prioritize_ticks(eligible_ticks)
     except Exception:
         ordered_ticks = eligible_ticks  # Fallback to original order
+
+    # Group C: Emit ACTION_SELECTED for sleep tick prioritization (CX-30 causal learning)
+    # The world model selecting which ticks to run IS an action selection.
+    # CX-22 correctly gates this (Louie & Wilson 2001). CX-30 processes it
+    # as interventional evidence for causal DAG (Pearl 2009).
+    if ordered_ticks:
+        try:
+            from modules.events import event_bus, Events
+            event_bus.emit(Events.ACTION_SELECTED, {
+                "action": f"sleep_prioritize:{ordered_ticks[0]}",
+                "state_topic": ordered_ticks[0],
+                "efe_spread": 0.3,  # Moderate spread — world model is uncertain
+                "source": "sleep_loop",  # CX-22 gates this (Louie & Wilson 2001)
+            })
+        except Exception:
+            pass
 
     # Phase 3: Execute ticks in world-model-prioritized order
     for _tick_idx, name in enumerate(ordered_ticks):

@@ -743,9 +743,9 @@ def evolve_pad_from_text(text: str) -> dict:
 # P = sign(AC) * |AC|, A = Var(AC), D = controllability estimate.
 
 # AC→PAD scaling (AC values are typically small, ~-0.3 to 0.3)
-_AC_PLEASURE_SCALE = 3.0     # Amplify AC to PAD range [-1, 1]
-_AC_AROUSAL_SCALE = 10.0     # Variance is small, need amplification
-_AC_DOMINANCE_SCALE = 2.0    # Controllability scaling
+_AC_PLEASURE_SCALE = 8.0     # Amplified: AC values ~0.001-0.06 need boost to PAD range (Hesp 2021)
+_AC_AROUSAL_SCALE = 25.0     # Amplified: variance even smaller, needs more gain
+_AC_DOMINANCE_SCALE = 5.0    # Amplified: controllability needs boost too
 _AC_PAD_BLEND = 0.6          # Blend: 60% AC-derived, 40% text-inferred
 
 
@@ -836,7 +836,7 @@ def _on_affective_charge(data: dict):
 
         # Only update if there's meaningful change (avoid noise)
         delta = abs(new_p - current["pleasure"]) + abs(new_a - current["arousal"]) + abs(new_d - current["dominance"])
-        if delta < 0.01:
+        if delta < 0.001:  # Lowered from 0.01: allow accumulation of small AC signals (Hesp 2021)
             return
 
         _emotional_state["history"].append(current.copy())
@@ -918,6 +918,121 @@ def _on_memory_stored(data: dict):
         evolve_pad_from_text(content)
     except Exception:
         pass
+
+
+# ============================================================
+# INTEROCEPTIVE PREDICTION ERROR (Proposal 376)
+# Seth 2013, Barrett 2017: continuous body-budget monitoring
+# ============================================================
+
+# Homeostatic setpoints — the "expected" body state
+_INTERO_SETPOINT_WM_LOAD = 0.40       # 40% WM capacity = healthy engagement
+_INTERO_SETPOINT_CONSOL_DEBT = 15     # 15 unconsolidated memories = normal backlog
+_INTERO_SETPOINT_PE_RATE = 0.30       # 30% prediction miss rate = normal learning
+
+# Weights for pleasure computation (how much each signal matters)
+_INTERO_W_WM = 0.40                   # WM overload is most immediately felt
+_INTERO_W_CONSOL = 0.35               # Consolidation debt is slower-building stress
+_INTERO_W_PE = 0.25                   # Prediction errors = model uncertainty
+
+# Output caps (max drift per call, prevents jumps)
+_INTERO_MAX_PLEASURE = 0.15           # Max |pleasure_delta| per interoceptive read
+_INTERO_MAX_AROUSAL = 0.10            # Max arousal_boost per read
+
+# Blend weight when mixing into PAD (called from wiring)
+INTERO_PAD_BLEND = 0.30               # 30% interoceptive, 70% existing PAD
+
+
+def compute_interoceptive_pe():
+    """Compute PAD deltas from system health metrics (interoceptive signals).
+
+    Seth 2013: Interoceptive prediction errors drive emotional valence.
+    Barrett 2017: Continuous body-budget accounting, not event-triggered.
+
+    Returns:
+        dict with {pleasure_delta, arousal_boost, metrics} or None if
+        metrics are unavailable (graceful degradation).
+    """
+    try:
+        # --- Signal 1: Working Memory load ---
+        try:
+            from modules.working_memory import wm_get_active_count
+            from modules.core.constants import WORKING_MEMORY_MAX_ACTIVE
+            wm_count = wm_get_active_count()
+            wm_load = wm_count / max(WORKING_MEMORY_MAX_ACTIVE, 1)
+        except Exception:
+            wm_load = 0.5  # Assume midpoint if unavailable
+
+        # --- Signal 2: Consolidation debt ---
+        try:
+            from modules.semantic_store import count_unconsolidated_episodic
+            consol_debt = count_unconsolidated_episodic(lookback_hours=6)
+        except Exception:
+            consol_debt = _INTERO_SETPOINT_CONSOL_DEBT  # Assume normal if unavailable
+
+        # --- Signal 3: Prediction error rate (last 6h from SQLite) ---
+        pe_rate = _INTERO_SETPOINT_PE_RATE  # Default: assume normal
+        try:
+            from modules.config import FTS_DB_PATH, connect_fts
+            from datetime import datetime, timedelta
+            conn = connect_fts(FTS_DB_PATH)
+            cutoff = (datetime.now() - timedelta(hours=6)).isoformat()[:19]
+            row = conn.execute(
+                """SELECT COUNT(*),
+                          SUM(CASE WHEN hit = 0 THEN 1 ELSE 0 END)
+                   FROM prediction_results WHERE created_at > ?""",
+                (cutoff,),
+            ).fetchone()
+            if row and row[0] and row[0] >= 5:  # Need at least 5 predictions
+                total, misses = int(row[0]), int(row[1] or 0)
+                pe_rate = misses / total
+        except Exception:
+            pass  # SQLite table may not exist; keep default
+
+        # --- Compute deviations from setpoints ---
+        dev_wm = (wm_load - _INTERO_SETPOINT_WM_LOAD) / max(_INTERO_SETPOINT_WM_LOAD, 0.01)
+        dev_wm = max(-1.0, min(1.0, dev_wm))
+
+        dev_consol = (consol_debt - _INTERO_SETPOINT_CONSOL_DEBT) / max(_INTERO_SETPOINT_CONSOL_DEBT, 1)
+        dev_consol = max(-1.0, min(1.0, dev_consol))
+
+        dev_pe = (pe_rate - _INTERO_SETPOINT_PE_RATE) / max(_INTERO_SETPOINT_PE_RATE, 0.01)
+        dev_pe = max(-1.0, min(1.0, dev_pe))
+
+        # --- Pleasure delta: weighted sum of NEGATIVE deviations ---
+        # Above setpoint = stress = negative pleasure (Seth 2013)
+        # Below setpoint = comfort = positive pleasure
+        raw_pleasure = -(
+            _INTERO_W_WM * dev_wm
+            + _INTERO_W_CONSOL * dev_consol
+            + _INTERO_W_PE * dev_pe
+        )
+        pleasure_delta = max(-_INTERO_MAX_PLEASURE, min(_INTERO_MAX_PLEASURE, raw_pleasure))
+
+        # --- Arousal boost: ANY deviation from homeostasis increases arousal ---
+        # Barrett 2017: arousal = metabolic mobilization regardless of valence
+        raw_arousal = (
+            abs(dev_wm) * _INTERO_W_WM
+            + abs(dev_consol) * _INTERO_W_CONSOL
+            + abs(dev_pe) * _INTERO_W_PE
+        )
+        arousal_boost = min(_INTERO_MAX_AROUSAL, raw_arousal * 0.15)
+
+        return {
+            "pleasure_delta": round(pleasure_delta, 4),
+            "arousal_boost": round(arousal_boost, 4),
+            "metrics": {
+                "wm_load": round(wm_load, 3),
+                "consol_debt": consol_debt,
+                "pe_rate": round(pe_rate, 3),
+                "dev_wm": round(dev_wm, 3),
+                "dev_consol": round(dev_consol, 3),
+                "dev_pe": round(dev_pe, 3),
+            },
+        }
+    except Exception:
+        logger.debug("compute_interoceptive_pe failed", exc_info=True)
+        return None
 
 
 def register_tools(mcp):
