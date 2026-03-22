@@ -94,13 +94,13 @@ def build_cooccurrence_matrix(conn: sqlite3.Connection) -> Tuple[np.ndarray, Lis
     # Fill from attention_transitions (from_topic → to_topic)
     try:
         rows = conn.execute(
-            "SELECT from_topic, to_topic, count FROM attention_transitions "
+            "SELECT from_topic, to_topic FROM attention_transitions "
             "WHERE from_topic IS NOT NULL AND to_topic IS NOT NULL"
         ).fetchall()
-        for from_t, to_t, count in rows:
+        for from_t, to_t in rows:
             if from_t in topic_idx and to_t in topic_idx and from_t != to_t:
                 i, j = topic_idx[from_t], topic_idx[to_t]
-                X[i][j] += float(count or 1)
+                X[i][j] += 1.0  # Fix: table has no 'count' column
     except Exception:
         pass
 
@@ -120,8 +120,8 @@ def build_cooccurrence_matrix(conn: sqlite3.Connection) -> Tuple[np.ndarray, Lis
     # Add co-occurrence within same session window (prediction_results proximity)
     try:
         rows = conn.execute(
-            "SELECT topic, created_at FROM prediction_results "
-            "WHERE topic IS NOT NULL ORDER BY created_at ASC LIMIT 500"
+            "SELECT actual_topic, created_at FROM prediction_results "
+            "WHERE actual_topic IS NOT NULL ORDER BY created_at ASC LIMIT 500"
         ).fetchall()
 
         # Find pairs within 5-minute windows

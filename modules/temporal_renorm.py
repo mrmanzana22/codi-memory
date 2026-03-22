@@ -119,7 +119,7 @@ def extract_events(clusters: list, conn: sqlite3.Connection = None) -> list:
             "episode_count": len(episode_ids),
             "time_start": time_start,
             "time_end": time_end,
-            "summary": f"Event: {len(episode_ids)} episodes about {topic} ({time_start[:10]}—{time_end[:10]})",
+            "summary": f"Event: {len(episode_ids)} episodes about {topic} ({str(time_start)[:10]}—{str(time_end)[:10]})",
         }
         events.append(event)
 
