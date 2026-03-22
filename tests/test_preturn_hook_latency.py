@@ -347,13 +347,8 @@ class TestLatencyBudgetKnownIssues:
     To fix: see track_J_j_0_4_profiling_report.md, Fixes P0-1, P0-2, P0-3.
     """
 
-    @pytest.mark.xfail(
-        reason="KNOWN: _update_attention_from_prompt has lock contention issue (J.0.4 Fix P0-1). "
-               "Expected: <8ms. Actual: ~3128ms under production load. "
-               "Fix: use pooled connection + remove DDL from hot path."
-    )
     def test_update_attention_under_8ms_KNOWN_BROKEN(self, temp_fts_db):
-        """_update_attention_from_prompt should be <8ms per J.0.4 comment, but is 3128ms."""
+        """_update_attention_from_prompt should be <8ms (lock contention fixed by J.0.4 P0-1)."""
         import hooks.preturn_inject as hook
         original = hook.FTS_DB_PATH
         hook.FTS_DB_PATH = temp_fts_db
