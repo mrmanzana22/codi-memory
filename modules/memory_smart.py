@@ -784,20 +784,16 @@ def _auto_enrich_content(content: str, category: str) -> str:
     except Exception:
         pass
 
-    # 3. Active goal title
+    # 3. Active goal title (PostgreSQL — goals migrated from SQLite)
     try:
-        from modules.config import connect_fts, FTS_DB_PATH
-        if os.path.exists(FTS_DB_PATH):
-            conn = connect_fts(FTS_DB_PATH)
-            try:
-                row = conn.execute(
-                    "SELECT title FROM goals WHERE status = 'active' "
-                    "ORDER BY activation DESC LIMIT 1"
-                ).fetchone()
-            finally:
-                conn.close()
-            if row and row[0]:
-                enrichments.append(f"[goal: {row[0]}]")
+        from modules.config_pg import get_conn as _pg_conn
+        with _pg_conn() as conn:
+            row = conn.execute(
+                "SELECT title FROM goals WHERE status = 'active' "
+                "ORDER BY activation DESC LIMIT 1"
+            ).fetchone()
+        if row and row[0]:
+            enrichments.append(f"[goal: {row[0]}]")
     except Exception:
         pass
 
