@@ -1393,6 +1393,26 @@ def _tick_homeostasis(budget_ms: int) -> dict:
         failed = True
         parts.append(f"salience: error {redact_secrets(str(e))[:50]}")
 
+    # Interoceptive PE → PAD (P376: Seth 2013, Barrett 2017)
+    # Must run in sleep loop because MEMORY_STORED doesn't fire here.
+    try:
+        _load_pad_from_db()
+        from modules.emotion import compute_interoceptive_pe, INTERO_PAD_BLEND
+        from modules.emotion import _set_emotional_state_impl
+        from modules.config import _emotional_state
+        from modules.utils import _clamp_pad_value
+        intero = compute_interoceptive_pe()
+        if intero is not None:
+            cur = _emotional_state["current"]
+            new_p = _clamp_pad_value(cur["pleasure"] + intero["pleasure_delta"] * INTERO_PAD_BLEND)
+            new_a = _clamp_pad_value(cur["arousal"] + intero["arousal_boost"] * INTERO_PAD_BLEND)
+            new_d = cur["dominance"]
+            if abs(new_p - cur["pleasure"]) + abs(new_a - cur["arousal"]) >= 0.005:
+                _set_emotional_state_impl(new_p, new_a, new_d, trigger="interoceptive_pe_sleep")
+        _persist_pad_to_db()
+    except Exception as e:
+        parts.append(f"interoceptive: error {redact_secrets(str(e))[:50]}")
+
     # Emotional decay (PAD toward baseline)
     # Proposal #182: load PAD from DB before decay, persist after
     try:
