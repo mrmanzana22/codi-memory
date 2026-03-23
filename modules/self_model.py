@@ -1158,7 +1158,7 @@ def detect_self_discrepancies() -> dict:
                     active_items = existing_wm.get("items", [])
                     if any(item.get("content", "").startswith("METACOGNITIVE ALERT")
                            for item in active_items):
-                        break  # Already have an active alert, skip
+                        continue  # Already have an active alert, skip
                     push_to_working_memory(
                         content=f"METACOGNITIVE ALERT: {pd['actual']}. "
                                 f"Prediction model may need attention.",
