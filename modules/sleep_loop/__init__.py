@@ -3233,7 +3233,7 @@ def run_sleep_loop(reason: str = "idle", budget_ms: int = DEFAULT_BUDGET_MS, fas
                                  int(remaining_ms), status)
 
             tick_results.append(result)
-            if result.get("ok") and result.get("status") == "ok":
+            if result.get("ok") and result.get("status") in ("ok", "over_budget"):
                 _record_tick_timestamp(name)
             elif result.get("status") == "timeout":
                 # Thread continues in background (pool.shutdown(wait=False))
