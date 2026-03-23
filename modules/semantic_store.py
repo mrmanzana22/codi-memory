@@ -12,10 +12,11 @@ Migrated from Qdrant in Fase 2, Sprint 2.2.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from modules.pg_store import pg
 from modules.config_pg import get_conn
+from modules.config import now_col
 from modules.secret_redact import redact_secrets
 
 _logger = logging.getLogger(__name__)
@@ -146,7 +147,7 @@ def get_consolidation_stats() -> str:
 
 def count_unconsolidated_episodic(lookback_hours: int = 24) -> int:
     """Count unconsolidated episodic memories in the last N hours."""
-    cutoff = datetime.now() - timedelta(hours=lookback_hours)
+    cutoff = now_col() - timedelta(hours=lookback_hours)
     with get_conn() as conn:
         row = conn.execute(
             """SELECT COUNT(*) FROM memories
