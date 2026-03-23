@@ -125,7 +125,6 @@ def analizar_patron_trabajo(dias: int = 7) -> str:
             texto = payload.get("content", "")
             timestamp = payload.get("created_at", "")
             category = payload.get("category", "")
-            category = meta.get("category", "")
 
             if timestamp:
                 try:
