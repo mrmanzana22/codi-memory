@@ -232,7 +232,7 @@ def check_reconsolidation(memory_id: str, memory_payload: dict,
     # Compute memory strength via unified scorer
     result = compute_unified_activation(
         created_at=memory_payload.get('created_at', ''),
-        last_accessed=memory_payload.get('attention_last_accessed', ''),
+        last_accessed=memory_payload.get('last_accessed_at', '') or memory_payload.get('attention_last_accessed', ''),
         access_count=memory_payload.get('attention_access_count', 0),
         access_timestamps=memory_payload.get('access_timestamps'),
         importance=memory_payload.get('narrative_importance', 'medium'),
