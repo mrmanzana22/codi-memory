@@ -1038,6 +1038,17 @@ def compute_interoceptive_pe():
         return None
 
 
+def register_ac_handler() -> None:
+    """Register AC→PAD event handler independently of MCP server.
+
+    Allows write_worker and sleep_loop to update PAD from affective charge
+    without requiring the full MCP tool registration stack.
+    Ref: Joffily & Coricelli 2013, Hesp et al. 2021 (Loop 4 closure).
+    """
+    from modules.events import event_bus, Events
+    event_bus.on(Events.AFFECTIVE_CHARGE_COMPUTED, _on_affective_charge)
+
+
 def register_tools(mcp):
     """Register emotion MCP tools and wire event handlers."""
     mcp.tool()(set_emotional_state)

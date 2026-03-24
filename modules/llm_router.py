@@ -60,7 +60,7 @@ OPENAI_MODEL = "gpt-4o-mini"
 # ---------------------------------------------------------------------------
 _mlx_model = None
 _mlx_tokenizer = None
-_MLX_ADAPTER_PATH = pathlib.Path(__file__).resolve().parent.parent / "adapters" / "codi-v1"
+_MLX_ADAPTER_PATH = pathlib.Path(__file__).resolve().parent.parent / "adapters" / "codi-v2"
 _MLX_BASE_MODEL = "mlx-community/Qwen3-4B-Instruct-2507-4bit"
 
 # Tasks suitable for the fine-tuned model (trained on these task types)
@@ -339,7 +339,7 @@ def llm_complete(task_type: str, prompt: str, system: str = "",
     answer = _try_mlx(task_type, prompt, system)
     if answer:
         duration_ms = int((time.time() - t0) * 1000)
-        _log_to_pg(task_type, "mlx_local", "codi-v1", duration_ms,
+        _log_to_pg(task_type, "mlx_local", "codi-v2", duration_ms,
                    prompt_chars, len(answer), True)
         if not _no_log:
             _log_training_data(task_type, prompt, answer, system)

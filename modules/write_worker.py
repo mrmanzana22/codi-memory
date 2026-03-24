@@ -589,6 +589,15 @@ def cli_main():
         if require_ai:
             raise RuntimeError("AI handler registration failed and CODI_REQUIRE_AI_HANDLERS=1") from e
 
+    # Register emotion AC→PAD handler so affective charge updates emotional state.
+    # Loop 4 (Hesp 2021): AC computed by aii → AFFECTIVE_CHARGE_COMPUTED → PAD updated
+    # → persisted to SQLite pad_current → sleep_loop reads at homeostasis tick.
+    try:
+        from modules.emotion import register_ac_handler
+        register_ac_handler()
+    except Exception as e:
+        _logger.warning("Could not register emotion AC handler: %s", e)
+
     if args.once:
         did_work = process_one_job()
         _logger.info("%s", "Processed 1 job" if did_work else "Queue empty")

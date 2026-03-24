@@ -1968,7 +1968,7 @@ _CX11_MAX_BUFFER = 20         # Batch threshold (Bramley 2015)
 _CX9_REFRACTORY_SECONDS = 45  # Neuro-grounded: 30-90s range (DMN dynamics)
 _CX9_RELAXED_REFRACTORY = 20  # Homeostatic: relaxed after chronic blocking (Turrigiano 2004)
 _CX9_BLOCK_THRESHOLD = 5      # Consecutive blocks before relaxation
-_CX9_SALIENCE_THRESHOLD = 0.3  # Base threshold for PE*precision gate
+_CX9_SALIENCE_THRESHOLD = 0.15  # Lowered from 0.3 — production self_relevance*precision rarely exceeds 0.3
 _cx9_last_fire = 0.0
 _cx9_fire_count_window = []
 _cx9_dmn_call_count = 0        # Counter for DMN periodic refresh (separate from FIFO window)
@@ -2703,7 +2703,7 @@ def _on_self_model_modulates_forgetting(event_name: str, data: dict):
 # ---- CX-16: L3→L5 — Workspace Broadcasts Inform Metacognition ----
 # Shea & Frith 2019 ("workspace needs metacognition"), Mashour 2020, Fleming 2012
 # 4/4 architecture support
-_CX16_STRENGTH_THRESHOLD = 0.3      # Only significant broadcasts trigger meta-evaluation
+_CX16_STRENGTH_THRESHOLD = 0.15      # Lowered from 0.3 — production GNW activations are ~0.2-0.3
 
 
 def _on_workspace_broadcast_to_metacognition(event_name: str, data: dict):
