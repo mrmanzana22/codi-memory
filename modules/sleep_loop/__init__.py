@@ -141,7 +141,7 @@ TICK_TIER = {
     "backup": 3,                # Heavy (Qdrant snapshots)
     "causal_discovery": 4,      # Very heavy (NOTEARS optimization, every 12th tick ~6h)
     "curiosity_resolve": 3,     # Tier 3: auto-resolve curiosities via Ollama (every 6th tick, was Tier 4)
-    "dream_competition": 3,      # GNW sleep competition (Walker 2009)
+    "dream_competition": 2,      # GNW sleep competition (Walker 2009) — tier-2 for more CX fires
     "sharpe_insights": 3,        # K.1.3: Cross-domain insight discovery (read-only)
     "proactive_contact": 1,       # Proactive outreach to Hare via Telegram (every tick)
     "cx_health": 2,               # CPO v2: CX observability snapshot + HTML dashboard update
