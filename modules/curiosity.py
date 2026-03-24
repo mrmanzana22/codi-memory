@@ -687,7 +687,7 @@ def auto_curiosity_tick() -> dict:
 
         # Proposal #58 Fix 4: Prune stale manual curiosities (>60 days)
         from datetime import timedelta
-        cutoff_date = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        cutoff_date = (now_col() - timedelta(days=60)).strftime("%Y-%m-%d")
         still_pending_2 = []
         for item in data.get("pendientes", []):
             if (not item.get("source")  # manual items have no source
