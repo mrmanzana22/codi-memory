@@ -1494,8 +1494,9 @@ def _on_pe_drives_curiosity(event_name: str, data: dict):
             return
 
         # Learning progress filter (Schmidhuber 2010): only if we're learning
+        # Bypass LP check for sleep sources — sleep PE is already dampened and filtered
         lp = _compute_learning_progress(topic)
-        if lp is not None and lp <= 0.05:
+        if lp is not None and lp <= 0.05 and not source.startswith("sleep_"):
             return  # PE not decreasing → noise domain, skip
 
         # Push curiosity question
@@ -2493,7 +2494,7 @@ def _on_retrieval_boosts_ss(event_name: str, data: dict):
 # ---- CX-20: L5→L6 — Metacognitive Uncertainty Drives Curiosity ----
 # Loewenstein 1994 (information gap), Litman 2005, Boldt 2019
 # 4/4 architecture support (SOAR impasse, ACT-R retrieval failure, LIDA codelets, CLARION MCS)
-_CX20_CONF_THRESHOLD = 0.50         # Sprint 1 FIX CX-20: raised from 0.35 (FOK typically 0.4-0.7)
+_CX20_CONF_THRESHOLD = 0.60         # Raised from 0.50 — fok=1-avg_pe, need avg_pe>0.4 (common in production)
 _CX20_MAX_PER_CYCLE = 2             # Max curiosity questions per metacognitive event
 _CX20_COOLDOWN_PER_DOMAIN = 900     # 15 min between curiosity pushes per domain
 _cx20_last_push: dict = {}           # domain -> time.time()
@@ -3266,7 +3267,7 @@ def get_cx26_identity_penalty(action_description: str) -> float:
 # First metacognitive input to L8 — transforms L8 from isolated to integrated
 # ============================================================
 
-_CX27_CONFIDENCE_FLOOR = 0.4   # Suppress edges from domains below 40% confidence
+_CX27_CONFIDENCE_FLOOR = 0.5   # Raised from 0.4 — suppress when avg_pe > 0.5 (more common in production)
 _CX27_SUPPRESSION_WEIGHT = 0.5  # How much to reduce edge weight
 _cx27_suppressed_domains: dict = {}  # domain -> suppression_factor (0-1)
 
